@@ -1,0 +1,58 @@
+// Copyright (c) Dapplo. All rights reserved.
+// Licensed under the MIT license. See LICENSE file in the project root for details.
+
+using System.Text;
+
+namespace Dapplo.Ini.Config.Parsing;
+
+/// <summary>
+/// Writes an <see cref="IniFile"/> back to disk (or a <see cref="TextWriter"/>),
+/// preserving comments and section order.
+/// </summary>
+public static class IniFileWriter
+{
+    /// <summary>Writes <paramref name="iniFile"/> to the file at <paramref name="filePath"/>.</summary>
+    public static void WriteFile(string filePath, IniFile iniFile)
+    {
+        using var writer = new StreamWriter(filePath, append: false, Encoding.UTF8);
+        Write(writer, iniFile);
+    }
+
+    /// <summary>Returns the INI file as a string.</summary>
+    public static string WriteToString(IniFile iniFile)
+    {
+        var sb = new StringBuilder();
+        using var writer = new StringWriter(sb);
+        Write(writer, iniFile);
+        return sb.ToString();
+    }
+
+    /// <summary>Writes <paramref name="iniFile"/> to <paramref name="writer"/>.</summary>
+    public static void Write(TextWriter writer, IniFile iniFile)
+    {
+        bool firstSection = true;
+        foreach (var section in iniFile.Sections)
+        {
+            if (!firstSection)
+                writer.WriteLine();
+            firstSection = false;
+
+            // Section comments
+            foreach (var comment in section.Comments)
+                writer.WriteLine($"; {comment}");
+
+            // Only write header for named sections
+            if (!string.IsNullOrEmpty(section.Name))
+                writer.WriteLine($"[{section.Name}]");
+
+            // Entries
+            foreach (var entry in section.Entries)
+            {
+                foreach (var comment in entry.Comments)
+                    writer.WriteLine($"; {comment}");
+
+                writer.WriteLine($"{entry.Key} = {entry.Value ?? string.Empty}");
+            }
+        }
+    }
+}

@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Dapplo.Ini.Config.Generator/Dapplo.Ini.Config.Generator.csproj" />
+    <Project Path="src/Dapplo.Ini.Config/Dapplo.Ini.Config.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Dapplo.Ini.Config.Tests/Dapplo.Ini.Config.Tests.csproj" />
+  </Folder>
+</Solution>
