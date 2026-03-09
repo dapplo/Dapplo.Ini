@@ -91,3 +91,71 @@ public interface ILifecycleSettings
 
     static new void OnAfterSave(ILifecycleSettings self) => self.AfterSaveCalled = true;
 }
+
+// ── Validation sample interfaces ──────────────────────────────────────────────
+
+/// <summary>
+/// Section that uses <see cref="IDataValidation{TSelf}"/> to validate properties via
+/// <c>INotifyDataErrorInfo</c> (WPF/Avalonia binding support).
+/// </summary>
+[IniSection("ServerConfig")]
+public interface IServerConfigSettings : IIniSection, IDataValidation<IServerConfigSettings>
+{
+    [IniValue(DefaultValue = "8080", NotifyPropertyChanged = true)]
+    int Port { get; set; }
+
+    [IniValue(DefaultValue = "localhost", NotifyPropertyChanged = true)]
+    string? Host { get; set; }
+
+    // Validation: Port must be in 1-65535; Host must not be empty.
+    static new IEnumerable<string> ValidateProperty(IServerConfigSettings self, string propertyName)
+    {
+        return propertyName switch
+        {
+            nameof(Port) when self.Port is < 1 or > 65535
+                => new[] { "Port must be between 1 and 65535." },
+            nameof(Host) when string.IsNullOrWhiteSpace(self.Host)
+                => new[] { "Host must not be empty." },
+            _ => Array.Empty<string>()
+        };
+    }
+}
+
+// ── Reload / monitoring / external-sources sample interfaces ──────────────────
+
+/// <summary>Section used by reload and monitoring tests.</summary>
+[IniSection("ReloadSection")]
+public interface IReloadSettings : IIniSection
+{
+    [IniValue(DefaultValue = "initial")]
+    string? Value { get; set; }
+}
+
+/// <summary>Simple external value source backed by an in-memory dictionary.</summary>
+public sealed class DictionaryValueSource : IValueSource
+{
+    private readonly Dictionary<string, Dictionary<string, string?>> _data =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    public event EventHandler<ValueChangedEventArgs>? ValueChanged;
+
+    public void SetValue(string section, string key, string? value)
+    {
+        if (!_data.TryGetValue(section, out var sectionDict))
+        {
+            sectionDict = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            _data[section] = sectionDict;
+        }
+        sectionDict[key] = value;
+    }
+
+    public bool TryGetValue(string sectionName, string key, out string? value)
+    {
+        value = null;
+        return _data.TryGetValue(sectionName, out var sect) && sect.TryGetValue(key, out value);
+    }
+
+    public void RaiseChanged(string? section = null, string? key = null)
+        => ValueChanged?.Invoke(this, new ValueChangedEventArgs(section, key));
+}
+

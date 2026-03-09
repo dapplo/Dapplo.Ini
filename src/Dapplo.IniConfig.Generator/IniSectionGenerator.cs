@@ -25,11 +25,13 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
     private const string IBeforeSaveFqn       = "Dapplo.IniConfig.Interfaces.IBeforeSave";
     private const string IAfterSaveFqn        = "Dapplo.IniConfig.Interfaces.IAfterSave";
     private const string ITransactionalFqn    = "Dapplo.IniConfig.Interfaces.ITransactional";
+    private const string IDataValidationFqn   = "Dapplo.IniConfig.Interfaces.IDataValidation";
 
     // Names of the generic (static-virtual) lifecycle interfaces
-    private const string IAfterLoadGenericName  = "IAfterLoad";
-    private const string IBeforeSaveGenericName = "IBeforeSave";
-    private const string IAfterSaveGenericName  = "IAfterSave";
+    private const string IAfterLoadGenericName      = "IAfterLoad";
+    private const string IBeforeSaveGenericName     = "IBeforeSave";
+    private const string IAfterSaveGenericName      = "IAfterSave";
+    private const string IDataValidationGenericName = "IDataValidation";
     private const string LifecycleInterfacesNamespace = "Dapplo.IniConfig.Interfaces";
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
@@ -80,6 +82,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         public bool ImplementsAfterLoadGeneric { get; set; }
         public bool ImplementsBeforeSaveGeneric { get; set; }
         public bool ImplementsAfterSaveGeneric { get; set; }
+        // Data-validation (INotifyDataErrorInfo)
+        public bool ImplementsDataValidationGeneric { get; set; }
+        public bool ImplementsDataValidation { get; set; }
         public List<PropertyModel> Properties { get; set; } = new();
     }
 
@@ -130,6 +135,10 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         bool implementsBeforeSave  = !implementsBeforeSaveGeneric && ImplementsInterface(symbol, IBeforeSaveFqn);
         bool implementsAfterSave   = !implementsAfterSaveGeneric  && ImplementsInterface(symbol, IAfterSaveFqn);
 
+        // Data validation
+        bool implementsDataValidationGeneric = ImplementsGenericInterface(symbol, LifecycleInterfacesNamespace, IDataValidationGenericName);
+        bool implementsDataValidation        = !implementsDataValidationGeneric && ImplementsInterface(symbol, IDataValidationFqn);
+
         var properties = new List<PropertyModel>();
         foreach (var member in symbol.GetMembers().OfType<IPropertySymbol>())
         {
@@ -176,6 +185,8 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             ImplementsAfterLoadGeneric  = implementsAfterLoadGeneric,
             ImplementsBeforeSaveGeneric = implementsBeforeSaveGeneric,
             ImplementsAfterSaveGeneric  = implementsAfterSaveGeneric,
+            ImplementsDataValidationGeneric = implementsDataValidationGeneric,
+            ImplementsDataValidation    = implementsDataValidation,
             Properties                 = properties
         };
     }
@@ -232,6 +243,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         }
 
         bool needsNpc = m.Properties.Any(p => p.NotifyPropertyChanged);
+        bool needsValidation = m.ImplementsDataValidationGeneric || m.ImplementsDataValidation;
 
         // Build base class list.
         // When generic lifecycle interfaces are used, the generator also adds the non-generic
@@ -241,6 +253,12 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         {
             extraBases.Add("INotifyPropertyChanging");
             extraBases.Add("INotifyPropertyChanged");
+        }
+        if (needsValidation)
+        {
+            extraBases.Add("System.ComponentModel.INotifyDataErrorInfo");
+            if (m.ImplementsDataValidationGeneric)
+                extraBases.Add("Dapplo.IniConfig.Interfaces.IDataValidation");
         }
         if (m.ImplementsAfterLoadGeneric)
             extraBases.Add("Dapplo.IniConfig.Interfaces.IAfterLoad");
@@ -266,6 +284,37 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         {
             sb.AppendLine("        public event PropertyChangingEventHandler? PropertyChanging;");
             sb.AppendLine("        public event PropertyChangedEventHandler? PropertyChanged;");
+            sb.AppendLine();
+        }
+
+        // ── INotifyDataErrorInfo ──────────────────────────────────────────────
+        if (needsValidation)
+        {
+            sb.AppendLine("        private readonly System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>> _validationErrors");
+            sb.AppendLine("            = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>(System.StringComparer.Ordinal);");
+            sb.AppendLine("        public event System.EventHandler<System.ComponentModel.DataErrorsChangedEventArgs>? ErrorsChanged;");
+            sb.AppendLine("        public bool HasErrors => _validationErrors.Count > 0;");
+            sb.AppendLine("        public System.Collections.IEnumerable GetErrors(string? propertyName)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            if (string.IsNullOrEmpty(propertyName))");
+            sb.AppendLine("            {");
+            sb.AppendLine("                foreach (var kvp in _validationErrors)");
+            sb.AppendLine("                    foreach (var err in kvp.Value) yield return err;");
+            sb.AppendLine("                yield break;");
+            sb.AppendLine("            }");
+            sb.AppendLine("            if (_validationErrors.TryGetValue(propertyName, out var list))");
+            sb.AppendLine("                foreach (var err in list) yield return err;");
+            sb.AppendLine("        }");
+            sb.AppendLine("        private void RunValidation(string propertyName)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            var errors = ValidateProperty(propertyName);");
+            sb.AppendLine("            var errorList = new System.Collections.Generic.List<string>(errors);");
+            sb.AppendLine("            if (errorList.Count == 0)");
+            sb.AppendLine("                _validationErrors.Remove(propertyName);");
+            sb.AppendLine("            else");
+            sb.AppendLine("                _validationErrors[propertyName] = errorList;");
+            sb.AppendLine("            ErrorsChanged?.Invoke(this, new System.ComponentModel.DataErrorsChangedEventArgs(propertyName));");
+            sb.AppendLine("        }");
             sb.AppendLine();
         }
 
@@ -319,6 +368,10 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             if (p.NotifyPropertyChanged)
             {
                 sb.AppendLine($"                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof({p.Name})));");
+                if (needsValidation)
+                {
+                    sb.AppendLine($"                RunValidation(nameof({p.Name}));");
+                }
             }
             sb.AppendLine("            }");
             sb.AppendLine("        }");
@@ -433,6 +486,29 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         {
             sb.AppendLine("        void Dapplo.IniConfig.Interfaces.IAfterSave.OnAfterSave()");
             sb.AppendLine($"            => {ifaceFqn}.OnAfterSave(this);");
+            sb.AppendLine();
+        }
+
+        // ── IDataValidation bridges ───────────────────────────────────────────
+        // When the generic IDataValidation<TSelf> is used, emit a bridge so the framework
+        // can call it through the non-generic IDataValidation dispatch interface and wire
+        // it to RunValidation() which feeds INotifyDataErrorInfo.
+        if (m.ImplementsDataValidationGeneric)
+        {
+            sb.AppendLine("        System.Collections.Generic.IEnumerable<string> Dapplo.IniConfig.Interfaces.IDataValidation.ValidateProperty(string propertyName)");
+            sb.AppendLine($"            => {ifaceFqn}.ValidateProperty(this, propertyName);");
+            sb.AppendLine();
+            // Provide the internal ValidateProperty helper used by RunValidation()
+            sb.AppendLine("        private System.Collections.Generic.IEnumerable<string> ValidateProperty(string propertyName)");
+            sb.AppendLine($"            => {ifaceFqn}.ValidateProperty(this, propertyName);");
+            sb.AppendLine();
+        }
+        else if (m.ImplementsDataValidation)
+        {
+            // Non-generic: consumer implements ValidateProperty(string) in a partial class.
+            // Wire RunValidation() to it.
+            sb.AppendLine("        private System.Collections.Generic.IEnumerable<string> ValidateProperty(string propertyName)");
+            sb.AppendLine("            => ((Dapplo.IniConfig.Interfaces.IDataValidation)this).ValidateProperty(propertyName);");
             sb.AppendLine();
         }
 

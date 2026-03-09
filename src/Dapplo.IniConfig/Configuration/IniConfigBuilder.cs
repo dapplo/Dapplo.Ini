@@ -16,9 +16,14 @@ public sealed class IniConfigBuilder
     private readonly List<string> _searchPaths = new();
     private readonly List<string> _defaultFilePaths = new();
     private readonly List<string> _constantFilePaths = new();
+    private readonly List<IValueSource> _valueSources = new();
 
     // Maps interface type → section instance
     private readonly Dictionary<Type, IIniSection> _sections = new();
+
+    private bool _lockFile;
+    private bool _monitorFile;
+    private FileChangedCallback? _fileChangedCallback;
 
     internal IniConfigBuilder(string fileName)
     {
@@ -62,6 +67,53 @@ public sealed class IniConfigBuilder
     public IniConfigBuilder AddConstantsFile(string filePath)
     {
         _constantFilePaths.Add(filePath);
+        return this;
+    }
+
+    // ── external value sources ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Registers an external <see cref="IValueSource"/> (e.g. Windows Registry, environment
+    /// variables, a web-service endpoint) that can supply or override individual values.
+    /// Sources are applied after defaults, the user file and constant files, in the order they
+    /// are registered.
+    /// </summary>
+    public IniConfigBuilder AddValueSource(IValueSource source)
+    {
+        if (source is null) throw new ArgumentNullException(nameof(source));
+        _valueSources.Add(source);
+        return this;
+    }
+
+    // ── file lock ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Requests that the INI file be kept open (read-locked) for the lifetime of the
+    /// <see cref="IniConfig"/> object.  This prevents other processes from overwriting the
+    /// file while the application is running.  Dispose <see cref="IniConfig"/> to release the lock.
+    /// </summary>
+    public IniConfigBuilder LockFile()
+    {
+        _lockFile = true;
+        return this;
+    }
+
+    // ── file change monitoring ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Enables file-system monitoring for the INI file.  When the file is modified by an external
+    /// process the <paramref name="callback"/> (if supplied) is invoked so the consumer can decide
+    /// whether to reload immediately, ignore, or postpone the reload.
+    /// When no callback is supplied every detected change triggers an immediate reload.
+    /// </summary>
+    /// <param name="callback">
+    /// Optional hook.  Return <see cref="ReloadDecision.Reload"/> (default), 
+    /// <see cref="ReloadDecision.Ignore"/>, or <see cref="ReloadDecision.Postpone"/>.
+    /// </param>
+    public IniConfigBuilder MonitorFile(FileChangedCallback? callback = null)
+    {
+        _monitorFile = true;
+        _fileChangedCallback = callback;
         return this;
     }
 
@@ -109,6 +161,7 @@ public sealed class IniConfigBuilder
         config.SearchPaths.AddRange(_searchPaths);
         config.DefaultFilePaths.AddRange(_defaultFilePaths);
         config.ConstantFilePaths.AddRange(_constantFilePaths);
+        config.ValueSources.AddRange(_valueSources);
 
         // Seed sections with defaults
         foreach (var kvp in _sections)
@@ -146,12 +199,23 @@ public sealed class IniConfigBuilder
                 ApplyIniFile(config, IniFileParser.ParseFile(path));
         }
 
+        // Apply external value sources
+        config.ApplyValueSources();
+
         // Fire IAfterLoad hooks
         foreach (var section in config.Sections.Values)
         {
             if (section is IAfterLoad afterLoad)
                 afterLoad.OnAfterLoad();
         }
+
+        // Acquire file lock (if requested)
+        if (_lockFile)
+            config.AcquireFileLock();
+
+        // Start file monitoring (if requested)
+        if (_monitorFile)
+            config.StartMonitoring(_fileChangedCallback);
 
         IniConfigRegistry.Register(_fileName, config);
         return config;
