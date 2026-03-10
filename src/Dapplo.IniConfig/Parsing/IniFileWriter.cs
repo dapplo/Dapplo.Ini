@@ -19,6 +19,19 @@ public static class IniFileWriter
         Write(writer, iniFile);
     }
 
+    /// <summary>Asynchronously writes <paramref name="iniFile"/> to the file at <paramref name="filePath"/> using the
+    /// specified <paramref name="encoding"/> (defaults to UTF-8 when <c>null</c>).</summary>
+    public static async Task WriteFileAsync(string filePath, IniFile iniFile, Encoding? encoding = null, CancellationToken cancellationToken = default)
+    {
+        var content = WriteToString(iniFile);
+#if NET
+        await File.WriteAllTextAsync(filePath, content, encoding ?? Encoding.UTF8, cancellationToken).ConfigureAwait(false);
+#else
+        using var writer = new StreamWriter(filePath, append: false, encoding ?? Encoding.UTF8);
+        await writer.WriteAsync(content).ConfigureAwait(false);
+#endif
+    }
+
     /// <summary>Returns the INI file as a string.</summary>
     public static string WriteToString(IniFile iniFile)
     {

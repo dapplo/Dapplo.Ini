@@ -4,10 +4,13 @@
 // Saves all section values back to the file that was loaded
 // (or the first writable search path when no existing file was found).
 config.Save();
+
+// Async variant — does not block the calling thread:
+await config.SaveAsync(cancellationToken);
 ```
 
-> **Note:** Own `Save()` calls are automatically detected and never trigger the
-> file-change monitor, so a save does not cause an unwanted reload loop.
+> **Note:** Own `Save()` / `SaveAsync()` calls are automatically detected and never
+> trigger the file-change monitor, so a save does not cause an unwanted reload loop.
 
 ---
 
@@ -76,6 +79,7 @@ See [[Loading-Configuration#auto-save-on-a-timer]] for the `AutoSaveInterval` bu
 
 ## See also
 
-- [[Lifecycle-Hooks]] — full `IAfterLoad`, `IBeforeSave`, `IAfterSave` documentation
+- [[Lifecycle-Hooks]] — full `IAfterLoad`, `IBeforeSave`, `IAfterSave` documentation including async variants
 - [[Loading-Configuration#save-on-process-exit]] — `SaveOnExit()` builder method
-- [[Reloading]] — `Reload()` and `HasPendingChanges()`
+- [[Reloading]] — `Reload()` / `ReloadAsync()` and `HasPendingChanges()`
+- [[Async-Support]] — `SaveAsync()` and async save hooks

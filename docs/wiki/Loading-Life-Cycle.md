@@ -34,6 +34,8 @@ state of any property after `Build()` or `Reload()`.
 │ STEP 5 — Apply external value sources (AddValueSource order)        │
 │   Each registered IValueSource is queried for every section/key.    │
 │   Sources are applied in registration order; the last one wins.     │
+│   During BuildAsync/ReloadAsync, IValueSourceAsync sources are also │
+│   queried — after all sync sources, in registration order.          │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────────────┐
@@ -41,6 +43,8 @@ state of any property after `Build()` or `Reload()`.
 │   OnAfterLoad() is called on every section that implements          │
 │   IAfterLoad / IAfterLoad<TSelf>. Use this for normalization,       │
 │   decryption, derived-value calculation, etc.                       │
+│   During BuildAsync/ReloadAsync, IAfterLoadAsync.OnAfterLoadAsync() │
+│   is preferred; IAfterLoad is used as a fallback.                   │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────────────┐
@@ -73,5 +77,6 @@ custom converters can be registered with `ValueConverterRegistry.Register()`.
 ## See also
 
 - [[Loading-Configuration]] — configuring search paths, defaults, and constants files
-- [[External-Value-Sources]] — implementing `IValueSource`
-- [[Lifecycle-Hooks]] — `IAfterLoad` hooks (Step 6)
+- [[External-Value-Sources]] — implementing `IValueSource` and `IValueSourceAsync`
+- [[Lifecycle-Hooks]] — `IAfterLoad` hooks (Step 6) including async variants
+- [[Async-Support]] — how the async code paths differ from the synchronous ones

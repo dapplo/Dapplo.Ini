@@ -1,117 +1,73 @@
-# Benefits of async/await for Dapplo.IniConfig
+# Async/Await Background Analysis
 
-This document analyses what `async`/`await` support would bring to
-`Dapplo.IniConfig` and where the trade-offs lie.
-
----
-
-## Current (synchronous) model
-
-Every public API — `Build()`, `Reload()`, `Save()` — is synchronous and blocks the
-calling thread until the underlying I/O completes.  For the typical INI file (a few
-kilobytes) this is imperceptible, but there are scenarios where the latency matters.
+This document captures the analysis that was done *before* implementing async support.
+Async/await is now fully implemented — see [[Async-Support]] for practical usage.
 
 ---
 
-## Where async I/O would help
+## What async I/O brings to Dapplo.IniConfig
 
-### 1. Application startup (`Build()`)
+### 1. Application startup (`BuildAsync`)
 
-`Build()` reads one or more files from disk (defaults file, user file, constants file)
-before returning.  On a cold SSD, or on a network-mapped drive, each `File.ReadAllText`
-call may block for tens of milliseconds.
+`BuildAsync` reads one or more files from disk (defaults file, user file, constants file)
+without blocking the calling thread.
 
-An `async BuildAsync()` overload would allow:
-- Applications with a UI message loop (WPF, Avalonia, WinUI 3) to keep the UI
+- Applications with a UI message loop (WPF, Avalonia, WinUI 3) keep the UI
   **responsive** while loading.
-- ASP.NET Core hosts to load configuration **without blocking a thread-pool thread**,
+- ASP.NET Core hosts load configuration **without blocking a thread-pool thread**,
   which matters under high-load startup scenarios.
-- Startup tasks to be **parallelised** via `Task.WhenAll` when multiple INI files are
+- Startup tasks can be **parallelised** via `Task.WhenAll` when multiple INI files are
   loaded independently.
 
-```csharp
-// Hypothetical async API
-var config = await IniConfigRegistry.ForFile("appsettings.ini")
-    .AddSearchPath(AppContext.BaseDirectory)
-    .RegisterSection<IAppSettings>(new AppSettingsImpl())
-    .BuildAsync(cancellationToken);
-```
+### 2. Saving (`SaveAsync`)
 
-### 2. Saving (`Save()`)
+`SaveAsync` writes the serialised INI content to disk without blocking and respects a
+`CancellationToken` so a shutdown-initiated save can be aborted gracefully.
 
-`Save()` writes the entire serialised INI content to disk in one call.  An
-`async SaveAsync()` would benefit the same categories of callers as `BuildAsync()`.
-It also opens the door to respecting a `CancellationToken` so a shutdown-initiated
-save can be aborted gracefully.
+### 3. Reloading (`ReloadAsync`)
 
-```csharp
-await config.SaveAsync(cancellationToken);
-```
+`ReloadAsync` gives callers the ability to `await` completion before acting on updated
+values and integrates naturally with reactive pipelines.
 
-### 3. Reloading (`Reload()`)
+### 4. External value sources (`IValueSourceAsync`)
 
-`Reload()` re-reads every layer of files.  In a file-change-monitor scenario this
-is already called on a thread-pool thread (the `FileSystemWatcher` event), so the
-synchronous call does not block the UI.  However, an `async ReloadAsync()` would:
-- Give callers the ability to `await` the completion before acting on updated values.
-- Integrate naturally with reactive pipelines (e.g., `System.Reactive`, `Channels`).
-
-### 4. External value sources (`IValueSource`)
-
-The current `IValueSource.TryGetValue` contract is synchronous.  A networked source
-(e.g., Azure App Configuration, AWS Parameter Store, a REST endpoint) **must** block a
-thread while the network round-trip completes.  An `IAsyncValueSource` interface would
-let such sources use proper async I/O.
-
-```csharp
-// Hypothetical async value source
-public interface IAsyncValueSource
-{
-    ValueTask<(bool found, string? value)> TryGetValueAsync(
-        string section, string key, CancellationToken ct = default);
-}
-```
+The synchronous `IValueSource.TryGetValue` contract forces networked sources (Azure App
+Configuration, AWS Parameter Store, REST endpoints) to block a thread on every
+round-trip.  `IValueSourceAsync` lets such sources use proper async I/O.
 
 ---
 
-## Trade-offs and why async has not been added yet
+## Trade-offs
 
 | Concern | Detail |
 |---------|--------|
-| **Surface-area growth** | Every synchronous method needs an `Async` twin (or replacement), roughly doubling the public API. |
-| **`async` all-the-way** | `async` in `Build()` means hooks (`IAfterLoad`, etc.) would also need to become async — a breaking change for existing implementors. |
-| **Net Framework 4.8** | `Dapplo.IniConfig` targets `net48` as well as `net10.0`. `async`/`await` itself is available on both, but `ValueTask` and `IAsyncEnumerable` require a package reference on net48. |
-| **Tiny files** | For a local INI file of a few kilobytes, async overhead (state machine allocation, scheduling) may exceed the I/O time itself. A synchronous fast-path is often preferable. |
-| **Complexity** | Concurrency on `Reload()` requires a `SemaphoreSlim` or similar guard to prevent overlapping reloads — adding non-trivial complexity. |
+| **Surface-area growth** | Every synchronous method needs an `Async` twin, growing the public API. |
+| **`async` all-the-way** | `async` in `BuildAsync()` means lifecycle hooks can also become async — `IAfterLoadAsync` etc. are provided as opt-in interfaces. |
+| **Net Framework 4.8** | `async`/`await` itself is available on net48; `ValueTask` and `IAsyncEnumerable` require extra package references.  Non-generic async interfaces use `Task`/`Task<bool>`. |
+| **Tiny files** | For a local INI file of a few kilobytes, async overhead may exceed the I/O time itself. The synchronous API remains the primary API. |
+| **Concurrency** | Overlapping reloads are guarded by a `SemaphoreSlim` shared between `Reload()` and `ReloadAsync()`. |
 
 ---
 
-## Recommended approach
+## Implemented approach
 
-1. **Keep the synchronous API as the primary API** for simple desktop and console
+1. **Synchronous API remains the primary API** for simple desktop and console
    applications where blocking a thread during startup is acceptable.
 
-2. **Add opt-in `*Async` overloads** for `Build`, `Save`, and `Reload` that wrap the
-   synchronous implementations on `net48` (via `Task.Run`) and use true async I/O
-   (`File.ReadAllTextAsync` / `StreamWriter` with `WriteAsync`) on `net10.0`+.
+2. **Opt-in `*Async` overloads** for `Build`, `Save`, and `Reload` use true async I/O
+   (`File.ReadAllTextAsync` / `StreamWriter.WriteAsync`) on .NET and streaming
+   on .NET Framework 4.8.
 
-3. **Introduce `IAsyncValueSource`** alongside the existing synchronous `IValueSource`
-   so callers with networked sources are not forced to block.
+3. **`IValueSourceAsync`** alongside the existing synchronous `IValueSource` for
+   callers with networked sources.
 
-4. **Make lifecycle hooks async-aware** by adding `ValueTask` overloads of the
-   `IAfterLoad`, `IBeforeSave`, and `IAfterSave` interfaces while keeping the
-   synchronous versions for backward compatibility.
+4. **Async lifecycle hooks** (`IAfterLoadAsync`, `IBeforeSaveAsync`, `IAfterSaveAsync`)
+   as opt-in interfaces alongside the synchronous ones.  When the async code path
+   encounters a section that only implements the synchronous hook, it falls back to that
+   automatically.
 
 ---
 
-## Summary
+## See also
 
-Async support would be most impactful for:
-
-- **UI applications** (WPF, Avalonia, WinForms) loading on the UI thread.
-- **ASP.NET Core** services loading multiple config files on startup.
-- **Remote value sources** (cloud parameter stores, REST APIs).
-
-For the common case of a small local INI file the synchronous API is efficient and
-simpler to consume.  Async overloads should therefore be additive rather than
-replacing the existing API.
+- [[Async-Support]] — practical guide to all async APIs

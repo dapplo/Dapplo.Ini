@@ -18,6 +18,7 @@ public sealed class IniConfig : IDisposable
     internal readonly List<string> DefaultFilePaths = new();
     internal readonly List<string> ConstantFilePaths = new();
     internal readonly List<IValueSource> ValueSources = new();
+    internal readonly List<IValueSourceAsync> ValueSourcesAsync = new();
     internal readonly Dictionary<Type, IIniSection> Sections = new();
 
     // ── Encoding ──────────────────────────────────────────────────────────────
@@ -51,9 +52,9 @@ public sealed class IniConfig : IDisposable
     // PauseAutoSave increments; ResumeAutoSave decrements.
     private int _autoSavePauseCount;
 
-    // ── Reload sync ───────────────────────────────────────────────────────────
+    // ── Reload sync/async ─────────────────────────────────────────────────────
 
-    private readonly object _reloadLock = new();
+    private readonly SemaphoreSlim _reloadSemaphore = new(1, 1);
 
     // ── Save-on-exit ──────────────────────────────────────────────────────────
 
@@ -75,6 +76,31 @@ public sealed class IniConfig : IDisposable
     /// Raised after <see cref="Reload"/> successfully re-loads all sections from disk.
     /// </summary>
     public event EventHandler? Reloaded;
+
+    // ── Initial load task ─────────────────────────────────────────────────────
+
+    private Task _initialLoadTask = Task.CompletedTask;
+
+    /// <summary>
+    /// A <see cref="Task"/> that completes when the initial load of the INI file has finished.
+    /// <para>
+    /// After a synchronous <see cref="IniConfigBuilder.Build"/> call this is always
+    /// <see cref="Task.CompletedTask"/> because loading is already done by the time <c>Build</c> returns.
+    /// After an asynchronous <see cref="IniConfigBuilder.BuildAsync"/> call this task completes
+    /// (successfully or with an exception) when the async loading sequence finishes.
+    /// </para>
+    /// <para>
+    /// Use this property in dependency-injection scenarios where the <see cref="IniConfig"/> or its
+    /// sections are injected before loading is complete:
+    /// <code>
+    /// await iniConfig.InitialLoadTask; // await here before accessing section values
+    /// </code>
+    /// </para>
+    /// </summary>
+    public Task InitialLoadTask => _initialLoadTask;
+
+    /// <summary>Replaces the initial-load task. Called by <see cref="IniConfigBuilder.BuildAsync"/>.</summary>
+    internal void SetInitialLoadTask(Task task) => _initialLoadTask = task;
 
     internal IniConfig(string fileName)
     {
@@ -180,6 +206,70 @@ public sealed class IniConfig : IDisposable
         }
     }
 
+    /// <summary>
+    /// Asynchronously saves all sections back to <see cref="LoadedFromPath"/>.
+    /// </summary>
+    /// <remarks>
+    /// Concurrent or re-entrant calls return immediately without doing anything.
+    /// Async lifecycle hooks (<see cref="IBeforeSaveAsync"/>, <see cref="IAfterSaveAsync"/>) are
+    /// preferred; when a section implements only the synchronous hooks (<see cref="IBeforeSave"/>,
+    /// <see cref="IAfterSave"/>), those are called instead.
+    /// </remarks>
+    /// <param name="cancellationToken">Token to cancel the async operation.</param>
+    /// <exception cref="InvalidOperationException">Thrown when the file path is not known.</exception>
+    public async Task SaveAsync(CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrEmpty(LoadedFromPath))
+            throw new InvalidOperationException("Cannot save: the INI file path is not known.");
+
+        if (Interlocked.CompareExchange(ref _isSaving, 1, 0) != 0)
+            return;
+
+        try
+        {
+            // Call IBeforeSaveAsync hooks (preferred) or fall back to sync IBeforeSave.
+            foreach (var section in Sections.Values)
+            {
+                if (section is IBeforeSaveAsync beforeSaveAsync)
+                {
+                    if (!await beforeSaveAsync.OnBeforeSaveAsync(cancellationToken).ConfigureAwait(false))
+                        return;
+                }
+                else if (section is IBeforeSave beforeSave && !beforeSave.OnBeforeSave())
+                {
+                    return;
+                }
+            }
+
+            var iniFile = BuildIniFile();
+
+            if (_watcher != null) _watcher.EnableRaisingEvents = false;
+            try
+            {
+                await IniFileWriter.WriteFileAsync(LoadedFromPath!, iniFile, Encoding, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                if (_watcher != null) _watcher.EnableRaisingEvents = true;
+            }
+
+            ClearAllDirtyFlags();
+
+            // Call IAfterSaveAsync hooks (preferred) or fall back to sync IAfterSave.
+            foreach (var section in Sections.Values)
+            {
+                if (section is IAfterSaveAsync afterSaveAsync)
+                    await afterSaveAsync.OnAfterSaveAsync(cancellationToken).ConfigureAwait(false);
+                else if (section is IAfterSave afterSave)
+                    afterSave.OnAfterSave();
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _isSaving, 0);
+        }
+    }
+
     // ── Reload ────────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -201,7 +291,8 @@ public sealed class IniConfig : IDisposable
     /// </remarks>
     public void Reload()
     {
-        lock (_reloadLock)
+        _reloadSemaphore.Wait();
+        try
         {
             _postponedReloadPending = false;
 
@@ -239,6 +330,73 @@ public sealed class IniConfig : IDisposable
 
             // 7. Clear dirty flags — freshly loaded data is not considered unsaved
             ClearAllDirtyFlags();
+        }
+        finally
+        {
+            _reloadSemaphore.Release();
+        }
+
+        // 8. Raise Reloaded
+        Reloaded?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// Asynchronously reloads all sections in-place from the INI file and any registered
+    /// default/constant files and external value sources.
+    /// Existing object references remain valid (singleton guarantee).
+    /// </summary>
+    /// <remarks>
+    /// Async lifecycle hooks (<see cref="IAfterLoadAsync"/>) are preferred; when a section
+    /// implements only the synchronous <see cref="IAfterLoad"/> hook, that is called instead.
+    /// </remarks>
+    /// <param name="cancellationToken">Token to cancel the async operation.</param>
+    public async Task ReloadAsync(CancellationToken cancellationToken = default)
+    {
+        await _reloadSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            _postponedReloadPending = false;
+
+            // 1. Reset to defaults
+            foreach (var section in Sections.Values)
+                section.ResetToDefaults();
+
+            // 2. Apply default files
+            foreach (var path in DefaultFilePaths)
+            {
+                if (File.Exists(path))
+                    ApplyIniFile(await IniFileParser.ParseFileAsync(path, Encoding, cancellationToken).ConfigureAwait(false));
+            }
+
+            // 3. Apply user file
+            if (!string.IsNullOrEmpty(LoadedFromPath) && File.Exists(LoadedFromPath))
+                ApplyIniFile(await IniFileParser.ParseFileAsync(LoadedFromPath!, Encoding, cancellationToken).ConfigureAwait(false));
+
+            // 4. Apply constant files
+            foreach (var path in ConstantFilePaths)
+            {
+                if (File.Exists(path))
+                    ApplyIniFile(await IniFileParser.ParseFileAsync(path, Encoding, cancellationToken).ConfigureAwait(false));
+            }
+
+            // 5. Apply external value sources (sync and async)
+            await ApplyValueSourcesAsync(cancellationToken).ConfigureAwait(false);
+
+            // 6. Fire IAfterLoadAsync hooks (preferred) or fall back to sync IAfterLoad.
+            foreach (var section in Sections.Values)
+            {
+                if (section is IAfterLoadAsync afterLoadAsync)
+                    await afterLoadAsync.OnAfterLoadAsync(cancellationToken).ConfigureAwait(false);
+                else if (section is IAfterLoad afterLoad)
+                    afterLoad.OnAfterLoad();
+            }
+
+            // 7. Clear dirty flags — freshly loaded data is not considered unsaved
+            ClearAllDirtyFlags();
+        }
+        finally
+        {
+            _reloadSemaphore.Release();
         }
 
         // 8. Raise Reloaded
@@ -416,6 +574,27 @@ public sealed class IniConfig : IDisposable
         }
     }
 
+    internal async Task ApplyValueSourcesAsync(CancellationToken cancellationToken = default)
+    {
+        // Apply synchronous sources first
+        ApplyValueSources();
+
+        // Then apply async sources
+        foreach (var source in ValueSourcesAsync)
+        {
+            foreach (var section in Sections.Values)
+            {
+                foreach (var entry in GetSectionKeys(section))
+                {
+                    var (found, value) = await source.TryGetValueAsync(
+                        section.SectionName, entry, cancellationToken).ConfigureAwait(false);
+                    if (found)
+                        section.SetRawValue(entry, value);
+                }
+            }
+        }
+    }
+
     /// <summary>Returns all known keys for a section (from GetAllRawValues if available).</summary>
     private static IEnumerable<string> GetSectionKeys(IIniSection section)
     {
@@ -476,5 +655,6 @@ public sealed class IniConfig : IDisposable
         }
 
         ReleaseFileLock();
+        _reloadSemaphore.Dispose();
     }
 }

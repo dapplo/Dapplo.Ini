@@ -13,6 +13,8 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
 - ✅ **INotifyPropertyChanged** / **INotifyPropertyChanging** baked in
 - ✅ **Lifecycle hooks** implementable directly in the section interface via static virtuals (C# 11+)
 - ✅ Extensible **value converter** system (custom converters for encryption etc.)
+- ✅ **Async support** — `BuildAsync`, `ReloadAsync`, `SaveAsync`, async lifecycle hooks, and `IValueSourceAsync` for REST APIs / remote stores
+- ✅ **DI-friendly async loading** — `InitialLoadTask` lets consumers await the initial load while sections are injected as singletons immediately
 
 ---
 
@@ -33,12 +35,16 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
 11. [Lifecycle hooks](#lifecycle-hooks)
     - [New: generic static-virtual pattern (recommended)](#new-generic-static-virtual-pattern-recommended)
     - [Legacy: partial-class pattern (.NET Framework / instance methods)](#legacy-partial-class-pattern-net-framework--instance-methods)
-12. [Singleton guarantee and dependency injection](#singleton-guarantee-and-dependency-injection)
-13. [Transactional updates](#transactional-updates)
-14. [Property-change notifications](#property-change-notifications)
-15. [Value converters](#value-converters)
+12. [Async support](#async-support)
+    - [BuildAsync and InitialLoadTask](#buildasync-and-initialloadtask)
+    - [ReloadAsync and SaveAsync](#reloadasync-and-saveasync)
+    - [IValueSourceAsync — async external sources](#ivaluesourceasync--async-external-sources)
+13. [Singleton guarantee and dependency injection](#singleton-guarantee-and-dependency-injection)
+14. [Transactional updates](#transactional-updates)
+15. [Property-change notifications](#property-change-notifications)
+16. [Value converters](#value-converters)
     - [Encrypting sensitive values](#encrypting-sensitive-values)
-16. [Registry API reference](#registry-api-reference)
+17. [Registry API reference](#registry-api-reference)
 
 ---
 
@@ -284,7 +290,10 @@ remain valid forever — including after a reload.
 // Explicitly trigger a reload at any time:
 config.Reload();
 
-// React to the reload completing:
+// Async reload — does not block the calling thread:
+await config.ReloadAsync(cancellationToken);
+
+// React to the reload completing (fires after both Reload() and ReloadAsync()):
 config.Reloaded += (sender, _) =>
     Console.WriteLine($"{((IniConfig)sender!).FileName} was reloaded.");
 ```
@@ -297,12 +306,15 @@ config.Reloaded += (sender, _) =>
 // Saves all section values back to the file that was loaded (or the first writable search path).
 config.Save();
 
-// IBeforeSave hooks run first — returning false cancels the save.
-// IAfterSave hooks run after a successful write.
+// Async variant — does not block the calling thread:
+await config.SaveAsync(cancellationToken);
+
+// IBeforeSave / IBeforeSaveAsync hooks run first — returning false cancels the save.
+// IAfterSave / IAfterSaveAsync hooks run after a successful write.
 ```
 
-> **Note:** Own `Save()` calls are automatically detected and never trigger the file-change
-> monitor, so a save does not cause an unwanted reload loop.
+> **Note:** Own `Save()` / `SaveAsync()` calls are automatically detected and never trigger
+> the file-change monitor, so a save does not cause an unwanted reload loop.
 
 ---
 
@@ -361,9 +373,10 @@ config.RequestPostponedReload();
 
 `IValueSource` is an extensibility point that lets you inject values from **any external
 system** — Windows Registry, environment variables, a web service, a secrets vault, etc.
+For async sources such as REST APIs, use `IValueSourceAsync` (see [Async support](#async-support)).
 
 ```csharp
-// Implement IValueSource
+// Implement IValueSource (synchronous)
 public sealed class EnvironmentValueSource : IValueSource
 {
     public event EventHandler<ValueChangedEventArgs>? ValueChanged;
@@ -587,6 +600,107 @@ static void Main()
     // … rest of startup
 }
 ```
+
+---
+
+## Async support
+
+All major operations have async variants that avoid blocking threads.
+
+### BuildAsync and InitialLoadTask
+
+```csharp
+// Simple async build
+var config = await IniConfigRegistry.ForFile("appsettings.ini")
+    .AddSearchPath(AppContext.BaseDirectory)
+    .RegisterSection<IAppSettings>(new AppSettingsImpl())
+    .BuildAsync(cancellationToken);
+```
+
+For DI scenarios where you need to register sections before loading completes, use the
+**fire-and-forget** pattern with `InitialLoadTask`:
+
+```csharp
+// Start loading without awaiting
+var section = new AppSettingsImpl();
+_ = IniConfigRegistry.ForFile("appsettings.ini")
+    .AddSearchPath(AppContext.BaseDirectory)
+    .RegisterSection<IAppSettings>(section)
+    .BuildAsync();
+
+// IniConfig is already in the registry — register before loading finishes
+var iniConfig = IniConfigRegistry.Get("appsettings.ini");
+builder.Services.AddSingleton<IAppSettings>(section);
+builder.Services.AddSingleton(iniConfig);
+
+// Consumer awaits InitialLoadTask before reading values
+await iniConfig.InitialLoadTask;
+Console.WriteLine(section.AppName);   // safe to read now
+```
+
+> `InitialLoadTask` is `Task.CompletedTask` when synchronous `Build()` is used — awaiting
+> it is always safe regardless of which build method was called.
+
+### ReloadAsync and SaveAsync
+
+```csharp
+await config.ReloadAsync(cancellationToken);
+await config.SaveAsync(cancellationToken);
+```
+
+### Async lifecycle hooks
+
+Add `IAfterLoadAsync`, `IBeforeSaveAsync`, or `IAfterSaveAsync` to your section interface
+when hook logic needs async operations (e.g. secrets vault, remote validation):
+
+```csharp
+[IniSection("App")]
+public interface IMySettings : IIniSection, IAfterLoadAsync, IBeforeSaveAsync
+{
+    string? Secret { get; set; }
+}
+
+// Implement in a partial class
+public partial class MySettingsImpl
+{
+    public async Task OnAfterLoadAsync(CancellationToken ct)
+        => Secret = await SecretsVault.DecryptAsync(Secret, ct);
+
+    public async Task<bool> OnBeforeSaveAsync(CancellationToken ct)
+        => await RemoteValidator.IsValidAsync(Secret, ct);  // false cancels the save
+}
+```
+
+### IValueSourceAsync — async external sources
+
+Use `IValueSourceAsync` for sources that fetch values over the network:
+
+```csharp
+public sealed class RemoteConfigSource : IValueSourceAsync
+{
+    private readonly HttpClient _http;
+    public event EventHandler<ValueChangedEventArgs>? ValueChanged;
+    public RemoteConfigSource(HttpClient http) => _http = http;
+
+    public async Task<(bool Found, string? Value)> TryGetValueAsync(
+        string sectionName, string key, CancellationToken ct = default)
+    {
+        var response = await _http.GetAsync($"/config/{sectionName}/{key}", ct);
+        if (!response.IsSuccessStatusCode) return (false, null);
+        return (true, await response.Content.ReadAsStringAsync(ct));
+    }
+}
+
+// Register via the IValueSourceAsync overload — consulted during BuildAsync/ReloadAsync
+var config = await IniConfigRegistry.ForFile("app.ini")
+    .AddSearchPath(AppContext.BaseDirectory)
+    .AddValueSource(new RemoteConfigSource(httpClient))
+    .RegisterSection<IAppSettings>(new AppSettingsImpl())
+    .BuildAsync(cancellationToken);
+```
+
+> Async sources are only consulted during `BuildAsync()` and `ReloadAsync()`.  Sync sources
+> work with both `Build()` and `BuildAsync()`.
 
 ---
 

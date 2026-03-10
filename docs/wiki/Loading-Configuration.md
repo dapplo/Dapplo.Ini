@@ -27,6 +27,24 @@ using var config = IniConfigRegistry.ForFile("myapp.ini")
 
 ---
 
+## Async build
+
+Use `BuildAsync` to load configuration without blocking the calling thread.
+This is recommended for UI applications (WPF, Avalonia, WinForms) and ASP.NET Core
+services that load configuration on startup:
+
+```csharp
+using var config = await IniConfigRegistry.ForFile("myapp.ini")
+    .AddSearchPath(AppContext.BaseDirectory)
+    .RegisterSection<IDbSettings>(new DbSettingsImpl())
+    .RegisterSection<IAppSettings>(new AppSettingsImpl())
+    .BuildAsync(cancellationToken);
+```
+
+See [[Async-Support]] for the fire-and-forget DI pattern using `InitialLoadTask`.
+
+---
+
 ## Storing configuration in AppData
 
 For desktop applications the natural home for a user INI file is
@@ -115,7 +133,8 @@ using var config = IniConfigRegistry.ForFile("app.ini")
 ## See also
 
 - [[Loading-Life-Cycle]] — value resolution order
-- [[Reloading]] — `Reload()` and the singleton guarantee
-- [[Saving]] — `Save()` and `IBeforeSave` / `IAfterSave` hooks
+- [[Reloading]] — `Reload()` / `ReloadAsync()` and the singleton guarantee
+- [[Saving]] — `Save()` / `SaveAsync()` and `IBeforeSave` / `IAfterSave` hooks
 - [[File-Locking]] — `LockFile()`
 - [[File-Change-Monitoring]] — `MonitorFile()`
+- [[Async-Support]] — `BuildAsync()` and other async APIs

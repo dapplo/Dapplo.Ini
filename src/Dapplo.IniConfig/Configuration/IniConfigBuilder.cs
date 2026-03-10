@@ -21,6 +21,7 @@ public sealed class IniConfigBuilder
     private readonly List<string> _defaultFilePaths = new();
     private readonly List<string> _constantFilePaths = new();
     private readonly List<IValueSource> _valueSources = new();
+    private readonly List<IValueSourceAsync> _valueSourcesAsync = new();
 
     // Maps interface type → section instance
     private readonly Dictionary<Type, IIniSection> _sections = new();
@@ -160,6 +161,21 @@ public sealed class IniConfigBuilder
         return this;
     }
 
+    /// <summary>
+    /// Registers an external <see cref="IValueSourceAsync"/> for configuration sources that
+    /// perform asynchronous I/O (e.g. REST APIs, remote configuration services).
+    /// Async sources are applied after all synchronous sources, in the order they are registered.
+    /// Async sources are only consulted during <see cref="BuildAsync"/> and
+    /// <see cref="IniConfig.ReloadAsync"/>; the synchronous <see cref="Build"/> and
+    /// <see cref="IniConfig.Reload"/> methods skip them.
+    /// </summary>
+    public IniConfigBuilder AddValueSource(IValueSourceAsync source)
+    {
+        if (source is null) throw new ArgumentNullException(nameof(source));
+        _valueSourcesAsync.Add(source);
+        return this;
+    }
+
     // ── file lock ─────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -274,6 +290,7 @@ public sealed class IniConfigBuilder
         config.DefaultFilePaths.AddRange(_defaultFilePaths);
         config.ConstantFilePaths.AddRange(_constantFilePaths);
         config.ValueSources.AddRange(_valueSources);
+        config.ValueSourcesAsync.AddRange(_valueSourcesAsync);
 
         // Seed sections with defaults
         foreach (var kvp in _sections)
@@ -350,6 +367,144 @@ public sealed class IniConfigBuilder
             config.StartAutoSave(_autoSaveInterval.Value);
 
         IniConfigRegistry.Register(_fileName, config);
+        return config;
+    }
+
+    /// <summary>
+    /// Asynchronously builds, loads and registers the <see cref="IniConfig"/> in the global registry.
+    /// Returns the fully-populated <see cref="IniConfig"/> once loading is complete.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The <see cref="IniConfig"/> is registered in <see cref="IniConfigRegistry"/> and its
+    /// <see cref="IniConfig.InitialLoadTask"/> is set <em>before</em> any I/O begins.
+    /// This enables dependency-injection scenarios where the configuration object (or its sections)
+    /// must be available for injection before loading is complete:
+    /// <code>
+    /// // DI setup — start loading without awaiting
+    /// var section = new MySettingsImpl();
+    /// _ = IniConfigRegistry.ForFile("app.ini")
+    ///     .AddSearchPath(dir)
+    ///     .RegisterSection&lt;IMySettings&gt;(section)
+    ///     .BuildAsync();
+    ///
+    /// services.AddSingleton&lt;IMySettings&gt;(section);
+    /// services.AddSingleton(IniConfigRegistry.Get("app.ini"));
+    ///
+    /// // Consumer — wait for initial load before accessing values
+    /// await iniConfig.InitialLoadTask;
+    /// </code>
+    /// </para>
+    /// <para>
+    /// Async lifecycle hooks (<see cref="IAfterLoadAsync"/>) are preferred; when a section
+    /// implements only the synchronous <see cref="IAfterLoad"/> hook, that is called instead.
+    /// </para>
+    /// </remarks>
+    /// <param name="cancellationToken">Token to cancel the async operation.</param>
+    public async Task<IniConfig> BuildAsync(CancellationToken cancellationToken = default)
+    {
+        var encoding = _encoding ?? Encoding.UTF8;
+
+        var config = new IniConfig(_fileName);
+        config.Encoding = encoding;
+        config.SearchPaths.AddRange(_searchPaths);
+        config.DefaultFilePaths.AddRange(_defaultFilePaths);
+        config.ConstantFilePaths.AddRange(_constantFilePaths);
+        config.ValueSources.AddRange(_valueSources);
+        config.ValueSourcesAsync.AddRange(_valueSourcesAsync);
+
+        // Seed sections with defaults
+        foreach (var kvp in _sections)
+        {
+            kvp.Value.ResetToDefaults();
+            config.Sections[kvp.Key] = kvp.Value;
+        }
+
+        // Register in the global registry and expose InitialLoadTask BEFORE any I/O starts.
+        // This lets DI consumers get a reference to the config (or its sections) and
+        // await InitialLoadTask to know when values are ready.
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        config.SetInitialLoadTask(tcs.Task);
+        IniConfigRegistry.Register(_fileName, config);
+
+        try
+        {
+            // Load default files (layered)
+            foreach (var path in _defaultFilePaths)
+            {
+                if (File.Exists(path))
+                    ApplyIniFile(config, await IniFileParser.ParseFileAsync(path, encoding, cancellationToken).ConfigureAwait(false));
+            }
+
+            // Load user file
+            var resolved = ResolveFilePath(_fileName, _searchPaths);
+            if (resolved != null)
+            {
+                config.LoadedFromPath = resolved;
+                ApplyIniFile(config, await IniFileParser.ParseFileAsync(resolved, encoding, cancellationToken).ConfigureAwait(false));
+            }
+            else
+            {
+                if (_writablePath != null)
+                {
+                    config.LoadedFromPath = _writablePath;
+                }
+                else
+                {
+                    var firstWritable = _searchPaths.FirstOrDefault(p => Directory.Exists(p));
+                    if (firstWritable != null)
+                        config.LoadedFromPath = Path.Combine(firstWritable, _fileName);
+                }
+            }
+
+            // Apply constant files (admin overrides, last wins)
+            foreach (var path in _constantFilePaths)
+            {
+                if (File.Exists(path))
+                    ApplyIniFile(config, await IniFileParser.ParseFileAsync(path, encoding, cancellationToken).ConfigureAwait(false));
+            }
+
+            // Apply external value sources
+            await config.ApplyValueSourcesAsync(cancellationToken).ConfigureAwait(false);
+
+            // Fire IAfterLoadAsync hooks (preferred) or fall back to sync IAfterLoad.
+            foreach (var section in config.Sections.Values)
+            {
+                if (section is IAfterLoadAsync afterLoadAsync)
+                    await afterLoadAsync.OnAfterLoadAsync(cancellationToken).ConfigureAwait(false);
+                else if (section is IAfterLoad afterLoad)
+                    afterLoad.OnAfterLoad();
+            }
+
+            // Clear dirty flags — initial load is not considered unsaved
+            config.ClearAllDirtyFlags();
+
+            // Acquire file lock (if requested)
+            if (_lockFile)
+                config.AcquireFileLock();
+
+            // Start file monitoring (if requested)
+            if (_monitorFile)
+                config.StartMonitoring(_fileChangedCallback);
+
+            // Register save-on-exit handler (if requested)
+            if (_saveOnExit)
+                config.EnableSaveOnExit();
+
+            // Start auto-save timer (if requested)
+            if (_autoSaveInterval.HasValue)
+                config.StartAutoSave(_autoSaveInterval.Value);
+
+            tcs.SetResult(true);
+        }
+        catch (Exception ex)
+        {
+            // Unregister from registry on failure and propagate the exception via InitialLoadTask.
+            IniConfigRegistry.Unregister(_fileName);
+            tcs.SetException(ex);
+            throw;
+        }
+
         return config;
     }
 

@@ -22,7 +22,10 @@ without re-querying the registry.
 // Explicitly trigger a reload at any time:
 config.Reload();
 
-// React to the reload completing:
+// Async reload — does not block the calling thread:
+await config.ReloadAsync(cancellationToken);
+
+// React to the reload completing (fires after both Reload() and ReloadAsync()):
 config.Reloaded += (sender, _) =>
     Console.WriteLine($"{((IniConfig)sender!).FileName} was reloaded.");
 ```
@@ -60,5 +63,6 @@ and by `Save()` (after a successful write).
 ## See also
 
 - [[File-Change-Monitoring]] — automatic reload via `FileSystemWatcher`
-- [[Saving]] — `Save()` and `IBeforeSave` / `IAfterSave` hooks
+- [[Saving]] — `Save()` / `SaveAsync()` and `IBeforeSave` / `IAfterSave` hooks
 - [[Singleton-and-DI]] — using the singleton guarantee with dependency injection
+- [[Async-Support]] — `ReloadAsync()` and async lifecycle hooks

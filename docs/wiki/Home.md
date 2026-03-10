@@ -13,6 +13,8 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
 - ✅ **INotifyPropertyChanged** / **INotifyPropertyChanging** baked in
 - ✅ **Lifecycle hooks** implementable directly in the section interface via static virtuals (C# 11+)
 - ✅ Extensible **value converter** system (custom converters for encryption etc.)
+- ✅ **Async support** — `BuildAsync`, `ReloadAsync`, `SaveAsync`, async lifecycle hooks, and `IValueSourceAsync` for REST APIs / remote configuration services
+- ✅ **DI-friendly async loading** — `InitialLoadTask` lets consumers await the initial load while sections are injected as singletons immediately
 
 ---
 
@@ -61,17 +63,18 @@ config.Save();
 | [[Defining-Sections]] | `[IniSection]` and `[IniValue]` attribute reference, generated class naming |
 | [[Loading-Life-Cycle]] | Complete order in which values are resolved during `Build()` / `Reload()` |
 | [[Loading-Configuration]] | `IniConfigBuilder` fluent API, AppData, write target |
-| [[Reloading]] | `Reload()`, singleton guarantee, `Reloaded` event |
-| [[Saving]] | `Save()`, `IBeforeSave`, `IAfterSave` |
+| [[Reloading]] | `Reload()`, `ReloadAsync()`, singleton guarantee, `Reloaded` event |
+| [[Saving]] | `Save()`, `SaveAsync()`, `IBeforeSave`, `IAfterSave` |
 | [[File-Locking]] | Holding the file open exclusively |
 | [[File-Change-Monitoring]] | `FileSystemWatcher`, `ReloadDecision`, postponed reload |
-| [[External-Value-Sources]] | `IValueSource` — environment variables, registry, REST APIs |
+| [[External-Value-Sources]] | `IValueSource` and `IValueSourceAsync` — environment variables, registry, REST APIs |
 | [[Validation]] | `IDataValidation<TSelf>` and `INotifyDataErrorInfo` |
-| [[Lifecycle-Hooks]] | `IAfterLoad`, `IBeforeSave`, `IAfterSave` (generic and legacy patterns) |
-| [[Singleton-and-DI]] | Singleton guarantee, ASP.NET Core / Microsoft DI integration |
+| [[Lifecycle-Hooks]] | `IAfterLoad`, `IBeforeSave`, `IAfterSave` and their async variants |
+| [[Async-Support]] | `BuildAsync`, `ReloadAsync`, `SaveAsync`, `IValueSourceAsync`, `InitialLoadTask`, and async lifecycle hooks |
+| [[Singleton-and-DI]] | Singleton guarantee, ASP.NET Core / Microsoft DI integration, `InitialLoadTask` |
 | [[Transactional-Updates]] | `ITransactional`, `Begin()`, `Commit()`, `Rollback()` |
 | [[Property-Change-Notifications]] | `INotifyPropertyChanged` / `INotifyPropertyChanging` |
 | [[Value-Converters]] | Built-in converters, custom converters, encrypting sensitive values |
 | [[Registry-API]] | Complete `IniConfigRegistry`, `IniConfig`, and `IniConfigBuilder` API reference |
 | [[Gap-Analysis]] | Feature comparison with the older `Dapplo.Config.Ini` library |
-| [[Async-Await-Benefits]] | Analysis of async/await trade-offs |
+| [[Async-Await-Benefits]] | Background analysis of async/await trade-offs (pre-implementation reference) |

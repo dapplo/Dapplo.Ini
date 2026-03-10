@@ -105,6 +105,22 @@ public static class IniFileParser
         return Parse(content);
     }
 
+    /// <summary>
+    /// Asynchronously parses an INI file from the file system using the specified
+    /// <paramref name="encoding"/> (defaults to UTF-8 when <c>null</c>).
+    /// </summary>
+    public static async Task<IniFile> ParseFileAsync(string filePath, Encoding? encoding = null, CancellationToken cancellationToken = default)
+    {
+        string content;
+#if NET
+        content = await File.ReadAllTextAsync(filePath, encoding ?? Encoding.UTF8, cancellationToken).ConfigureAwait(false);
+#else
+        using var reader = new StreamReader(filePath, encoding ?? Encoding.UTF8);
+        content = await reader.ReadToEndAsync().ConfigureAwait(false);
+#endif
+        return Parse(content);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>Reads one line from <paramref name="remaining"/> and advances the span past the newline.</summary>
