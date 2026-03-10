@@ -3,6 +3,9 @@
 
 using Dapplo.IniConfig.Interfaces;
 using Dapplo.IniConfig.Parsing;
+#if NET
+using System.Diagnostics.CodeAnalysis;
+#endif
 
 namespace Dapplo.IniConfig.Configuration;
 
@@ -25,6 +28,9 @@ public sealed class IniConfigBuilder
     private bool _monitorFile;
     private FileChangedCallback? _fileChangedCallback;
 
+    // Explicit write-target path (overrides the search-path fallback)
+    private string? _writablePath;
+
     internal IniConfigBuilder(string fileName)
     {
         _fileName = fileName;
@@ -45,6 +51,51 @@ public sealed class IniConfigBuilder
     public IniConfigBuilder AddSearchPaths(IEnumerable<string> paths)
     {
         _searchPaths.AddRange(paths);
+        return this;
+    }
+
+    /// <summary>
+    /// Adds the per-user application-data directory for <paramref name="applicationName"/> as a
+    /// search path and, when the INI file is not found anywhere, as the write target for
+    /// <see cref="IniConfig.Save"/>.
+    /// <list type="bullet">
+    ///   <item>On Windows this resolves to <c>%APPDATA%\<paramref name="applicationName"/></c>.</item>
+    ///   <item>On Linux it resolves to <c>~/.config/<paramref name="applicationName"/></c>.</item>
+    ///   <item>On macOS it resolves to <c>~/Library/Application Support/<paramref name="applicationName"/></c>.</item>
+    /// </list>
+    /// The directory is created if it does not yet exist so that a subsequent
+    /// <see cref="IniConfig.Save"/> can write there immediately.
+    /// </summary>
+    /// <param name="applicationName">
+    /// Sub-directory name under the roaming application-data root (typically the product name).
+    /// </param>
+    public IniConfigBuilder AddAppDataPath(string applicationName)
+    {
+        if (string.IsNullOrWhiteSpace(applicationName))
+            throw new ArgumentException("Application name must not be empty.", nameof(applicationName));
+
+        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        var path = Path.Combine(appData, applicationName);
+        Directory.CreateDirectory(path);
+        return AddSearchPath(path);
+    }
+
+    /// <summary>
+    /// Explicitly sets the path to which <see cref="IniConfig.Save"/> will write when the INI
+    /// file does not exist yet.  Use this when the desired write location differs from every
+    /// search path (e.g. when reading from a read-only system directory and writing to
+    /// a user-specific location that is not in the search list).
+    /// <para>
+    /// The containing directory must already exist (or be created by the caller beforehand).
+    /// The file itself will be created on the first <see cref="IniConfig.Save"/> call.
+    /// </para>
+    /// </summary>
+    /// <param name="path">Absolute path to the INI file that should be created on save.</param>
+    public IniConfigBuilder SetWritablePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("Path must not be empty.", nameof(path));
+        _writablePath = path;
         return this;
     }
 
@@ -136,6 +187,11 @@ public sealed class IniConfigBuilder
     /// interface type by inspecting the instance's implemented interfaces.
     /// Prefer the generic overload <see cref="RegisterSection{T}"/> for explicit control.
     /// </summary>
+#if NET
+    [RequiresUnreferencedCode(
+        "Inspects implemented interfaces at runtime to infer the section type. " +
+        "Use the generic RegisterSection<T> overload instead to preserve trim/AOT compatibility.")]
+#endif
     public IniConfigBuilder RegisterSection(IIniSection section)
     {
         if (section is null) throw new ArgumentNullException(nameof(section));
@@ -186,10 +242,19 @@ public sealed class IniConfigBuilder
         }
         else
         {
-            // Use first writable search path as target for future saves
-            var firstWritable = _searchPaths.FirstOrDefault(p => Directory.Exists(p));
-            if (firstWritable != null)
-                config.LoadedFromPath = Path.Combine(firstWritable, _fileName);
+            // Determine write target for future saves:
+            // 1. explicit SetWritablePath wins
+            // 2. fall back to first existing search directory
+            if (_writablePath != null)
+            {
+                config.LoadedFromPath = _writablePath;
+            }
+            else
+            {
+                var firstWritable = _searchPaths.FirstOrDefault(p => Directory.Exists(p));
+                if (firstWritable != null)
+                    config.LoadedFromPath = Path.Combine(firstWritable, _fileName);
+            }
         }
 
         // Apply constant files (admin overrides, last wins)

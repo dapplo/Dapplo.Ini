@@ -2,6 +2,9 @@
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
 using System.Globalization;
+#if NET
+using System.Diagnostics.CodeAnalysis;
+#endif
 
 namespace Dapplo.IniConfig.Converters;
 
@@ -185,6 +188,10 @@ public sealed class UriConverter : ValueConverterBase<Uri>
 }
 
 /// <summary>Converts any <see cref="Enum"/> type using its name.</summary>
+#if NET
+[RequiresDynamicCode("Uses Enum.ToObject and Enum.Parse with a runtime type argument. Register a typed converter for full AOT compatibility.")]
+[RequiresUnreferencedCode("Accesses enum members by name at runtime. Register a typed converter for full trim compatibility.")]
+#endif
 public sealed class EnumConverter : IValueConverter
 {
     private readonly Type _enumType;

@@ -62,7 +62,10 @@ public static class IniFileParser
                 if (closeBracket > 0)
                 {
                     var sectionName = trimmed.Slice(1, closeBracket - 1).Trim().ToString();
-                    currentSection = new IniSection(sectionName, pendingComments.ToArray());
+                    IReadOnlyList<string> comments = pendingComments.Count > 0
+                        ? pendingComments.ToArray()
+                        : (IReadOnlyList<string>)Array.Empty<string>();
+                    currentSection = new IniSection(sectionName, comments);
                     iniFile.AddSection(currentSection);
                 }
                 pendingComments.Clear();
@@ -79,7 +82,10 @@ public static class IniFileParser
                 // Ensure there is a section (global / no-section entries go into a synthetic "" section)
                 currentSection ??= iniFile.GetOrAddSection(string.Empty);
 
-                var entry = new IniEntry(key, value, pendingComments.ToArray());
+                IReadOnlyList<string> entryComments = pendingComments.Count > 0
+                    ? pendingComments.ToArray()
+                    : (IReadOnlyList<string>)Array.Empty<string>();
+                var entry = new IniEntry(key, value, entryComments);
                 currentSection.SetEntry(entry);
                 pendingComments.Clear();
             }

@@ -3,6 +3,9 @@
 
 using Dapplo.IniConfig.Converters;
 using Dapplo.IniConfig.Interfaces;
+#if NET
+using System.Diagnostics.CodeAnalysis;
+#endif
 
 namespace Dapplo.IniConfig.Configuration;
 
@@ -54,6 +57,10 @@ public abstract class IniSectionBase : IIniSection
     /// Converts a raw INI string to <typeparamref name="T"/> using the registered converter.
     /// Falls back to <paramref name="defaultValue"/> when the raw value is absent or conversion fails.
     /// </summary>
+#if NET
+    [RequiresDynamicCode("Enum types require dynamic code via EnumConverter. Register a typed converter for full AOT compatibility.")]
+    [RequiresUnreferencedCode("Enum types require unreferenced-code access via EnumConverter. Register a typed converter for full trim compatibility.")]
+#endif
     protected static T? ConvertFromRaw<T>(string? raw, T? defaultValue = default)
     {
         var converter = ValueConverterRegistry.GetConverter(typeof(T));
@@ -72,6 +79,10 @@ public abstract class IniSectionBase : IIniSection
     /// <summary>
     /// Converts a typed value to its raw INI string representation.
     /// </summary>
+#if NET
+    [RequiresDynamicCode("Enum types require dynamic code via EnumConverter. Register a typed converter for full AOT compatibility.")]
+    [RequiresUnreferencedCode("Enum types require unreferenced-code access via EnumConverter. Register a typed converter for full trim compatibility.")]
+#endif
     protected static string? ConvertToRaw<T>(T? value)
     {
         var converter = ValueConverterRegistry.GetConverter(typeof(T));

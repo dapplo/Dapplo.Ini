@@ -9,6 +9,10 @@
     <AssemblyName>Dapplo.IniConfig</AssemblyName>
     <Description>A powerful .ini file configuration framework with source generator support.</Description>
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <!-- Declare that this assembly supports linker trimming.
+         Paths that use runtime reflection (EnumConverter, non-generic RegisterSection)
+         are annotated with [RequiresUnreferencedCode] / [RequiresDynamicCode]. -->
+    <IsTrimmable Condition="$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net8.0'))">true</IsTrimmable>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == 'net48'">

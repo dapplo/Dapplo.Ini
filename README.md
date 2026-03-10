@@ -22,6 +22,8 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
 2. [Defining section interfaces](#defining-section-interfaces)
 3. [Complete loading life-cycle](#complete-loading-life-cycle)
 4. [Loading configuration](#loading-configuration)
+    - [Storing configuration in AppData](#storing-configuration-in-appdata)
+    - [Specifying an explicit write target](#specifying-an-explicit-write-target)
 5. [Reloading configuration](#reloading-configuration)
 6. [Saving configuration](#saving-configuration)
 7. [File locking](#file-locking)
@@ -234,6 +236,40 @@ using var config = IniConfigRegistry.ForFile("myapp.ini")
 
 > **Note:** `IniConfig` implements `IDisposable`. Use `using` to ensure the file lock
 > and file-system watcher are released when the application exits.
+
+### Storing configuration in AppData
+
+For desktop applications the natural home for a user INI file is
+`%APPDATA%\<ApplicationName>` on Windows (`~/.config/<ApplicationName>` on Linux,
+`~/Library/Application Support/<ApplicationName>` on macOS).
+Use `AddAppDataPath` to add that directory as a search path and write target in one call:
+
+```csharp
+using var config = IniConfigRegistry.ForFile("myapp.ini")
+    .AddAppDataPath("MyApplication")   // creates the folder if it does not exist
+    .RegisterSection<IAppSettings>(new AppSettingsImpl())
+    .Build();
+
+// If the file does not exist yet it will be created in AppData on the first Save().
+config.Save();
+```
+
+### Specifying an explicit write target
+
+When you need to read from one location (e.g. a read-only system directory) and write
+to a different location, use `SetWritablePath`:
+
+```csharp
+var targetPath = Path.Combine(
+    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+    "MyCompany", "MyApp", "user.ini");
+
+using var config = IniConfigRegistry.ForFile("defaults.ini")
+    .AddSearchPath("/etc/myapp")          // read from here
+    .SetWritablePath(targetPath)          // write to here on first Save()
+    .RegisterSection<IAppSettings>(new AppSettingsImpl())
+    .Build();
+```
 
 ---
 
@@ -826,6 +862,8 @@ public interface ICredentials
 | Method | Description |
 |--------|-------------|
 | `AddSearchPath(path)` | Adds a directory to search for the INI file |
+| `AddAppDataPath(applicationName)` | Adds `%APPDATA%\applicationName` (Linux: `~/.config/applicationName`) as a search path; creates the directory if absent |
+| `SetWritablePath(path)` | Overrides the write target for new files when no existing file is found in any search path |
 | `AddDefaultsFile(path)` | Registers a file that supplies default values (applied before the user file) |
 | `AddConstantsFile(path)` | Registers a file that supplies admin-forced constants (applied last) |
 | `AddValueSource(source)` | Registers an `IValueSource` (applied after constants) |

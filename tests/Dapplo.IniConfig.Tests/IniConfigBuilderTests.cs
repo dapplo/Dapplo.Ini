@@ -176,4 +176,82 @@ public sealed class IniConfigBuilderTests : IDisposable
 
         Assert.Equal("Modified", section2.AppName);
     }
+
+    // ── AddAppDataPath tests ───────────────────────────────────────────────────
+
+    [Fact]
+    public void AddAppDataPath_CreatesDirectory_AndSetsWriteTarget()
+    {
+        // Use a unique app name so the directory is isolated.
+        var appName = "DappLoTestApp_" + Guid.NewGuid().ToString("N");
+        var expectedDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            appName);
+
+        try
+        {
+            var section = new GeneralSettingsImpl();
+            var config = IniConfigRegistry.ForFile("appsettings.ini")
+                .AddAppDataPath(appName)
+                .RegisterSection<IGeneralSettings>(section)
+                .Build();
+
+            // Directory should have been created
+            Assert.True(Directory.Exists(expectedDir));
+
+            // LoadedFromPath should point into that directory
+            Assert.NotNull(config.LoadedFromPath);
+            Assert.Equal(
+                Path.Combine(expectedDir, "appsettings.ini"),
+                config.LoadedFromPath,
+                StringComparer.OrdinalIgnoreCase);
+
+            // Defaults should be applied because no file existed
+            Assert.Equal("MyApp", section.AppName);
+        }
+        finally
+        {
+            IniConfigRegistry.Unregister("appsettings.ini");
+            if (Directory.Exists(expectedDir))
+                Directory.Delete(expectedDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void AddAppDataPath_ThrowsWhenApplicationNameIsEmpty()
+    {
+        var builder = IniConfigRegistry.ForFile("x.ini");
+        Assert.Throws<ArgumentException>(() => builder.AddAppDataPath(""));
+        Assert.Throws<ArgumentException>(() => builder.AddAppDataPath("   "));
+    }
+
+    // ── SetWritablePath tests ──────────────────────────────────────────────────
+
+    [Fact]
+    public void SetWritablePath_UsedAsWriteTarget_WhenFileDoesNotExist()
+    {
+        var writeTarget = Path.Combine(_tempDir, "explicit-target.ini");
+
+        var section = new GeneralSettingsImpl();
+        var config = IniConfigRegistry.ForFile("missing.ini")
+            .AddSearchPath(_tempDir)
+            .SetWritablePath(writeTarget)
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        // LoadedFromPath must be the explicit path, not the search-path fallback
+        Assert.Equal(writeTarget, config.LoadedFromPath, StringComparer.OrdinalIgnoreCase);
+
+        // Save should create the file at the explicit path
+        config.Save();
+        Assert.True(File.Exists(writeTarget));
+    }
+
+    [Fact]
+    public void SetWritablePath_ThrowsWhenPathIsEmpty()
+    {
+        var builder = IniConfigRegistry.ForFile("x.ini");
+        Assert.Throws<ArgumentException>(() => builder.SetWritablePath(""));
+        Assert.Throws<ArgumentException>(() => builder.SetWritablePath("   "));
+    }
 }
