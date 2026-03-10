@@ -54,7 +54,7 @@ jobs:
   deploy:
     runs-on: windows-latest
     needs: build
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
 
