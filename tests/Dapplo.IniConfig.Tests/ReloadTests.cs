@@ -8,6 +8,7 @@ namespace Dapplo.IniConfig.Tests;
 /// <summary>
 /// Tests for <see cref="IniConfig.Reload"/> (in-place reload, singleton guarantee).
 /// </summary>
+[Collection("IniConfigRegistry")]
 public sealed class ReloadTests : IDisposable
 {
     private readonly string _tempDir;

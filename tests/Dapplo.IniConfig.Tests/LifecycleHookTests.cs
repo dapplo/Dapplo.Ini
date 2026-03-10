@@ -5,6 +5,7 @@ using Dapplo.IniConfig.Configuration;
 
 namespace Dapplo.IniConfig.Tests;
 
+[Collection("IniConfigRegistry")]
 public sealed class LifecycleHookTests : IDisposable
 {
     private readonly string _tempDir;

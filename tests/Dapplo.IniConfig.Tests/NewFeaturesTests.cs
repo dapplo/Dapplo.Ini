@@ -13,6 +13,7 @@ namespace Dapplo.IniConfig.Tests;
 /// 3. SaveOnExit
 /// 4. AutoSaveInterval
 /// </summary>
+[Collection("IniConfigRegistry")]
 public sealed class NewFeaturesTests : IDisposable
 {
     private readonly string _tempDir;
@@ -259,5 +260,114 @@ public sealed class NewFeaturesTests : IDisposable
 
         // Dispose should stop the timer without throwing
         config.Dispose();
+    }
+
+    // ── PauseAutoSave / ResumeAutoSave ─────────────────────────────────────────
+
+    [Fact]
+    public async Task PauseAutoSave_PreventsSave_WhilePaused()
+    {
+        WriteIni("pause-autosave.ini", "[General]\nAppName = Original");
+
+        var section = new GeneralSettingsImpl();
+        using var config = IniConfigRegistry.ForFile("pause-autosave.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .AutoSaveInterval(TimeSpan.FromMilliseconds(50))
+            .Build();
+
+        config.PauseAutoSave();
+        section.AppName = "ShouldNotBeSaved";
+
+        // Wait much longer than the timer interval — it should NOT fire while paused.
+        await Task.Delay(300);
+
+        Assert.True(config.HasPendingChanges(), "Changes should remain unsaved while auto-save is paused.");
+        // Confirm the file on disk was not touched while paused.
+        var diskContentWhilePaused = File.ReadAllText(Path.Combine(_tempDir, "pause-autosave.ini"));
+        Assert.Contains("Original", diskContentWhilePaused);
+        Assert.DoesNotContain("ShouldNotBeSaved", diskContentWhilePaused);
+
+        config.ResumeAutoSave();
+
+        // After resuming, auto-save should pick up the pending change.
+        await Task.Delay(300);
+
+        Assert.False(config.HasPendingChanges(), "Auto-save should have saved after resume.");
+        // Confirm the file on disk was actually updated after resume.
+        var diskContentAfterResume = File.ReadAllText(Path.Combine(_tempDir, "pause-autosave.ini"));
+        Assert.Contains("ShouldNotBeSaved", diskContentAfterResume);
+    }
+
+    [Fact]
+    public async Task PauseAutoSave_IsNestable()
+    {
+        WriteIni("pause-nested.ini", "[General]\nAppName = Original");
+
+        var section = new GeneralSettingsImpl();
+        using var config = IniConfigRegistry.ForFile("pause-nested.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .AutoSaveInterval(TimeSpan.FromMilliseconds(50))
+            .Build();
+
+        // Nested pauses: must call Resume twice before auto-save fires again.
+        config.PauseAutoSave();
+        config.PauseAutoSave();
+        section.AppName = "StillPaused";
+
+        config.ResumeAutoSave(); // still paused (count = 1)
+        await Task.Delay(300);
+        Assert.True(config.HasPendingChanges(), "Still paused after one Resume.");
+        var diskWhileStillPaused = File.ReadAllText(Path.Combine(_tempDir, "pause-nested.ini"));
+        Assert.Contains("Original", diskWhileStillPaused);
+
+        config.ResumeAutoSave(); // fully resumed (count = 0)
+        await Task.Delay(300);
+        Assert.False(config.HasPendingChanges(), "Auto-save should fire after both Resumes.");
+        var diskAfterFullResume = File.ReadAllText(Path.Combine(_tempDir, "pause-nested.ini"));
+        Assert.Contains("StillPaused", diskAfterFullResume);
+    }
+
+    [Fact]
+    public void ResumeAutoSave_UnbalancedCall_DoesNotGoNegative()
+    {
+        WriteIni("resume-unbalanced.ini", "[General]\nAppName = Test");
+
+        var section = new GeneralSettingsImpl();
+        using var config = IniConfigRegistry.ForFile("resume-unbalanced.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        // Calling Resume without a prior Pause should be a safe no-op.
+        config.ResumeAutoSave();
+        config.ResumeAutoSave();
+        // No exception thrown; auto-save is not broken.
+    }
+
+    // ── Save re-entrance ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void Save_ConcurrentCalls_DoNotDeadlock()
+    {
+        WriteIni("concurrent-save.ini", "[General]\nAppName = Initial");
+
+        var section = new GeneralSettingsImpl();
+        using var config = IniConfigRegistry.ForFile("concurrent-save.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        section.AppName = "Changed";
+
+        // Fire two concurrent saves — exactly one should run; neither should throw or deadlock.
+        var t1 = Task.Run(() => config.Save());
+        var t2 = Task.Run(() => config.Save());
+        Task.WaitAll(t1, t2);
+
+        // File must be well-formed (written by whichever call won the CAS).
+        var content = File.ReadAllText(config.LoadedFromPath!);
+        Assert.Contains("Changed", content);
     }
 }

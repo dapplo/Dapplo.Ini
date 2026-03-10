@@ -10,6 +10,7 @@ namespace Dapplo.IniConfig.Tests;
 /// Tests for <see cref="IniConfigBuilder.LockFile"/> and file-change monitoring
 /// (<see cref="IniConfigBuilder.MonitorFile"/>).
 /// </summary>
+[Collection("IniConfigRegistry")]
 public sealed class FileLockAndMonitorTests : IDisposable
 {
     private readonly string _tempDir;

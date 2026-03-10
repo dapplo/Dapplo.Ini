@@ -10,6 +10,7 @@ namespace Dapplo.IniConfig.Tests;
 /// Tests for the <see cref="IValueSource"/> external-value-source concept and
 /// <see cref="IniConfigBuilder.AddValueSource"/>.
 /// </summary>
+[Collection("IniConfigRegistry")]
 public sealed class ValueSourceTests : IDisposable
 {
     private readonly string _tempDir;

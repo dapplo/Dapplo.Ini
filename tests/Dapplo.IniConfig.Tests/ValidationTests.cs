@@ -11,6 +11,7 @@ namespace Dapplo.IniConfig.Tests;
 /// Tests for the <see cref="IDataValidation{TSelf}"/> interface and
 /// <see cref="System.ComponentModel.INotifyDataErrorInfo"/> integration.
 /// </summary>
+[Collection("IniConfigRegistry")]
 public sealed class ValidationTests : IDisposable
 {
     private readonly string _tempDir;
