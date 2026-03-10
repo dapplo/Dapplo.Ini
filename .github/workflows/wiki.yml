@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'docs/wiki/**'
+  workflow_dispatch:
 
 jobs:
   publish-wiki:
@@ -13,10 +14,17 @@ jobs:
 
     permissions:
       contents: write
+      administration: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Enable GitHub Wiki
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api -X PATCH /repos/${{ github.repository }} -f has_wiki=true
 
       - name: Publish docs/wiki to GitHub Wiki
         shell: bash
@@ -29,7 +37,7 @@ jobs:
             echo "Wiki repository not found – initializing a new one."
             mkdir wiki
             cd wiki
-            git init
+            git init -b master
             git remote add origin "$WIKI_URL"
             cd ..
           fi
@@ -44,5 +52,5 @@ jobs:
             echo "No wiki changes to publish."
           else
             git commit -m "docs: sync wiki from docs/wiki (${{ github.sha }})"
-            git push --set-upstream origin HEAD
+            git push --set-upstream origin HEAD:master
           fi
