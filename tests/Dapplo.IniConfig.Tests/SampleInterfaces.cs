@@ -180,6 +180,27 @@ public interface IAsyncCancelSaveSettings : IIniSection, IBeforeSaveAsync
     string? Value { get; set; }
 }
 
+// ── Read-only (getter-only) sample interface ──────────────────────────────────
+
+/// <summary>
+/// Section that demonstrates getter-only interface properties.
+/// Properties declared with only a getter (<c>{ get; }</c>) are treated as read-only:
+/// they are loaded from the INI file and have their defaults applied, but are never
+/// written back to disk.  The generated implementation class still provides a public
+/// setter so the framework and code that references the concrete class can assign values.
+/// </summary>
+[IniSection("ReadOnly")]
+public interface IReadOnlySettings : IIniSection
+{
+    /// <summary>Getter-only — loaded from INI, never written back.</summary>
+    [IniValue(DefaultValue = "1.0.0")]
+    string? Version { get; }
+
+    /// <summary>Regular read-write property included to verify mixing works.</summary>
+    [IniValue(DefaultValue = "App")]
+    string? Name { get; set; }
+}
+
 /// <summary>Simple async external value source backed by an in-memory dictionary.</summary>
 public sealed class AsyncDictionaryValueSource : IValueSourceAsync
 {

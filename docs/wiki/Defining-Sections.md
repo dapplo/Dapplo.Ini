@@ -55,6 +55,77 @@ public interface IDbSettings : IIniSection
 
 ---
 
+## Read-only properties
+
+A property can be made **read-only from the consumer's perspective** simply by omitting
+the setter from the interface declaration (`{ get; }` instead of `{ get; set; }`).
+
+The source generator automatically detects getter-only properties and treats them as
+read-only:
+
+| Behaviour | Getter-only `{ get; }` | `[IniValue(ReadOnly = true)]` |
+|-----------|----------------------|-------------------------------|
+| Default value applied | ✓ | ✓ |
+| Value loaded from INI | ✓ | ✓ |
+| Value written to INI on save | **✗** | **✗** |
+| Setter on **implementation class** | ✓ (public) | ✓ (public) |
+| Setter on **interface** | **✗** | ✓ |
+
+### Getter-only interface property
+
+Declare the property without a setter in the interface. The generated implementation
+class still exposes a **public setter** so the framework (and code that references the
+concrete class directly) can assign the value programmatically.
+
+```csharp
+[IniSection("AppInfo")]
+public interface IAppInfo : IIniSection
+{
+    // Getter-only: cannot be set through the interface.
+    // The value is loaded from the INI file but never written back.
+    [IniValue(DefaultValue = "1.0.0")]
+    string? Version { get; }
+
+    // Regular read-write property — written to disk when saved.
+    [IniValue(DefaultValue = "MyApp")]
+    string? Name { get; set; }
+}
+```
+
+Usage:
+
+```csharp
+IAppInfo settings = new AppInfoImpl();   // concrete type from source generator
+
+// ✓ Reading always works through the interface:
+Console.WriteLine(settings.Version);
+
+// ✗ Compile error — interface does not expose a setter:
+// settings.Version = "2.0.0";
+
+// ✓ Setting is still possible via the concrete class:
+var impl = (AppInfoImpl)settings;
+impl.Version = "2.0.0";
+```
+
+### `[IniValue(ReadOnly = true)]` on a read-write property
+
+The `ReadOnly` attribute flag achieves the same no-save behaviour while **keeping the
+setter on the interface**. This is useful when you need to set the property through the
+interface type but still want to prevent it from being written to disk.
+
+```csharp
+[IniSection("AppInfo")]
+public interface IAppInfo : IIniSection
+{
+    // Interface setter is present, but the value is never written to disk.
+    [IniValue(DefaultValue = "1.0.0", ReadOnly = true)]
+    string? Version { get; set; }
+}
+```
+
+---
+
 ## Generated class naming convention
 
 The generator derives the concrete class name from the interface name:

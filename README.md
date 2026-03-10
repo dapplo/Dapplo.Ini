@@ -153,6 +153,36 @@ public interface IDbSettings : IIniSection
 }
 ```
 
+### Read-only properties
+
+A property declared with **only a getter** (`{ get; }`) is automatically treated as
+read-only by the source generator: its value is loaded from the INI file and defaults
+are applied, but it is **never written back to disk** when the config is saved.
+
+The generated implementation class still exposes a **public setter** so the framework
+and any code holding a reference to the concrete class can assign values; the setter is
+simply absent from the interface.
+
+```csharp
+[IniSection("AppInfo")]
+public interface IAppInfo : IIniSection
+{
+    // Getter-only: loaded from INI, never saved back.
+    [IniValue(DefaultValue = "1.0.0")]
+    string? Version { get; }
+
+    // Regular read-write property.
+    [IniValue(DefaultValue = "MyApp")]
+    string? Name { get; set; }
+}
+```
+
+The same "never save" behaviour can also be requested explicitly on a `{ get; set; }`
+property via `[IniValue(ReadOnly = true)]`, which keeps the setter on the interface
+while still preventing saves.
+
+See [[Defining-Sections#read-only-properties]] for a full comparison.
+
 ---
 
 ## Complete loading life-cycle

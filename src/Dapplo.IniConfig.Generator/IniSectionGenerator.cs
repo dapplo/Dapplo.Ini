@@ -146,7 +146,14 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             {
                 Name = member.Name,
                 TypeFullName = member.Type.ToDisplayString(),
-                IsValueType  = member.Type.IsValueType
+                IsValueType  = member.Type.IsValueType,
+                // A getter-only interface property ({ get; }) is treated as read-only:
+                // the value is loaded from the INI file and defaults are applied, but
+                // it is never written back to disk.  The generated implementation still
+                // exposes a public setter so the framework (and callers with access to
+                // the concrete class) can assign values; the setter is simply not part
+                // of the interface contract.
+                IsReadOnly   = member.SetMethod == null
             };
 
             // Collect [IniValue] attribute
