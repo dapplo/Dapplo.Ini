@@ -390,4 +390,91 @@ public sealed class AsyncTests : IDisposable
         await config.ReloadAsync();
         Assert.True(section.AfterLoadCalled);
     }
+
+    // ── IValueSourceAsync ──────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task AsyncValueSource_OverridesFileValue_DuringBuildAsync()
+    {
+        WriteIni("async-source.ini", "[ReloadSection]\nValue = from-file");
+
+        var source = new AsyncDictionaryValueSource();
+        source.SetValue("ReloadSection", "Value", "from-async-source");
+
+        var section = new ReloadSettingsImpl();
+        await IniConfigRegistry.ForFile("async-source.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IReloadSettings>(section)
+            .AddValueSource(source)
+            .BuildAsync();
+
+        // Async external source wins over file value
+        Assert.Equal("from-async-source", section.Value);
+    }
+
+    [Fact]
+    public async Task AsyncValueSource_IsAppliedOnReloadAsync()
+    {
+        WriteIni("async-source2.ini", "[ReloadSection]\nValue = file-value");
+
+        var source = new AsyncDictionaryValueSource();
+        source.SetValue("ReloadSection", "Value", "async-v1");
+
+        var section = new ReloadSettingsImpl();
+        var config = await IniConfigRegistry.ForFile("async-source2.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IReloadSettings>(section)
+            .AddValueSource(source)
+            .BuildAsync();
+
+        Assert.Equal("async-v1", section.Value);
+
+        source.SetValue("ReloadSection", "Value", "async-v2");
+        await config.ReloadAsync();
+
+        Assert.Equal("async-v2", section.Value);
+    }
+
+    [Fact]
+    public async Task AsyncValueSource_WhenNoValueForKey_FileValueIsUsed()
+    {
+        WriteIni("async-source3.ini", "[ReloadSection]\nValue = from-file");
+
+        // Source provides a value for a different section/key
+        var source = new AsyncDictionaryValueSource();
+        source.SetValue("OtherSection", "OtherKey", "something");
+
+        var section = new ReloadSettingsImpl();
+        await IniConfigRegistry.ForFile("async-source3.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IReloadSettings>(section)
+            .AddValueSource(source)
+            .BuildAsync();
+
+        // Source doesn't override this key → file value wins
+        Assert.Equal("from-file", section.Value);
+    }
+
+    [Fact]
+    public async Task AsyncValueSource_AppliedAfterSyncValueSource()
+    {
+        WriteIni("async-source-order.ini", "[ReloadSection]\nValue = from-file");
+
+        var syncSource = new DictionaryValueSource();
+        syncSource.SetValue("ReloadSection", "Value", "sync-value");
+
+        var asyncSource = new AsyncDictionaryValueSource();
+        asyncSource.SetValue("ReloadSection", "Value", "async-value");
+
+        var section = new ReloadSettingsImpl();
+        await IniConfigRegistry.ForFile("async-source-order.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IReloadSettings>(section)
+            .AddValueSource(syncSource)
+            .AddValueSource(asyncSource)
+            .BuildAsync();
+
+        // Async source applied after sync source — async wins
+        Assert.Equal("async-value", section.Value);
+    }
 }

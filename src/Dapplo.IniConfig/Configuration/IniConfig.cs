@@ -18,6 +18,7 @@ public sealed class IniConfig : IDisposable
     internal readonly List<string> DefaultFilePaths = new();
     internal readonly List<string> ConstantFilePaths = new();
     internal readonly List<IValueSource> ValueSources = new();
+    internal readonly List<IValueSourceAsync> ValueSourcesAsync = new();
     internal readonly Dictionary<Type, IIniSection> Sections = new();
 
     // ── Encoding ──────────────────────────────────────────────────────────────
@@ -378,8 +379,8 @@ public sealed class IniConfig : IDisposable
                     ApplyIniFile(await IniFileParser.ParseFileAsync(path, Encoding, cancellationToken).ConfigureAwait(false));
             }
 
-            // 5. Apply external value sources
-            ApplyValueSources();
+            // 5. Apply external value sources (sync and async)
+            await ApplyValueSourcesAsync(cancellationToken).ConfigureAwait(false);
 
             // 6. Fire IAfterLoadAsync hooks (preferred) or fall back to sync IAfterLoad.
             foreach (var section in Sections.Values)
@@ -567,6 +568,27 @@ public sealed class IniConfig : IDisposable
                 foreach (var entry in GetSectionKeys(section))
                 {
                     if (source.TryGetValue(section.SectionName, entry, out var value))
+                        section.SetRawValue(entry, value);
+                }
+            }
+        }
+    }
+
+    internal async Task ApplyValueSourcesAsync(CancellationToken cancellationToken = default)
+    {
+        // Apply synchronous sources first
+        ApplyValueSources();
+
+        // Then apply async sources
+        foreach (var source in ValueSourcesAsync)
+        {
+            foreach (var section in Sections.Values)
+            {
+                foreach (var entry in GetSectionKeys(section))
+                {
+                    var (found, value) = await source.TryGetValueAsync(
+                        section.SectionName, entry, cancellationToken).ConfigureAwait(false);
+                    if (found)
                         section.SetRawValue(entry, value);
                 }
             }

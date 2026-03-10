@@ -21,6 +21,7 @@ public sealed class IniConfigBuilder
     private readonly List<string> _defaultFilePaths = new();
     private readonly List<string> _constantFilePaths = new();
     private readonly List<IValueSource> _valueSources = new();
+    private readonly List<IValueSourceAsync> _valueSourcesAsync = new();
 
     // Maps interface type → section instance
     private readonly Dictionary<Type, IIniSection> _sections = new();
@@ -160,6 +161,21 @@ public sealed class IniConfigBuilder
         return this;
     }
 
+    /// <summary>
+    /// Registers an external <see cref="IValueSourceAsync"/> for configuration sources that
+    /// perform asynchronous I/O (e.g. REST APIs, remote configuration services).
+    /// Async sources are applied after all synchronous sources, in the order they are registered.
+    /// Async sources are only consulted during <see cref="BuildAsync"/> and
+    /// <see cref="IniConfig.ReloadAsync"/>; the synchronous <see cref="Build"/> and
+    /// <see cref="IniConfig.Reload"/> methods skip them.
+    /// </summary>
+    public IniConfigBuilder AddValueSource(IValueSourceAsync source)
+    {
+        if (source is null) throw new ArgumentNullException(nameof(source));
+        _valueSourcesAsync.Add(source);
+        return this;
+    }
+
     // ── file lock ─────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -274,6 +290,7 @@ public sealed class IniConfigBuilder
         config.DefaultFilePaths.AddRange(_defaultFilePaths);
         config.ConstantFilePaths.AddRange(_constantFilePaths);
         config.ValueSources.AddRange(_valueSources);
+        config.ValueSourcesAsync.AddRange(_valueSourcesAsync);
 
         // Seed sections with defaults
         foreach (var kvp in _sections)
@@ -394,6 +411,7 @@ public sealed class IniConfigBuilder
         config.DefaultFilePaths.AddRange(_defaultFilePaths);
         config.ConstantFilePaths.AddRange(_constantFilePaths);
         config.ValueSources.AddRange(_valueSources);
+        config.ValueSourcesAsync.AddRange(_valueSourcesAsync);
 
         // Seed sections with defaults
         foreach (var kvp in _sections)
@@ -447,7 +465,7 @@ public sealed class IniConfigBuilder
             }
 
             // Apply external value sources
-            config.ApplyValueSources();
+            await config.ApplyValueSourcesAsync(cancellationToken).ConfigureAwait(false);
 
             // Fire IAfterLoadAsync hooks (preferred) or fall back to sync IAfterLoad.
             foreach (var section in config.Sections.Values)

@@ -180,3 +180,33 @@ public interface IAsyncCancelSaveSettings : IIniSection, IBeforeSaveAsync
     string? Value { get; set; }
 }
 
+/// <summary>Simple async external value source backed by an in-memory dictionary.</summary>
+public sealed class AsyncDictionaryValueSource : IValueSourceAsync
+{
+    private readonly Dictionary<string, Dictionary<string, string?>> _data =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    public event EventHandler<ValueChangedEventArgs>? ValueChanged;
+
+    public void SetValue(string section, string key, string? value)
+    {
+        if (!_data.TryGetValue(section, out var sectionDict))
+        {
+            sectionDict = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            _data[section] = sectionDict;
+        }
+        sectionDict[key] = value;
+    }
+
+    public Task<(bool Found, string? Value)> TryGetValueAsync(
+        string sectionName, string key, CancellationToken cancellationToken = default)
+    {
+        if (_data.TryGetValue(sectionName, out var sect) && sect.TryGetValue(key, out var value))
+            return Task.FromResult((true, value));
+        return Task.FromResult<(bool, string?)>((false, null));
+    }
+
+    public void RaiseChanged(string? section = null, string? key = null)
+        => ValueChanged?.Invoke(this, new ValueChangedEventArgs(section, key));
+}
+
