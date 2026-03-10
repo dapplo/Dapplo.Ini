@@ -28,4 +28,10 @@ public interface IIniSection
     /// Resets all properties to their default values.
     /// </summary>
     void ResetToDefaults();
+
+    /// <summary>
+    /// Gets a value indicating whether this section has unsaved changes since the last
+    /// <see cref="IniConfig.Save"/> or <see cref="IniConfig.Reload"/>.
+    /// </summary>
+    bool HasChanges { get; }
 }

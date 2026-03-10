@@ -25,12 +25,12 @@ other so that the most useful ones can be ported or consciously omitted.
 
 | Feature | Dapplo.Config.Ini | Dapplo.IniConfig | Notes |
 |---------|-------------------|-----------------|-------|
-| **Auto-save timer** | ✅ `AutoSaveInterval` (ms) — automatically flushes dirty sections periodically | ❌ Not implemented | Useful for crash-safety. Can be approximated with a user-managed `System.Timers.Timer` calling `config.Save()`. |
-| **Save on process exit** | ✅ `SaveOnExit = true` hooks `AppDomain.CurrentDomain.ProcessExit` | ❌ Not implemented | Convenient safety net; can be done manually with `AppDomain.CurrentDomain.ProcessExit`. |
-| **Change tracking / dirty flag** | ✅ `HasChanges()` per section; `HasPendingChanges()` on the container | ❌ Not implemented | Allows skipping an unnecessary write when nothing changed. |
+| **Auto-save timer** | ✅ `AutoSaveInterval` (ms) — automatically flushes dirty sections periodically | ✅ `AutoSaveInterval(TimeSpan)` builder method starts an internal `System.Threading.Timer` | Timer checks `HasPendingChanges()` before each tick to avoid unnecessary writes. |
+| **Save on process exit** | ✅ `SaveOnExit = true` hooks `AppDomain.CurrentDomain.ProcessExit` | ✅ `SaveOnExit()` builder method hooks `AppDomain.CurrentDomain.ProcessExit`; handler is unregistered on `Dispose()` | Works on both .NET Framework and .NET. |
+| **Change tracking / dirty flag** | ✅ `HasChanges()` per section; `HasPendingChanges()` on the container | ✅ `bool HasChanges` on `IIniSection`; `bool HasPendingChanges()` on `IniConfig` | Flag is set by `SetRawValue`, cleared by `Save()` and `Reload()`. Initial load does not mark sections dirty. |
 | **Write protection** | ✅ `RemoveWriteProtection()` / implicit protection after load | ❌ Not implemented | Prevents accidental modification before a transaction is started. |
 | **Async I/O** | ✅ `ReadFromStreamAsync`, `WriteAsync`, `Task`-based load | ❌ Synchronous only | See [`docs/async-await-benefits.md`](async-await-benefits.md) for a full analysis. |
-| **Configurable file encoding** | ✅ `FileEncoding` property (default UTF-8) | ❌ UTF-8 hardcoded in `IniFileWriter`/`IniFileParser` | Rarely needed, but some legacy systems use ISO-8859-1 or Windows-1252. |
+| **Configurable file encoding** | ✅ `FileEncoding` property (default UTF-8) | ✅ `WithEncoding(Encoding)` builder method; encoding is passed to `IniFileParser.ParseFile` and `IniFileWriter.WriteFile` | Rarely needed, but some legacy systems use ISO-8859-1 or Windows-1252. |
 | **Structured logging (Dapplo.Log)** | ✅ Verbose/Debug/Warn log calls throughout | ❌ No logging | Adding logging would aid diagnostics but introduces a dependency. |
 | **Postfix-based defaults/constants convention** | ✅ `appname-defaults.ini`, `appname-constants.ini` discovered automatically by naming convention | ❌ Callers must pass explicit paths to `AddDefaultsFile`/`AddConstantsFile` | The convention approach requires less configuration. |
 | **Section indexer by name** | ✅ `container["SectionName"]` | ❌ `GetSection<T>()` only (type-keyed) | Useful for generic/dynamic access. Can be added as `GetSection(string)` returning `IIniSection`. |
@@ -62,21 +62,19 @@ other so that the most useful ones can be ported or consciously omitted.
 Dapplo.Config.Ini exposes `AutoSaveInterval` (default 1 000 ms).  When dirty, the
 container flushes itself on each tick.
 
-**Workaround in Dapplo.IniConfig** (until natively supported):
+**Dapplo.IniConfig** now supports this natively:
 
 ```csharp
-var autosave = new System.Timers.Timer(interval: 1_000) { AutoReset = true };
-autosave.Elapsed += (_, _) =>
-{
-    if (config.HasUnsavedChanges())   // implement this per your needs
-        config.Save();
-};
-autosave.Start();
+var config = IniConfigRegistry.ForFile("app.ini")
+    .AddSearchPath(".")
+    .AutoSaveInterval(TimeSpan.FromSeconds(1))   // check every second
+    .RegisterSection<IAppSettings>(new AppSettingsImpl())
+    .Build();
 ```
 
-**Implementation idea**: Add a `bool HasChanges` property to `IIniSection` (set by
-`SetRawValue`, cleared by `Save`) and an `AutoSaveInterval(TimeSpan)` builder method
-that starts an internal timer.
+The internal `System.Threading.Timer` calls `config.HasPendingChanges()` on each tick
+and only writes to disk when at least one section is dirty.  The timer is automatically
+stopped when `config.Dispose()` is called.
 
 ---
 
@@ -85,14 +83,19 @@ that starts an internal timer.
 Dapplo.Config.Ini hooks `AppDomain.CurrentDomain.ProcessExit` when
 `SaveOnExit = true`.
 
-**Workaround**:
+**Dapplo.IniConfig** now supports this natively:
 
 ```csharp
-AppDomain.CurrentDomain.ProcessExit += (_, _) => config.Save();
+var config = IniConfigRegistry.ForFile("app.ini")
+    .AddSearchPath(".")
+    .SaveOnExit()
+    .RegisterSection<IAppSettings>(new AppSettingsImpl())
+    .Build();
+// config.Dispose() unregisters the ProcessExit handler automatically.
 ```
 
-**Implementation idea**: Add `SaveOnExit()` to `IniConfigBuilder`.  The `IniConfig`
-instance would register the handler internally and unregister it on `Dispose()`.
+The handler is registered on `AppDomain.CurrentDomain.ProcessExit` and unregistered
+when the `IniConfig` instance is disposed.  This works on both .NET Framework and .NET.
 
 ---
 
@@ -101,18 +104,44 @@ instance would register the handler internally and unregister it on `Dispose()`.
 Dapplo.Config.Ini tracks whether a section has been modified since the last read or
 write via `HasChanges()`.
 
-**Implementation idea**: Set a `_isDirty` flag inside `IniSectionBase.SetRawValue`
-and clear it inside `IniConfig.Save()` and `IniConfig.Reload()`.  Expose
-`bool HasChanges` on `IIniSection` and `bool HasPendingChanges()` on `IniConfig`.
+**Dapplo.IniConfig** now supports this natively:
+
+```csharp
+if (config.HasPendingChanges())
+    config.Save();
+
+// Or per section:
+var section = config.GetSection<IAppSettings>();
+if (section.HasChanges)
+    Console.WriteLine("Section has unsaved changes.");
+```
+
+- `bool IIniSection.HasChanges` — set inside `IniSectionBase.SetRawValue`, which is
+  invoked by every property setter in the generated class.
+- `bool IniConfig.HasPendingChanges()` — returns `true` when at least one registered
+  section is dirty.
+- Both flags are cleared automatically by `IniConfig.Save()` (after a successful
+  write) and by `IniConfig.Reload()` (after the fresh data is applied).
+- The initial load in `IniConfigBuilder.Build()` also clears the flags, so freshly
+  built configurations start in a clean state.
 
 ---
 
 ### Configurable encoding
 
-The parser and writer in Dapplo.IniConfig use `Encoding.UTF8` unconditionally.
-Adding an `WithEncoding(Encoding)` method to `IniConfigBuilder` that is stored and
-passed through to `IniFileParser.ParseFile` and `IniFileWriter.WriteFile` would
-cover this gap with minimal effort.
+The parser and writer in Dapplo.IniConfig now accept an optional `Encoding` parameter,
+and `IniConfigBuilder` exposes `WithEncoding(Encoding)`:
+
+```csharp
+var config = IniConfigRegistry.ForFile("legacy.ini")
+    .AddSearchPath(".")
+    .WithEncoding(Encoding.Latin1)
+    .RegisterSection<IAppSettings>(new AppSettingsImpl())
+    .Build();
+```
+
+When `WithEncoding` is not called the behaviour is unchanged: UTF-8 is used for both
+reading and writing.
 
 ---
 
@@ -138,13 +167,13 @@ public IniConfigBuilder UseDefaultPostfixConvention() { … }
 significantly better AOT/trim support, no runtime proxy overhead, and a richer
 feature set for layered loading, external sources, and UI data binding.
 
-The most impactful gaps to close are:
+The most impactful gaps have been closed:
 
-1. **Auto-save timer** — crash-safety for long-running desktop applications.
-2. **Save on process exit** — convenience safety net.
-3. **Change tracking** (`HasChanges`) — prerequisite for auto-save and needed for
-   efficient save-only-when-dirty behaviour.
-4. **Configurable encoding** — low-effort addition for legacy-system compatibility.
+1. ✅ **Auto-save timer** — `AutoSaveInterval(TimeSpan)` on `IniConfigBuilder`.
+2. ✅ **Save on process exit** — `SaveOnExit()` on `IniConfigBuilder`.
+3. ✅ **Change tracking** (`HasChanges` / `HasPendingChanges`) — prerequisite for
+   auto-save and efficient save-only-when-dirty behaviour.
+4. ✅ **Configurable encoding** — `WithEncoding(Encoding)` on `IniConfigBuilder`.
 5. **Async I/O** — see [`docs/async-await-benefits.md`](async-await-benefits.md).
 
 All other gaps are either intentionally omitted (proxy model, Dapplo.Log coupling,

@@ -1,6 +1,7 @@
 // Copyright (c) Dapplo. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
+using System.Text;
 using Dapplo.IniConfig.Interfaces;
 using Dapplo.IniConfig.Parsing;
 #if NET
@@ -30,6 +31,15 @@ public sealed class IniConfigBuilder
 
     // Explicit write-target path (overrides the search-path fallback)
     private string? _writablePath;
+
+    // Encoding for reading/writing INI files (null = UTF-8)
+    private Encoding? _encoding;
+
+    // Save-on-exit
+    private bool _saveOnExit;
+
+    // Auto-save interval (null = disabled)
+    private TimeSpan? _autoSaveInterval;
 
     internal IniConfigBuilder(string fileName)
     {
@@ -96,6 +106,20 @@ public sealed class IniConfigBuilder
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("Path must not be empty.", nameof(path));
         _writablePath = path;
+        return this;
+    }
+
+    // ── encoding ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Sets the character encoding used when reading and writing the INI file.
+    /// Defaults to UTF-8 when not specified.
+    /// Use this to support legacy systems that require encodings such as ISO-8859-1 or Windows-1252.
+    /// </summary>
+    /// <param name="encoding">The encoding to use; must not be <c>null</c>.</param>
+    public IniConfigBuilder WithEncoding(Encoding encoding)
+    {
+        _encoding = encoding ?? throw new ArgumentNullException(nameof(encoding));
         return this;
     }
 
@@ -168,6 +192,35 @@ public sealed class IniConfigBuilder
         return this;
     }
 
+    // ── save-on-exit ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Instructs the <see cref="IniConfig"/> to automatically call <see cref="IniConfig.Save"/>
+    /// when the process exits (via <see cref="AppDomain.CurrentDomain"/> <c>ProcessExit</c>).
+    /// The handler is unregistered when the <see cref="IniConfig"/> is disposed.
+    /// </summary>
+    public IniConfigBuilder SaveOnExit()
+    {
+        _saveOnExit = true;
+        return this;
+    }
+
+    // ── auto-save timer ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Starts an internal timer that periodically checks for unsaved changes and, when present,
+    /// calls <see cref="IniConfig.Save"/> automatically.
+    /// </summary>
+    /// <param name="interval">
+    /// How often to check for pending changes.  A value of <see cref="Timeout.InfiniteTimeSpan"/>
+    /// disables the timer.
+    /// </param>
+    public IniConfigBuilder AutoSaveInterval(TimeSpan interval)
+    {
+        _autoSaveInterval = interval;
+        return this;
+    }
+
     // ── sections ──────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -213,7 +266,10 @@ public sealed class IniConfigBuilder
     /// </summary>
     public IniConfig Build()
     {
+        var encoding = _encoding ?? Encoding.UTF8;
+
         var config = new IniConfig(_fileName);
+        config.Encoding = encoding;
         config.SearchPaths.AddRange(_searchPaths);
         config.DefaultFilePaths.AddRange(_defaultFilePaths);
         config.ConstantFilePaths.AddRange(_constantFilePaths);
@@ -230,7 +286,7 @@ public sealed class IniConfigBuilder
         foreach (var path in _defaultFilePaths)
         {
             if (File.Exists(path))
-                ApplyIniFile(config, IniFileParser.ParseFile(path));
+                ApplyIniFile(config, IniFileParser.ParseFile(path, encoding));
         }
 
         // Load user file
@@ -238,7 +294,7 @@ public sealed class IniConfigBuilder
         if (resolved != null)
         {
             config.LoadedFromPath = resolved;
-            ApplyIniFile(config, IniFileParser.ParseFile(resolved));
+            ApplyIniFile(config, IniFileParser.ParseFile(resolved, encoding));
         }
         else
         {
@@ -261,7 +317,7 @@ public sealed class IniConfigBuilder
         foreach (var path in _constantFilePaths)
         {
             if (File.Exists(path))
-                ApplyIniFile(config, IniFileParser.ParseFile(path));
+                ApplyIniFile(config, IniFileParser.ParseFile(path, encoding));
         }
 
         // Apply external value sources
@@ -274,6 +330,9 @@ public sealed class IniConfigBuilder
                 afterLoad.OnAfterLoad();
         }
 
+        // Clear dirty flags — initial load is not considered unsaved
+        config.ClearAllDirtyFlags();
+
         // Acquire file lock (if requested)
         if (_lockFile)
             config.AcquireFileLock();
@@ -281,6 +340,14 @@ public sealed class IniConfigBuilder
         // Start file monitoring (if requested)
         if (_monitorFile)
             config.StartMonitoring(_fileChangedCallback);
+
+        // Register save-on-exit handler (if requested)
+        if (_saveOnExit)
+            config.EnableSaveOnExit();
+
+        // Start auto-save timer (if requested)
+        if (_autoSaveInterval.HasValue)
+            config.StartAutoSave(_autoSaveInterval.Value);
 
         IniConfigRegistry.Register(_fileName, config);
         return config;

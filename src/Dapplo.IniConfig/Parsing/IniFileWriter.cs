@@ -11,10 +11,11 @@ namespace Dapplo.IniConfig.Parsing;
 /// </summary>
 public static class IniFileWriter
 {
-    /// <summary>Writes <paramref name="iniFile"/> to the file at <paramref name="filePath"/>.</summary>
-    public static void WriteFile(string filePath, IniFile iniFile)
+    /// <summary>Writes <paramref name="iniFile"/> to the file at <paramref name="filePath"/> using the specified
+    /// <paramref name="encoding"/> (defaults to UTF-8 when <c>null</c>).</summary>
+    public static void WriteFile(string filePath, IniFile iniFile, Encoding? encoding = null)
     {
-        using var writer = new StreamWriter(filePath, append: false, Encoding.UTF8);
+        using var writer = new StreamWriter(filePath, append: false, encoding ?? Encoding.UTF8);
         Write(writer, iniFile);
     }
 

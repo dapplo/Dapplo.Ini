@@ -19,6 +19,9 @@ public abstract class IniSectionBase : IIniSection
     private readonly Dictionary<string, string?> _rawValues =
         new(StringComparer.OrdinalIgnoreCase);
 
+    // Dirty flag: set when a value is written via SetRawValue; cleared by IniConfig after Save/Reload.
+    private bool _isDirty;
+
     // ── IIniSection ───────────────────────────────────────────────────────────
 
     /// <inheritdoc/>
@@ -32,11 +35,23 @@ public abstract class IniSectionBase : IIniSection
     public void SetRawValue(string key, string? value)
     {
         _rawValues[key] = value;
+        _isDirty = true;
         OnRawValueSet(key, value);
     }
 
     /// <inheritdoc/>
     public abstract void ResetToDefaults();
+
+    /// <inheritdoc/>
+    public bool HasChanges => _isDirty;
+
+    // ── Internal helpers for IniConfig ────────────────────────────────────────
+
+    /// <summary>
+    /// Clears the dirty flag. Called by <see cref="IniConfig"/> after a successful
+    /// <see cref="IniConfig.Save"/> or <see cref="IniConfig.Reload"/>.
+    /// </summary>
+    internal void ClearDirtyFlag() => _isDirty = false;
 
     // ── Internal helpers for generated code ──────────────────────────────────
 
@@ -89,3 +104,4 @@ public abstract class IniSectionBase : IIniSection
         return converter?.ConvertToString(value);
     }
 }
+

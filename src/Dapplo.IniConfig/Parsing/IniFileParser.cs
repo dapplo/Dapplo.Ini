@@ -96,11 +96,12 @@ public static class IniFileParser
     }
 
     /// <summary>
-    /// Parses an INI file from the file system.
+    /// Parses an INI file from the file system using the specified <paramref name="encoding"/>
+    /// (defaults to UTF-8 when <c>null</c>).
     /// </summary>
-    public static IniFile ParseFile(string filePath)
+    public static IniFile ParseFile(string filePath, Encoding? encoding = null)
     {
-        var content = File.ReadAllText(filePath, Encoding.UTF8);
+        var content = File.ReadAllText(filePath, encoding ?? Encoding.UTF8);
         return Parse(content);
     }
 

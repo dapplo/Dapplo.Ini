@@ -1,6 +1,7 @@
 // Copyright (c) Dapplo. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
+using System.Text;
 using Dapplo.IniConfig.Interfaces;
 using Dapplo.IniConfig.Parsing;
 
@@ -18,6 +19,11 @@ public sealed class IniConfig : IDisposable
     internal readonly List<string> ConstantFilePaths = new();
     internal readonly List<IValueSource> ValueSources = new();
     internal readonly Dictionary<Type, IIniSection> Sections = new();
+
+    // ── Encoding ──────────────────────────────────────────────────────────────
+
+    /// <summary>Encoding used when reading and writing the INI file. Defaults to UTF-8.</summary>
+    internal Encoding Encoding = Encoding.UTF8;
 
     // ── File lock ─────────────────────────────────────────────────────────────
 
@@ -39,6 +45,14 @@ public sealed class IniConfig : IDisposable
     // ── Reload sync ───────────────────────────────────────────────────────────
 
     private readonly object _reloadLock = new();
+
+    // ── Save-on-exit ──────────────────────────────────────────────────────────
+
+    private EventHandler? _processExitHandler;
+
+    // ── Auto-save timer ───────────────────────────────────────────────────────
+
+    private System.Threading.Timer? _autoSaveTimer;
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -71,6 +85,32 @@ public sealed class IniConfig : IDisposable
             $"Section '{typeof(T).Name}' has not been registered with the INI configuration '{FileName}'.");
     }
 
+    // ── Change tracking ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns <c>true</c> when at least one registered section has unsaved changes
+    /// (i.e. its <see cref="IIniSection.HasChanges"/> is <c>true</c>).
+    /// </summary>
+    public bool HasPendingChanges()
+    {
+        foreach (var section in Sections.Values)
+        {
+            if (section.HasChanges)
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>Clears the dirty flag on every registered section.</summary>
+    internal void ClearAllDirtyFlags()
+    {
+        foreach (var section in Sections.Values)
+        {
+            if (section is IniSectionBase sectionBase)
+                sectionBase.ClearDirtyFlag();
+        }
+    }
+
     // ── Save ──────────────────────────────────────────────────────────────────
 
     /// <summary>Saves all sections back to <see cref="LoadedFromPath"/>.</summary>
@@ -94,12 +134,15 @@ public sealed class IniConfig : IDisposable
         _isSelfWriting = true;
         try
         {
-            IniFileWriter.WriteFile(LoadedFromPath!, iniFile);
+            IniFileWriter.WriteFile(LoadedFromPath!, iniFile, Encoding);
         }
         finally
         {
             _isSelfWriting = false;
         }
+
+        // Clear dirty flags after successful write
+        ClearAllDirtyFlags();
 
         // Call IAfterSave hooks
         foreach (var section in Sections.Values)
@@ -124,6 +167,7 @@ public sealed class IniConfig : IDisposable
     ///   <item>Apply registered constant files (admin overrides).</item>
     ///   <item>Apply registered external <see cref="IValueSource"/> instances.</item>
     ///   <item>Fire <see cref="IAfterLoad"/> hooks on every section.</item>
+    ///   <item>Clear dirty flags (freshly loaded data is not considered unsaved).</item>
     ///   <item>Raise <see cref="Reloaded"/>.</item>
     /// </list>
     /// </remarks>
@@ -141,18 +185,18 @@ public sealed class IniConfig : IDisposable
             foreach (var path in DefaultFilePaths)
             {
                 if (File.Exists(path))
-                    ApplyIniFile(IniFileParser.ParseFile(path));
+                    ApplyIniFile(IniFileParser.ParseFile(path, Encoding));
             }
 
             // 3. Apply user file
             if (!string.IsNullOrEmpty(LoadedFromPath) && File.Exists(LoadedFromPath))
-                ApplyIniFile(IniFileParser.ParseFile(LoadedFromPath!));
+                ApplyIniFile(IniFileParser.ParseFile(LoadedFromPath!, Encoding));
 
             // 4. Apply constant files
             foreach (var path in ConstantFilePaths)
             {
                 if (File.Exists(path))
-                    ApplyIniFile(IniFileParser.ParseFile(path));
+                    ApplyIniFile(IniFileParser.ParseFile(path, Encoding));
             }
 
             // 5. Apply external value sources
@@ -164,9 +208,12 @@ public sealed class IniConfig : IDisposable
                 if (section is IAfterLoad afterLoad)
                     afterLoad.OnAfterLoad();
             }
+
+            // 7. Clear dirty flags — freshly loaded data is not considered unsaved
+            ClearAllDirtyFlags();
         }
 
-        // 7. Raise Reloaded
+        // 8. Raise Reloaded
         Reloaded?.Invoke(this, EventArgs.Empty);
     }
 
@@ -268,6 +315,37 @@ public sealed class IniConfig : IDisposable
         }
     }
 
+    // ── Save-on-exit ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Registers a <see cref="AppDomain.CurrentDomain"/> <c>ProcessExit</c> handler that calls
+    /// <see cref="Save"/> when the process exits.  The handler is unregistered on <see cref="Dispose"/>.
+    /// </summary>
+    internal void EnableSaveOnExit()
+    {
+        _processExitHandler = (_, _) =>
+        {
+            if (!_disposed)
+                Save();
+        };
+        AppDomain.CurrentDomain.ProcessExit += _processExitHandler;
+    }
+
+    // ── Auto-save timer ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Starts a timer that periodically calls <see cref="Save"/> when <see cref="HasPendingChanges"/>
+    /// returns <c>true</c>.  The timer is stopped on <see cref="Dispose"/>.
+    /// </summary>
+    internal void StartAutoSave(TimeSpan interval)
+    {
+        _autoSaveTimer = new System.Threading.Timer(_ =>
+        {
+            if (!_disposed && HasPendingChanges())
+                Save();
+        }, null, interval, interval);
+    }
+
     // ── Value sources ─────────────────────────────────────────────────────────
 
     internal void ApplyValueSources()
@@ -324,7 +402,7 @@ public sealed class IniConfig : IDisposable
 
     // ── IDisposable ───────────────────────────────────────────────────────────
 
-    private bool _disposed;
+    private volatile bool _disposed;
 
     /// <inheritdoc/>
     public void Dispose()
@@ -334,6 +412,15 @@ public sealed class IniConfig : IDisposable
 
         _watcher?.Dispose();
         _watcher = null;
+
+        _autoSaveTimer?.Dispose();
+        _autoSaveTimer = null;
+
+        if (_processExitHandler != null)
+        {
+            AppDomain.CurrentDomain.ProcessExit -= _processExitHandler;
+            _processExitHandler = null;
+        }
 
         ReleaseFileLock();
     }
