@@ -14,7 +14,6 @@ jobs:
 
     permissions:
       contents: write
-      administration: write
 
     steps:
       - name: Checkout repository
