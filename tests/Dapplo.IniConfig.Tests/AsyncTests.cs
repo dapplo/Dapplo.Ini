@@ -27,8 +27,12 @@ public sealed class AsyncTests : IDisposable
     public void Dispose()
     {
         IniConfigRegistry.Clear();
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        try
+        {
+            if (Directory.Exists(_tempDir))
+                Directory.Delete(_tempDir, recursive: true);
+        }
+        catch (IOException) { /* ignore transient file locks from async operations */ }
     }
 
     private string WriteIni(string fileName, string content)
