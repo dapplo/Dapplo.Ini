@@ -1,0 +1,104 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches-ignore:
+      - 'gh-pages'
+  pull_request:
+    branches-ignore:
+      - 'gh-pages'
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    permissions:
+      contents: read
+      actions: read
+      checks: write
+
+    env:
+      SOLUTION: 'Dapplo.IniConfig.slnx'
+      BUILD_CONFIGURATION: 'Release'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore ${{ env.SOLUTION }}
+
+    - name: Build
+      run: dotnet build ${{ env.SOLUTION }} --configuration ${{ env.BUILD_CONFIGURATION }} --no-restore
+
+    - name: Test
+      run: dotnet test ${{ env.SOLUTION }} --configuration ${{ env.BUILD_CONFIGURATION }} --no-restore
+
+    - name: Pack
+      run: dotnet pack ${{ env.SOLUTION }} --configuration ${{ env.BUILD_CONFIGURATION }} --no-build --output artifacts
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-artifacts
+        retention-days: 1
+        path: artifacts/**/*
+
+  deploy:
+    runs-on: windows-latest
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    permissions:
+      contents: read
+
+    environment:
+      name: NuGet
+
+    steps:
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: build-artifacts
+        path: artifacts
+
+    - name: Setup NuGet
+      uses: NuGet/setup-nuget@v2
+      with:
+        nuget-version: '7.x'
+
+    - name: Push to NuGet
+      shell: pwsh
+      run: |
+        $packages = Get-ChildItem -Path artifacts -Filter "*nupkg" | Where-Object { $_.Name -notlike "*.symbols.nupkg" }
+        if ($packages.Count -eq 0) {
+          Write-Host "No packages found to publish"
+          exit 0
+        }
+
+        $failed = 0
+        foreach ($package in $packages) {
+          Write-Host "Pushing $($package.Name)..."
+          $result = & nuget push $package.FullName -Source https://api.nuget.org/v3/index.json -ApiKey ${{ secrets.NUGET_API_KEY }} -SkipDuplicate 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            if ($result -match "already exists") {
+              Write-Host "Package already exists (skipped): $($package.Name)"
+            } else {
+              Write-Error "Failed to push $($package.Name): $result"
+              $failed++
+            }
+          } else {
+            Write-Host "Successfully pushed: $($package.Name)"
+          }
+        }
+
+        if ($failed -gt 0) {
+          Write-Error "Failed to push $failed package(s)"
+          exit 1
+        }
