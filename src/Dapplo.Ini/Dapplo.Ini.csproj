@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net48;net10.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Dapplo.Ini</RootNamespace>
+    <AssemblyName>Dapplo.Ini</AssemblyName>
+    <Description>A powerful .ini file configuration framework with source generator support.</Description>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <!-- Declare that this assembly supports linker trimming.
+         Paths that use runtime reflection (EnumConverter, non-generic RegisterSection)
+         are annotated with [RequiresUnreferencedCode] / [RequiresDynamicCode]. -->
+    <IsTrimmable Condition="$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net8.0'))">true</IsTrimmable>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <PackageReference Include="System.Memory" Version="4.5.5" />
+  </ItemGroup>
+
+</Project>

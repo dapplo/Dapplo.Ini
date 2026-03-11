@@ -5,8 +5,8 @@
 Install the main package and the source generator from NuGet:
 
 ```shell
-dotnet add package Dapplo.IniConfig
-dotnet add package Dapplo.IniConfig.Generator
+dotnet add package Dapplo.Ini
+dotnet add package Dapplo.Ini.Generator
 ```
 
 The generator package adds the Roslyn source generator that automatically creates a concrete
@@ -25,7 +25,7 @@ identically.
 **Step 1 — Define the interface**
 
 ```csharp
-using Dapplo.IniConfig;
+using Dapplo.Ini;
 
 [IniSection("App", Description = "Application settings")]
 public interface IAppSettings : IIniSection

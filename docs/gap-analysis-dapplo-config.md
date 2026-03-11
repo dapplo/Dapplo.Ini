@@ -1,6 +1,6 @@
-# Gap Analysis: Dapplo.IniConfig vs Dapplo.Config.Ini
+# Gap Analysis: Dapplo.Ini vs Dapplo.Config.Ini
 
-This document compares `Dapplo.IniConfig` (this library) with the INI-file
+This document compares `Dapplo.Ini` (this library) with the INI-file
 subsystem of the older [`Dapplo.Config`](https://github.com/dapplo/Dapplo.Config/tree/master/src/Dapplo.Config.Ini)
 library.  The goal is to identify features that exist in one library but not the
 other so that the most useful ones can be ported or consciously omitted.
@@ -9,7 +9,7 @@ other so that the most useful ones can be ported or consciously omitted.
 
 ## Architectural difference — the most important distinction
 
-| Aspect | Dapplo.Config.Ini | Dapplo.IniConfig |
+| Aspect | Dapplo.Config.Ini | Dapplo.Ini |
 |--------|-------------------|------------------|
 | **Implementation strategy** | Runtime **Castle DynamicProxy** — concrete classes are created at runtime by intercepting interface calls | **C# Source Generator** — concrete classes are created at compile time |
 | **AOT / NativeAOT support** | ❌ Not compatible (depends on IL emit) | ✅ Compatible with linker trimming and NativeAOT |
@@ -21,9 +21,9 @@ other so that the most useful ones can be ported or consciously omitted.
 
 ## Feature comparison
 
-### Features present in Dapplo.Config.Ini **but missing** from Dapplo.IniConfig
+### Features present in Dapplo.Config.Ini **but missing** from Dapplo.Ini
 
-| Feature | Dapplo.Config.Ini | Dapplo.IniConfig | Notes |
+| Feature | Dapplo.Config.Ini | Dapplo.Ini | Notes |
 |---------|-------------------|-----------------|-------|
 | **Auto-save timer** | ✅ `AutoSaveInterval` (ms) — automatically flushes dirty sections periodically | ✅ `AutoSaveInterval(TimeSpan)` builder method starts an internal `System.Threading.Timer` | Timer checks `HasPendingChanges()` before each tick to avoid unnecessary writes. |
 | **Save on process exit** | ✅ `SaveOnExit = true` hooks `AppDomain.CurrentDomain.ProcessExit` | ✅ `SaveOnExit()` builder method hooks `AppDomain.CurrentDomain.ProcessExit`; handler is unregistered on `Dispose()` | Works on both .NET Framework and .NET. |
@@ -37,9 +37,9 @@ other so that the most useful ones can be ported or consciously omitted.
 
 ---
 
-### Features present in Dapplo.IniConfig **but missing** from Dapplo.Config.Ini
+### Features present in Dapplo.Ini **but missing** from Dapplo.Config.Ini
 
-| Feature | Dapplo.Config.Ini | Dapplo.IniConfig | Notes |
+| Feature | Dapplo.Config.Ini | Dapplo.Ini | Notes |
 |---------|-------------------|-----------------|-------|
 | **Source-generator approach** | ❌ | ✅ | Zero runtime reflection for the common path; trim- and AOT-safe. |
 | **Global registry** | ❌ (DI container used instead) | ✅ `IniConfigRegistry` | Allows access anywhere without DI. |
@@ -62,7 +62,7 @@ other so that the most useful ones can be ported or consciously omitted.
 Dapplo.Config.Ini exposes `AutoSaveInterval` (default 1 000 ms).  When dirty, the
 container flushes itself on each tick.
 
-**Dapplo.IniConfig** now supports this natively:
+**Dapplo.Ini** now supports this natively:
 
 ```csharp
 var config = IniConfigRegistry.ForFile("app.ini")
@@ -83,7 +83,7 @@ stopped when `config.Dispose()` is called.
 Dapplo.Config.Ini hooks `AppDomain.CurrentDomain.ProcessExit` when
 `SaveOnExit = true`.
 
-**Dapplo.IniConfig** now supports this natively:
+**Dapplo.Ini** now supports this natively:
 
 ```csharp
 var config = IniConfigRegistry.ForFile("app.ini")
@@ -104,7 +104,7 @@ when the `IniConfig` instance is disposed.  This works on both .NET Framework an
 Dapplo.Config.Ini tracks whether a section has been modified since the last read or
 write via `HasChanges()`.
 
-**Dapplo.IniConfig** now supports this natively:
+**Dapplo.Ini** now supports this natively:
 
 ```csharp
 if (config.HasPendingChanges())
@@ -129,7 +129,7 @@ if (section.HasChanges)
 
 ### Configurable encoding
 
-The parser and writer in Dapplo.IniConfig now accept an optional `Encoding` parameter,
+The parser and writer in Dapplo.Ini now accept an optional `Encoding` parameter,
 and `IniConfigBuilder` exposes `WithEncoding(Encoding)`:
 
 ```csharp
@@ -148,7 +148,7 @@ reading and writing.
 ### Postfix-based defaults/constants convention
 
 Dapplo.Config.Ini automatically looks for `appname-defaults.ini` and
-`appname-constants.ini` alongside the main file.  Dapplo.IniConfig requires explicit
+`appname-constants.ini` alongside the main file.  Dapplo.Ini requires explicit
 `AddDefaultsFile` / `AddConstantsFile` calls.
 
 **Possible addition** to `IniConfigBuilder`:
@@ -163,7 +163,7 @@ public IniConfigBuilder UseDefaultPostfixConvention() { … }
 
 ## Summary
 
-`Dapplo.IniConfig` is the **modern successor** to `Dapplo.Config.Ini`, offering
+`Dapplo.Ini` is the **modern successor** to `Dapplo.Config.Ini`, offering
 significantly better AOT/trim support, no runtime proxy overhead, and a richer
 feature set for layered loading, external sources, and UI data binding.
 
@@ -177,4 +177,4 @@ The most impactful gaps have been closed:
 5. **Async I/O** — see [`docs/async-await-benefits.md`](async-await-benefits.md).
 
 All other gaps are either intentionally omitted (proxy model, Dapplo.Log coupling,
-fixed postfix convention) or superseded by new Dapplo.IniConfig features.
+fixed postfix convention) or superseded by new Dapplo.Ini features.

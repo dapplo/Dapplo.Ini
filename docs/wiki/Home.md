@@ -1,4 +1,4 @@
-# Dapplo.IniConfig
+# Dapplo.Ini
 
 A powerful, source-generator–backed INI file configuration framework for .NET.
 

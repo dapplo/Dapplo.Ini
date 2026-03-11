@@ -1,4 +1,4 @@
-# Dapplo.IniConfig
+# Dapplo.Ini
 
 A powerful, source-generator–backed INI file configuration framework for .NET.
 
@@ -88,7 +88,7 @@ config.Save();
 ## Defining section interfaces
 
 Every configuration section is a plain C# interface annotated with `[IniSection]`.
-The source generator (`Dapplo.IniConfig.Generator`) creates a concrete `partial class`
+The source generator (`Dapplo.Ini.Generator`) creates a concrete `partial class`
 implementation automatically.
 
 ### Generated class naming convention

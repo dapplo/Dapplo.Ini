@@ -5,7 +5,7 @@ Async/await is now fully implemented — see [[Async-Support]] for practical usa
 
 ---
 
-## What async I/O brings to Dapplo.IniConfig
+## What async I/O brings to Dapplo.Ini
 
 ### 1. Application startup (`BuildAsync`)
 

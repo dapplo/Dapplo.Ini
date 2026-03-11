@@ -1,7 +1,7 @@
-# Benefits of async/await for Dapplo.IniConfig
+# Benefits of async/await for Dapplo.Ini
 
 This document analyses what `async`/`await` support would bring to
-`Dapplo.IniConfig` and where the trade-offs lie.
+`Dapplo.Ini` and where the trade-offs lie.
 
 ---
 
@@ -80,7 +80,7 @@ public interface IAsyncValueSource
 |---------|--------|
 | **Surface-area growth** | Every synchronous method needs an `Async` twin (or replacement), roughly doubling the public API. |
 | **`async` all-the-way** | `async` in `Build()` means hooks (`IAfterLoad`, etc.) would also need to become async — a breaking change for existing implementors. |
-| **Net Framework 4.8** | `Dapplo.IniConfig` targets `net48` as well as `net10.0`. `async`/`await` itself is available on both, but `ValueTask` and `IAsyncEnumerable` require a package reference on net48. |
+| **Net Framework 4.8** | `Dapplo.Ini` targets `net48` as well as `net10.0`. `async`/`await` itself is available on both, but `ValueTask` and `IAsyncEnumerable` require a package reference on net48. |
 | **Tiny files** | For a local INI file of a few kilobytes, async overhead (state machine allocation, scheduling) may exceed the I/O time itself. A synchronous fast-path is often preferable. |
 | **Complexity** | Concurrency on `Reload()` requires a `SemaphoreSlim` or similar guard to prevent overlapping reloads — adding non-trivial complexity. |
 

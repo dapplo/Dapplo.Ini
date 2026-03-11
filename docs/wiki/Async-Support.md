@@ -1,6 +1,6 @@
 # Async Support
 
-`Dapplo.IniConfig` ships with first-class async support.  Every major I/O operation has an
+`Dapplo.Ini` ships with first-class async support.  Every major I/O operation has an
 `*Async` twin while the synchronous API remains fully functional for simple scenarios.
 
 ---
