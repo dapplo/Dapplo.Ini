@@ -40,6 +40,10 @@ public sealed class IniConfig : IDisposable
     // Tracks whether a postponed reload is pending.
     private volatile bool _postponedReloadPending;
 
+    // Debounce timer: coalesces rapid Changed events (e.g. truncate + write) into one reload.
+    private System.Threading.Timer? _reloadDebounceTimer;
+    private const int ReloadDebounceMs = 200;
+
     // ── Save re-entrance guard ────────────────────────────────────────────────
 
     // 0 = idle, 1 = save in progress.  Manipulated via Interlocked to allow concurrent callers
@@ -467,6 +471,13 @@ public sealed class IniConfig : IDisposable
 
         _fileChangedCallback = callback;
 
+        // Debounce timer starts in the stopped state; OnFileChanged arms it on demand.
+        _reloadDebounceTimer = new System.Threading.Timer(_ =>
+        {
+            if (!_disposed)
+                Reload();
+        }, null, Timeout.Infinite, Timeout.Infinite);
+
         var dir  = Path.GetDirectoryName(LoadedFromPath)!;
         var file = Path.GetFileName(LoadedFromPath)!;
 
@@ -487,7 +498,11 @@ public sealed class IniConfig : IDisposable
         switch (decision)
         {
             case ReloadDecision.Reload:
-                Reload();
+                // Debounce: schedule the reload after a short delay so that rapid successive
+                // Changed events (e.g. file truncated then written by File.WriteAllText) are
+                // coalesced into a single reload once the write is complete.
+                // Use a local copy to avoid a null-reference race with Dispose().
+                _reloadDebounceTimer?.Change(ReloadDebounceMs, Timeout.Infinite);
                 break;
 
             case ReloadDecision.Postpone:
@@ -644,6 +659,13 @@ public sealed class IniConfig : IDisposable
 
         _watcher?.Dispose();
         _watcher = null;
+
+        // Stop the debounce timer (cancel any pending callback) before disposing it.
+        // _disposed is already true so any in-flight callback will bail out immediately.
+        var debounceTimer = _reloadDebounceTimer;
+        _reloadDebounceTimer = null;
+        debounceTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+        debounceTimer?.Dispose();
 
         _autoSaveTimer?.Dispose();
         _autoSaveTimer = null;
