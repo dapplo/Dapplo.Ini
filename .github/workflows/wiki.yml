@@ -19,12 +19,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Enable GitHub Wiki
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh api -X PATCH /repos/${{ github.repository }} -f has_wiki=true
-
       - name: Publish docs/wiki to GitHub Wiki
         shell: bash
         env:
