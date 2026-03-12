@@ -28,6 +28,7 @@ loaded configurations.
 | `HasPendingChanges()` | Returns `true` when at least one registered section has unsaved changes |
 | `RequestPostponedReload()` | Triggers a reload that was earlier postponed by a `FileChangedCallback` |
 | `InitialLoadTask` | `Task.CompletedTask` after `Build()`; a pending `Task` after `BuildAsync()` that completes when loading finishes |
+| `Metadata` | The `IniMetadata` read from the `[__metadata__]` section on the last load; `null` when the section was absent. See [[Migration]]. |
 | `Reloaded` | Event raised after a successful `Reload()` or `ReloadAsync()` |
 | `FileName` | The logical file name passed to `ForFile()` |
 | `LoadedFromPath` | Resolved absolute path from which the file was actually read |
@@ -52,6 +53,8 @@ loaded configurations.
 | `WithEncoding(encoding)` | Sets the file encoding for reading and writing (default: UTF-8) |
 | `AutoSaveInterval(interval)` | Starts an internal timer that saves when `HasPendingChanges()` is `true` |
 | `SaveOnExit()` | Hooks `AppDomain.CurrentDomain.ProcessExit` to save on process termination |
+| `OnUnknownKey(callback)` | Registers a global `UnknownKeyCallback` invoked for keys that have no matching section property. Used for migration scenarios. See [[Migration]]. |
+| `EnableMetadata(version?, applicationName?)` | Opts in to writing a `[__metadata__]` section as the first section in the file on every save. Exposes `IniConfig.Metadata` to `IAfterLoad` hooks for version-gated migrations. See [[Migration]]. |
 | `RegisterSection<T>(impl)` | Registers a section with its generated implementation |
 | `Build()` | Loads the file synchronously, fires hooks, and registers the config in the global registry |
 | `BuildAsync(ct)` | Async variant of `Build()`; also applies `IValueSourceAsync` sources and calls async lifecycle hooks. Registers in the global registry and sets `InitialLoadTask` before I/O starts, enabling DI fire-and-forget patterns |
@@ -71,6 +74,7 @@ All generated section classes implement `IIniSection`:
 
 ## See also
 
+- [[Migration]] — unknown-key callbacks, `IUnknownKey<TSelf>`, `EnableMetadata`, and version-gated upgrades
 - [[Loading-Configuration]] — builder method examples
 - [[Reloading]] — `Reload()` / `ReloadAsync()` and `HasPendingChanges()`
 - [[Saving]] — `Save()` / `SaveAsync()` and save hooks

@@ -247,29 +247,11 @@ public sealed class IniConfigBuilder
     // ── migration support ─────────────────────────────────────────────────────
 
     /// <summary>
-    /// Registers a callback that is invoked whenever a key is read from the INI file that does
-    /// not correspond to any declared property on the registered section interface.
-    /// <para>
-    /// Use this for migration scenarios.  For example, when a property has been renamed you can
-    /// read the old value via <paramref name="callback"/> and set the replacement property:
-    /// </para>
-    /// <code>
-    /// builder.OnUnknownKey((sectionName, key, value) =>
-    /// {
-    ///     if (sectionName == "AppConfig" &amp;&amp; key == "OldTimeout")
-    ///         section.Timeout = int.TryParse(value, out var t) ? t : 30;
-    /// });
-    /// </code>
-    /// <para>
-    /// As an alternative, implement <see cref="Interfaces.IUnknownKey"/> (or
-    /// <see cref="Interfaces.IUnknownKey{TSelf}"/> on .NET 7+) directly on the section interface
-    /// so that the migration logic lives next to the affected properties.
-    /// </para>
+    /// Registers a callback invoked for every key in the INI file that has no matching property
+    /// on a registered section interface.  Useful for central migration logging or handling.
+    /// See the Migration wiki page for examples.
     /// </summary>
-    /// <param name="callback">
-    /// The delegate to invoke.  Receives the section name, the unrecognised key, and its raw
-    /// string value.
-    /// </param>
+    /// <param name="callback">Delegate receiving the section name, key, and raw value.</param>
     public IniConfigBuilder OnUnknownKey(UnknownKeyCallback callback)
     {
         _unknownKeyCallback = callback ?? throw new ArgumentNullException(nameof(callback));
@@ -277,37 +259,17 @@ public sealed class IniConfigBuilder
     }
 
     /// <summary>
-    /// Enables the <c>[__metadata__]</c> section.
-    /// <para>
-    /// When opted in, the framework writes a <c>[__metadata__]</c> section as the very first
-    /// section in the INI file on every Save.  The section looks like:
-    /// </para>
-    /// <code>
-    /// [__metadata__]
-    /// Version = 1.2.0
-    /// CreatedBy = Greenshot
-    /// SavedOn = 12/03/2026 07:43:32
-    /// </code>
-    /// <para>
-    /// The section is parsed on every load and made available via
-    /// <see cref="IniConfig.Metadata"/>, so that an <see cref="Interfaces.IAfterLoad"/> hook
-    /// can compare the stored version with the current application version and perform
-    /// migration steps accordingly.
-    /// </para>
-    /// <para>
-    /// When <paramref name="version"/> is not specified, the framework uses the version of the
-    /// entry assembly (<see cref="System.Reflection.Assembly.GetEntryAssembly"/>).
-    /// When <paramref name="applicationName"/> is not specified, the entry assembly name is used.
-    /// </para>
+    /// Opts in to writing a <c>[__metadata__]</c> section as the first section in the INI file
+    /// on every save.  The section contains <c>Version</c>, <c>CreatedBy</c>, and a
+    /// locale-formatted <c>SavedOn</c> timestamp.  After load the values are exposed via
+    /// <see cref="IniConfig.Metadata"/> for version-gated migration logic in
+    /// <see cref="Interfaces.IAfterLoad"/> hooks.
+    /// When <paramref name="version"/> or <paramref name="applicationName"/> are <c>null</c>,
+    /// the entry assembly's version and name are used.
+    /// See the Migration wiki page for full examples.
     /// </summary>
-    /// <param name="version">
-    /// Optional version string to write (e.g. <c>"1.2.0"</c>).
-    /// Leave <c>null</c> to use the entry assembly's version automatically.
-    /// </param>
-    /// <param name="applicationName">
-    /// Optional application / product name to write as <c>CreatedBy</c>.
-    /// Leave <c>null</c> to use the entry assembly's name automatically.
-    /// </param>
+    /// <param name="version">Version string to write (e.g. <c>"1.2.0"</c>); <c>null</c> = entry assembly version.</param>
+    /// <param name="applicationName">Application name to write as <c>CreatedBy</c>; <c>null</c> = entry assembly name.</param>
     public IniConfigBuilder EnableMetadata(string? version = null, string? applicationName = null)
     {
         var entryAssembly = System.Reflection.Assembly.GetEntryAssembly();

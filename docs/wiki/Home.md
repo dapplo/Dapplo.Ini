@@ -15,6 +15,7 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
 - ✅ Extensible **value converter** system (custom converters for encryption etc.)
 - ✅ **Async support** — `BuildAsync`, `ReloadAsync`, `SaveAsync`, async lifecycle hooks, and `IValueSourceAsync` for REST APIs / remote configuration services
 - ✅ **DI-friendly async loading** — `InitialLoadTask` lets consumers await the initial load while sections are injected as singletons immediately
+- ✅ **Migration support** — unknown-key callbacks, `IUnknownKey<TSelf>`, and an optional `[__metadata__]` section for version-gated upgrades
 
 ---
 
@@ -76,5 +77,6 @@ config.Save();
 | [[Property-Change-Notifications]] | `INotifyPropertyChanged` / `INotifyPropertyChanging` |
 | [[Value-Converters]] | Built-in converters, custom converters, encrypting sensitive values |
 | [[Registry-API]] | Complete `IniConfigRegistry`, `IniConfig`, and `IniConfigBuilder` API reference |
+| [[Migration]] | Unknown-key callbacks, `IUnknownKey<TSelf>`, `EnableMetadata`, and version-gated upgrades |
 | [[Gap-Analysis]] | Feature comparison with the older `Dapplo.Config.Ini` library |
 | [[Async-Await-Benefits]] | Background analysis of async/await trade-offs (pre-implementation reference) |
