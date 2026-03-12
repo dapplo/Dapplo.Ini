@@ -48,4 +48,21 @@ public sealed class IniFile
         }
         _sections[section.Name] = section;
     }
+
+    /// <summary>
+    /// Inserts a section at position 0, making it the first section in the file.
+    /// If a section with the same name already exists it is removed from its current position
+    /// and re-inserted at index 0.
+    /// </summary>
+    public void PrependSection(IniSection section)
+    {
+        if (_sections.ContainsKey(section.Name))
+        {
+            var idx = _sectionsOrdered.FindIndex(s =>
+                string.Equals(s.Name, section.Name, StringComparison.OrdinalIgnoreCase));
+            if (idx >= 0) _sectionsOrdered.RemoveAt(idx);
+        }
+        _sectionsOrdered.Insert(0, section);
+        _sections[section.Name] = section;
+    }
 }

@@ -27,6 +27,32 @@ public sealed class IniConfig : IDisposable
     /// <summary>Encoding used when reading and writing the INI file. Defaults to UTF-8.</summary>
     internal Encoding Encoding = Encoding.UTF8;
 
+    // ── Migration / unknown-key callback ─────────────────────────────────────
+
+    /// <summary>
+    /// Optional callback invoked for every key in the INI file that has no matching property
+    /// on the registered section interface.  Set via <see cref="IniConfigBuilder.OnUnknownKey"/>.
+    /// </summary>
+    internal UnknownKeyCallback? UnknownKeyHandler;
+
+    // ── Metadata section ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// When non-null the framework writes a <c>[__metadata__]</c> section (prepended to the
+    /// file so it is always first) on every Save.
+    /// Contains the configured <c>Version</c>, <c>CreatedBy</c>, and a locale-formatted
+    /// <c>SavedOn</c> timestamp.
+    /// Enabled via <see cref="IniConfigBuilder.EnableMetadata"/>.
+    /// </summary>
+    internal IniMetadataConfig? MetadataConfig;
+
+    /// <summary>
+    /// The metadata that was read from the <c>[__metadata__]</c> section of the INI file
+    /// on the last load / reload.
+    /// <c>null</c> when the section did not exist in the file (e.g. first-run or no metadata enabled).
+    /// </summary>
+    public IniMetadata? Metadata { get; internal set; }
+
     // ── File lock ─────────────────────────────────────────────────────────────
 
     // Held when the caller requested file locking via IniConfigBuilder.LockFile().
@@ -621,30 +647,72 @@ public sealed class IniConfig : IDisposable
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    // The name of the special metadata section prepended to the INI file when opted in.
+    internal const string MetadataSectionName = "__metadata__";
+
     internal IniFile BuildIniFile()
     {
         var iniFile = new Parsing.IniFile();
-        foreach (var section in Sections.Values)
+        foreach (var kvp in Sections)
         {
+            var section = kvp.Value;
             var iniSection = iniFile.GetOrAddSection(section.SectionName);
             if (section is IniSectionBase sectionBase)
             {
-                foreach (var kvp in sectionBase.GetAllRawValues())
-                    iniSection.SetValue(kvp.Key, kvp.Value);
+                foreach (var rawKvp in sectionBase.GetAllRawValues())
+                    iniSection.SetValue(rawKvp.Key, rawKvp.Value);
             }
         }
+
+        // When metadata is enabled, build the [__metadata__] section and prepend it
+        // so it is always the first section in the written file.
+        if (MetadataConfig != null)
+        {
+            var metaSection = new Parsing.IniSection(MetadataSectionName, Array.Empty<string>());
+            metaSection.SetValue("Version", MetadataConfig.Version);
+            metaSection.SetValue("CreatedBy", MetadataConfig.ApplicationName);
+            metaSection.SetValue("SavedOn", DateTime.Now.ToString());
+            iniFile.PrependSection(metaSection);
+        }
+
         return iniFile;
     }
 
     private void ApplyIniFile(IniFile iniFile)
     {
+        // Read and store the metadata section when it exists in the file.
+        var metaIniSection = iniFile.GetSection(MetadataSectionName);
+        if (metaIniSection != null)
+        {
+            Metadata = new IniMetadata
+            {
+                Version         = metaIniSection.GetValue("Version"),
+                ApplicationName = metaIniSection.GetValue("CreatedBy"),
+                SavedOn         = metaIniSection.GetValue("SavedOn"),
+            };
+        }
+        else
+        {
+            Metadata = null;
+        }
+
         foreach (var section in Sections.Values)
         {
             var iniSection = iniFile.GetSection(section.SectionName);
             if (iniSection == null) continue;
 
             foreach (var entry in iniSection.Entries)
+            {
                 section.SetRawValue(entry.Key, entry.Value);
+
+                // Notify listeners when the key is not recognised by the section's interface.
+                if (section is IniSectionBase sectionBase && !sectionBase.IsKnownKey(entry.Key))
+                {
+                    if (section is IUnknownKey unknownKeyHandler)
+                        unknownKeyHandler.OnUnknownKey(entry.Key, entry.Value);
+                    UnknownKeyHandler?.Invoke(section.SectionName, entry.Key, entry.Value);
+                }
+            }
         }
     }
 

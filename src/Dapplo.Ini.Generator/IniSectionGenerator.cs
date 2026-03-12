@@ -26,12 +26,14 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
     private const string IAfterSaveFqn        = "Dapplo.Ini.Interfaces.IAfterSave";
     private const string ITransactionalFqn    = "Dapplo.Ini.Interfaces.ITransactional";
     private const string IDataValidationFqn   = "Dapplo.Ini.Interfaces.IDataValidation";
+    private const string IUnknownKeyFqn       = "Dapplo.Ini.Interfaces.IUnknownKey";
 
     // Names of the generic (static-virtual) lifecycle interfaces
     private const string IAfterLoadGenericName      = "IAfterLoad";
     private const string IBeforeSaveGenericName     = "IBeforeSave";
     private const string IAfterSaveGenericName      = "IAfterSave";
     private const string IDataValidationGenericName = "IDataValidation";
+    private const string IUnknownKeyGenericName     = "IUnknownKey";
     private const string LifecycleInterfacesNamespace = "Dapplo.Ini.Interfaces";
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
@@ -85,6 +87,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         // Data-validation (INotifyDataErrorInfo)
         public bool ImplementsDataValidationGeneric { get; set; }
         public bool ImplementsDataValidation { get; set; }
+        // Unknown-key migration
+        public bool ImplementsUnknownKeyGeneric { get; set; }
+        public bool ImplementsUnknownKey { get; set; }
         public List<PropertyModel> Properties { get; set; } = new();
     }
 
@@ -138,6 +143,10 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         // Data validation
         bool implementsDataValidationGeneric = ImplementsGenericInterface(symbol, LifecycleInterfacesNamespace, IDataValidationGenericName);
         bool implementsDataValidation        = !implementsDataValidationGeneric && ImplementsInterface(symbol, IDataValidationFqn);
+
+        // Unknown-key migration
+        bool implementsUnknownKeyGeneric = ImplementsGenericInterface(symbol, LifecycleInterfacesNamespace, IUnknownKeyGenericName);
+        bool implementsUnknownKey        = !implementsUnknownKeyGeneric && ImplementsInterface(symbol, IUnknownKeyFqn);
 
         var properties = new List<PropertyModel>();
         foreach (var member in symbol.GetMembers().OfType<IPropertySymbol>())
@@ -194,6 +203,8 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             ImplementsAfterSaveGeneric  = implementsAfterSaveGeneric,
             ImplementsDataValidationGeneric = implementsDataValidationGeneric,
             ImplementsDataValidation    = implementsDataValidation,
+            ImplementsUnknownKeyGeneric = implementsUnknownKeyGeneric,
+            ImplementsUnknownKey        = implementsUnknownKey,
             Properties                 = properties
         };
     }
@@ -273,6 +284,8 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             extraBases.Add("Dapplo.Ini.Interfaces.IBeforeSave");
         if (m.ImplementsAfterSaveGeneric)
             extraBases.Add("Dapplo.Ini.Interfaces.IAfterSave");
+        if (m.ImplementsUnknownKeyGeneric)
+            extraBases.Add("Dapplo.Ini.Interfaces.IUnknownKey");
 
         string baseClasses = "Dapplo.Ini.Configuration.IniSectionBase, " + m.InterfaceName;
         if (extraBases.Count > 0)
@@ -421,6 +434,21 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         sb.AppendLine("        }");
         sb.AppendLine();
 
+        // ── IsKnownKey ────────────────────────────────────────────────────
+        sb.AppendLine("        public override bool IsKnownKey(string key)");
+        sb.AppendLine("        {");
+        sb.AppendLine("            switch (key.ToLowerInvariant())");
+        sb.AppendLine("            {");
+        foreach (var p in m.Properties)
+        {
+            string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
+            sb.AppendLine($"                case \"{EscapeString(keyName)}\": return true;");
+        }
+        sb.AppendLine("                default: return false;");
+        sb.AppendLine("            }");
+        sb.AppendLine("        }");
+        sb.AppendLine();
+
         // ── GetAllRawValues ───────────────────────────────────────────────
         sb.AppendLine("        public override IEnumerable<KeyValuePair<string, string?>> GetAllRawValues()");
         sb.AppendLine("        {");
@@ -493,6 +521,16 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         {
             sb.AppendLine("        void Dapplo.Ini.Interfaces.IAfterSave.OnAfterSave()");
             sb.AppendLine($"            => {ifaceFqn}.OnAfterSave(this);");
+            sb.AppendLine();
+        }
+
+        // ── IUnknownKey bridge ────────────────────────────────────────────────
+        // When the generic IUnknownKey<TSelf> is used, emit a bridge so the framework
+        // can call it through the non-generic IUnknownKey dispatch interface.
+        if (m.ImplementsUnknownKeyGeneric)
+        {
+            sb.AppendLine("        void Dapplo.Ini.Interfaces.IUnknownKey.OnUnknownKey(string key, string? value)");
+            sb.AppendLine($"            => {ifaceFqn}.OnUnknownKey(this, key, value);");
             sb.AppendLine();
         }
 

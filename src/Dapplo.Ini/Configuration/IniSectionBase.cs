@@ -45,6 +45,21 @@ public abstract class IniSectionBase : IIniSection
     /// <inheritdoc/>
     public bool HasChanges => _isDirty;
 
+    // ── Unknown key detection ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="key"/> corresponds to a property declared on
+    /// the section interface; <c>false</c> when the key is not known to this section.
+    /// <para>
+    /// The source generator overrides this with the exact set of declared property key names so
+    /// that the framework can detect and notify unknown keys without incurring a full scan.
+    /// Non-generated subclasses keep the default (returns <c>true</c> for every key, meaning
+    /// no unknown-key notifications are raised for them).
+    /// </para>
+    /// </summary>
+    /// <param name="key">The key name to check (comparison is case-insensitive).</param>
+    public virtual bool IsKnownKey(string key) => true;
+
     // ── Internal helpers for IniConfig ────────────────────────────────────────
 
     /// <summary>

@@ -2,6 +2,7 @@
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
 using System.Text;
+using Dapplo.Ini.Configuration;
 using Dapplo.Ini.Interfaces;
 using Dapplo.Ini.Parsing;
 #if NET
@@ -41,6 +42,12 @@ public sealed class IniConfigBuilder
 
     // Auto-save interval (null = disabled)
     private TimeSpan? _autoSaveInterval;
+
+    // Migration: unknown-key callback (null = no callback)
+    private UnknownKeyCallback? _unknownKeyCallback;
+
+    // Migration: optional metadata section config (null = disabled)
+    private IniMetadataConfig? _metadataConfig;
 
     internal IniConfigBuilder(string fileName)
     {
@@ -237,7 +244,42 @@ public sealed class IniConfigBuilder
         return this;
     }
 
-    // ── sections ──────────────────────────────────────────────────────────────
+    // ── migration support ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Registers a callback invoked for every key in the INI file that has no matching property
+    /// on a registered section interface.  Useful for central migration logging or handling.
+    /// See the Migration wiki page for examples.
+    /// </summary>
+    /// <param name="callback">Delegate receiving the section name, key, and raw value.</param>
+    public IniConfigBuilder OnUnknownKey(UnknownKeyCallback callback)
+    {
+        _unknownKeyCallback = callback ?? throw new ArgumentNullException(nameof(callback));
+        return this;
+    }
+
+    /// <summary>
+    /// Opts in to writing a <c>[__metadata__]</c> section as the first section in the INI file
+    /// on every save.  The section contains <c>Version</c>, <c>CreatedBy</c>, and a
+    /// locale-formatted <c>SavedOn</c> timestamp.  After load the values are exposed via
+    /// <see cref="IniConfig.Metadata"/> for version-gated migration logic in
+    /// <see cref="Interfaces.IAfterLoad"/> hooks.
+    /// When <paramref name="version"/> or <paramref name="applicationName"/> are <c>null</c>,
+    /// the entry assembly's version and name are used.
+    /// See the Migration wiki page for full examples.
+    /// </summary>
+    /// <param name="version">Version string to write (e.g. <c>"1.2.0"</c>); <c>null</c> = entry assembly version.</param>
+    /// <param name="applicationName">Application name to write as <c>CreatedBy</c>; <c>null</c> = entry assembly name.</param>
+    public IniConfigBuilder EnableMetadata(string? version = null, string? applicationName = null)
+    {
+        var entryAssembly = System.Reflection.Assembly.GetEntryAssembly();
+        _metadataConfig = new IniMetadataConfig
+        {
+            Version         = version ?? entryAssembly?.GetName().Version?.ToString(),
+            ApplicationName = applicationName ?? entryAssembly?.GetName().Name,
+        };
+        return this;
+    }
 
     /// <summary>
     /// Registers an <see cref="IIniSection"/> instance under the explicit interface type
@@ -291,6 +333,8 @@ public sealed class IniConfigBuilder
         config.ConstantFilePaths.AddRange(_constantFilePaths);
         config.ValueSources.AddRange(_valueSources);
         config.ValueSourcesAsync.AddRange(_valueSourcesAsync);
+        config.UnknownKeyHandler = _unknownKeyCallback;
+        config.MetadataConfig = _metadataConfig;
 
         // Seed sections with defaults
         foreach (var kvp in _sections)
@@ -412,6 +456,8 @@ public sealed class IniConfigBuilder
         config.ConstantFilePaths.AddRange(_constantFilePaths);
         config.ValueSources.AddRange(_valueSources);
         config.ValueSourcesAsync.AddRange(_valueSourcesAsync);
+        config.UnknownKeyHandler = _unknownKeyCallback;
+        config.MetadataConfig = _metadataConfig;
 
         // Seed sections with defaults
         foreach (var kvp in _sections)
@@ -523,13 +569,39 @@ public sealed class IniConfigBuilder
 
     private static void ApplyIniFile(IniConfig config, IniFile iniFile)
     {
+        // Read and store the metadata section when it exists in the file.
+        var metaIniSection = iniFile.GetSection(IniConfig.MetadataSectionName);
+        if (metaIniSection != null)
+        {
+            config.Metadata = new IniMetadata
+            {
+                Version         = metaIniSection.GetValue("Version"),
+                ApplicationName = metaIniSection.GetValue("CreatedBy"),
+                SavedOn         = metaIniSection.GetValue("SavedOn"),
+            };
+        }
+        else
+        {
+            config.Metadata = null;
+        }
+
         foreach (var section in config.Sections.Values)
         {
             var iniSection = iniFile.GetSection(section.SectionName);
             if (iniSection == null) continue;
 
             foreach (var entry in iniSection.Entries)
+            {
                 section.SetRawValue(entry.Key, entry.Value);
+
+                // Notify listeners when the key is not recognised by the section's interface.
+                if (section is IniSectionBase sectionBase && !sectionBase.IsKnownKey(entry.Key))
+                {
+                    if (section is IUnknownKey unknownKeyHandler)
+                        unknownKeyHandler.OnUnknownKey(entry.Key, entry.Value);
+                    config.UnknownKeyHandler?.Invoke(section.SectionName, entry.Key, entry.Value);
+                }
+            }
         }
     }
 }

@@ -231,3 +231,50 @@ public sealed class AsyncDictionaryValueSource : IValueSourceAsync
         => ValueChanged?.Invoke(this, new ValueChangedEventArgs(section, key));
 }
 
+
+// ── Migration sample interfaces ────────────────────────────────────────────────
+
+/// <summary>
+/// Section that uses the generic IUnknownKey&lt;TSelf&gt; pattern to handle a renamed key.
+/// "OldName" was renamed to "DisplayName" — the migration hook copies the value across.
+/// </summary>
+[IniSection("Migration")]
+public interface IMigrationSettings : IIniSection, IAfterLoad<IMigrationSettings>, IUnknownKey<IMigrationSettings>
+{
+    [IniValue(DefaultValue = "Default")]
+    string? DisplayName { get; set; }
+
+    [IniValue(DefaultValue = "100")]
+    int MaxCount { get; set; }
+
+    /// <summary>Tracks whether the AfterLoad hook ran (used in tests).</summary>
+    bool AfterLoadCalled { get; set; }
+
+    /// <summary>Tracks whether OnUnknownKey was invoked (used in tests).</summary>
+    bool UnknownKeyCalled { get; set; }
+
+    /// <summary>Stores the key that was passed to OnUnknownKey (used in tests).</summary>
+    string? LastUnknownKey { get; set; }
+
+    static new void OnAfterLoad(IMigrationSettings self) => self.AfterLoadCalled = true;
+
+    static new void OnUnknownKey(IMigrationSettings self, string key, string? value)
+    {
+        self.UnknownKeyCalled = true;
+        self.LastUnknownKey = key;
+
+        // Rename migration: "OldName" → DisplayName
+        if (key.Equals("OldName", StringComparison.OrdinalIgnoreCase))
+            self.DisplayName = value;
+    }
+}
+
+/// <summary>
+/// Section that uses the non-generic IUnknownKey pattern via a partial class.
+/// </summary>
+[IniSection("LegacyMigration")]
+public interface ILegacyMigrationSettings : IIniSection, IUnknownKey
+{
+    [IniValue(DefaultValue = "0")]
+    int Value { get; set; }
+}
