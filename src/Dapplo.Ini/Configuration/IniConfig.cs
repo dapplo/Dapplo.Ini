@@ -599,6 +599,227 @@ public sealed class IniConfig : IDisposable
         }, null, interval, interval);
     }
 
+    // ── Post-build section registration (plugin / distributed registrations) ──
+
+    /// <summary>
+    /// Registers and immediately loads a new section after the <see cref="IniConfig"/> has been built.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the primary mechanism for <em>distributed registrations</em> used in plugin-based
+    /// applications.  After the host calls
+    /// <see cref="IniConfigBuilder.Build"/> (or <see cref="IniConfigBuilder.BuildAsync"/>), each
+    /// plugin retrieves the shared <see cref="IniConfig"/> from <see cref="IniConfigRegistry.Get"/>
+    /// and registers its own section independently — no access to the original builder is needed:
+    /// <code>
+    /// // In a plugin (no access to the builder):
+    /// var mySection = new MyPluginSettingsImpl();
+    /// IniConfigRegistry.Get("app.ini").RegisterSection&lt;IMyPluginSettings&gt;(mySection);
+    ///
+    /// // Or using the registry convenience overload:
+    /// IniConfigRegistry.RegisterSection&lt;IMyPluginSettings&gt;("app.ini", mySection);
+    /// </code>
+    /// </para>
+    /// <para>
+    /// The method re-reads all registered default files, the user INI file, and constant files so
+    /// that the new section receives exactly the same layered values it would have obtained had it
+    /// been registered before <see cref="IniConfigBuilder.Build"/> was called.  Synchronous
+    /// <see cref="IValueSource"/> entries are also applied; for async sources use
+    /// <see cref="RegisterSectionAsync{T}"/> instead.
+    /// </para>
+    /// <para>
+    /// If a section of the same type has already been registered, it is replaced.
+    /// </para>
+    /// </remarks>
+    /// <typeparam name="T">The INI section interface type.</typeparam>
+    /// <param name="section">The concrete section instance to register.</param>
+    /// <returns>The registered <paramref name="section"/> instance (for fluent chaining).</returns>
+    public T RegisterSection<T>(T section) where T : IIniSection
+    {
+        if (section is null) throw new ArgumentNullException(nameof(section));
+
+        section.ResetToDefaults();
+        Sections[typeof(T)] = section;
+
+        // Apply default files
+        foreach (var path in DefaultFilePaths)
+        {
+            if (File.Exists(path))
+                ApplySingleSectionFromIniFile(IniFileParser.ParseFile(path, Encoding), section);
+        }
+
+        // Apply user file
+        if (!string.IsNullOrEmpty(LoadedFromPath) && File.Exists(LoadedFromPath))
+            ApplySingleSectionFromIniFile(IniFileParser.ParseFile(LoadedFromPath!, Encoding), section);
+
+        // Apply constant files
+        foreach (var path in ConstantFilePaths)
+        {
+            if (File.Exists(path))
+                ApplySingleSectionFromIniFile(IniFileParser.ParseFile(path, Encoding), section);
+        }
+
+        // Apply synchronous value sources
+        foreach (var source in ValueSources)
+        {
+            foreach (var entry in GetSectionKeys(section))
+            {
+                if (source.TryGetValue(section.SectionName, entry, out var value))
+                    section.SetRawValue(entry, value);
+            }
+        }
+
+        // Fire IAfterLoad hook
+        if (section is IAfterLoad afterLoad)
+            afterLoad.OnAfterLoad();
+
+        // Clear dirty flag — freshly loaded data is not considered unsaved
+        if (section is IniSectionBase sectionBase)
+            sectionBase.ClearDirtyFlag();
+
+        return section;
+    }
+
+    /// <summary>
+    /// Asynchronously registers and loads a new section after the <see cref="IniConfig"/> has been built.
+    /// </summary>
+    /// <remarks>
+    /// Behaves like <see cref="RegisterSection{T}"/> but also applies
+    /// <see cref="IValueSourceAsync"/> entries and prefers <see cref="IAfterLoadAsync"/> hooks.
+    /// Use this overload when your section or any of the registered value sources perform async I/O.
+    /// </remarks>
+    /// <typeparam name="T">The INI section interface type.</typeparam>
+    /// <param name="section">The concrete section instance to register.</param>
+    /// <param name="cancellationToken">Token to cancel the async operation.</param>
+    /// <returns>
+    /// A <see cref="Task{T}"/> that completes with the registered <paramref name="section"/> instance.
+    /// </returns>
+    public async Task<T> RegisterSectionAsync<T>(T section, CancellationToken cancellationToken = default)
+        where T : IIniSection
+    {
+        if (section is null) throw new ArgumentNullException(nameof(section));
+
+        section.ResetToDefaults();
+        Sections[typeof(T)] = section;
+
+        // Apply default files
+        foreach (var path in DefaultFilePaths)
+        {
+            if (File.Exists(path))
+                ApplySingleSectionFromIniFile(
+                    await IniFileParser.ParseFileAsync(path, Encoding, cancellationToken).ConfigureAwait(false),
+                    section);
+        }
+
+        // Apply user file
+        if (!string.IsNullOrEmpty(LoadedFromPath) && File.Exists(LoadedFromPath))
+            ApplySingleSectionFromIniFile(
+                await IniFileParser.ParseFileAsync(LoadedFromPath!, Encoding, cancellationToken).ConfigureAwait(false),
+                section);
+
+        // Apply constant files
+        foreach (var path in ConstantFilePaths)
+        {
+            if (File.Exists(path))
+                ApplySingleSectionFromIniFile(
+                    await IniFileParser.ParseFileAsync(path, Encoding, cancellationToken).ConfigureAwait(false),
+                    section);
+        }
+
+        // Apply synchronous value sources
+        foreach (var source in ValueSources)
+        {
+            foreach (var entry in GetSectionKeys(section))
+            {
+                if (source.TryGetValue(section.SectionName, entry, out var value))
+                    section.SetRawValue(entry, value);
+            }
+        }
+
+        // Apply async value sources
+        foreach (var source in ValueSourcesAsync)
+        {
+            foreach (var entry in GetSectionKeys(section))
+            {
+                var (found, value) = await source.TryGetValueAsync(
+                    section.SectionName, entry, cancellationToken).ConfigureAwait(false);
+                if (found)
+                    section.SetRawValue(entry, value);
+            }
+        }
+
+        // Fire IAfterLoadAsync hook (preferred) or fall back to sync IAfterLoad.
+        if (section is IAfterLoadAsync afterLoadAsync)
+            await afterLoadAsync.OnAfterLoadAsync(cancellationToken).ConfigureAwait(false);
+        else if (section is IAfterLoad afterLoad)
+            afterLoad.OnAfterLoad();
+
+        // Clear dirty flag — freshly loaded data is not considered unsaved
+        if (section is IniSectionBase sectionBase)
+            sectionBase.ClearDirtyFlag();
+
+        return section;
+    }
+
+#if NET
+    /// <summary>
+    /// Registers and immediately loads a new section after the <see cref="IniConfig"/> has been built,
+    /// inferring the section interface type at runtime.
+    /// </summary>
+    /// <remarks>
+    /// Prefer the generic overload <see cref="RegisterSection{T}"/> for explicit control and
+    /// AOT/trim compatibility.  When the concrete class implements more than one
+    /// <see cref="IIniSection"/>-derived interface, the first one found by reflection is selected;
+    /// use the generic overload to remove this ambiguity.
+    /// </remarks>
+    [System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(
+        "Inspects implemented interfaces at runtime to infer the section type. " +
+        "Use the generic RegisterSection<T> overload instead to preserve trim/AOT compatibility.")]
+#endif
+    public IIniSection RegisterSection(IIniSection section)
+    {
+        if (section is null) throw new ArgumentNullException(nameof(section));
+
+        var ifaceType = section.GetType().GetInterfaces()
+            .FirstOrDefault(i => typeof(IIniSection).IsAssignableFrom(i) && i != typeof(IIniSection))
+            ?? section.GetType();
+
+        section.ResetToDefaults();
+        Sections[ifaceType] = section;
+
+        foreach (var path in DefaultFilePaths)
+        {
+            if (File.Exists(path))
+                ApplySingleSectionFromIniFile(IniFileParser.ParseFile(path, Encoding), section);
+        }
+
+        if (!string.IsNullOrEmpty(LoadedFromPath) && File.Exists(LoadedFromPath))
+            ApplySingleSectionFromIniFile(IniFileParser.ParseFile(LoadedFromPath!, Encoding), section);
+
+        foreach (var path in ConstantFilePaths)
+        {
+            if (File.Exists(path))
+                ApplySingleSectionFromIniFile(IniFileParser.ParseFile(path, Encoding), section);
+        }
+
+        foreach (var source in ValueSources)
+        {
+            foreach (var entry in GetSectionKeys(section))
+            {
+                if (source.TryGetValue(section.SectionName, entry, out var value))
+                    section.SetRawValue(entry, value);
+            }
+        }
+
+        if (section is IAfterLoad afterLoad)
+            afterLoad.OnAfterLoad();
+
+        if (section is IniSectionBase sectionBase)
+            sectionBase.ClearDirtyFlag();
+
+        return section;
+    }
+
     // ── Value sources ─────────────────────────────────────────────────────────
 
     internal void ApplyValueSources()
@@ -712,6 +933,28 @@ public sealed class IniConfig : IDisposable
                         unknownKeyHandler.OnUnknownKey(entry.Key, entry.Value);
                     UnknownKeyHandler?.Invoke(section.SectionName, entry.Key, entry.Value);
                 }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Applies values from <paramref name="iniFile"/> to a single <paramref name="section"/>,
+    /// invoking unknown-key callbacks as appropriate.
+    /// </summary>
+    private void ApplySingleSectionFromIniFile(IniFile iniFile, IIniSection section)
+    {
+        var iniSection = iniFile.GetSection(section.SectionName);
+        if (iniSection == null) return;
+
+        foreach (var entry in iniSection.Entries)
+        {
+            section.SetRawValue(entry.Key, entry.Value);
+
+            if (section is IniSectionBase sectionBase && !sectionBase.IsKnownKey(entry.Key))
+            {
+                if (section is IUnknownKey unknownKeyHandler)
+                    unknownKeyHandler.OnUnknownKey(entry.Key, entry.Value);
+                UnknownKeyHandler?.Invoke(section.SectionName, entry.Key, entry.Value);
             }
         }
     }

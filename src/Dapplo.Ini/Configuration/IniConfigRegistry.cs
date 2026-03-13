@@ -37,6 +37,48 @@ public static class IniConfigRegistry
         }
     }
 
+    /// <summary>
+    /// Registers and immediately loads a section of type <typeparamref name="T"/> on the
+    /// <see cref="IniConfig"/> registered for <paramref name="fileName"/>.
+    /// </summary>
+    /// <remarks>
+    /// This is a convenience overload for plugin-style distributed registrations.
+    /// It is equivalent to <c>IniConfigRegistry.Get(fileName).RegisterSection&lt;T&gt;(section)</c>.
+    /// </remarks>
+    /// <typeparam name="T">The INI section interface type.</typeparam>
+    /// <param name="fileName">The INI file name the config was registered under.</param>
+    /// <param name="section">The concrete section instance to register.</param>
+    /// <returns>The registered <paramref name="section"/> instance (for fluent chaining).</returns>
+    /// <exception cref="KeyNotFoundException">
+    /// Thrown when no config is registered for <paramref name="fileName"/>.
+    /// </exception>
+    public static T RegisterSection<T>(string fileName, T section) where T : IIniSection
+        => Get(fileName).RegisterSection(section);
+
+    /// <summary>
+    /// Asynchronously registers and loads a section of type <typeparamref name="T"/> on the
+    /// <see cref="IniConfig"/> registered for <paramref name="fileName"/>.
+    /// </summary>
+    /// <remarks>
+    /// This is a convenience overload for plugin-style distributed registrations where async value
+    /// sources or lifecycle hooks are involved.
+    /// It is equivalent to
+    /// <c>await IniConfigRegistry.Get(fileName).RegisterSectionAsync&lt;T&gt;(section)</c>.
+    /// </remarks>
+    /// <typeparam name="T">The INI section interface type.</typeparam>
+    /// <param name="fileName">The INI file name the config was registered under.</param>
+    /// <param name="section">The concrete section instance to register.</param>
+    /// <param name="cancellationToken">Token to cancel the async operation.</param>
+    /// <returns>
+    /// A <see cref="Task{T}"/> that completes with the registered <paramref name="section"/> instance.
+    /// </returns>
+    /// <exception cref="KeyNotFoundException">
+    /// Thrown when no config is registered for <paramref name="fileName"/>.
+    /// </exception>
+    public static Task<T> RegisterSectionAsync<T>(string fileName, T section, CancellationToken cancellationToken = default)
+        where T : IIniSection
+        => Get(fileName).RegisterSectionAsync(section, cancellationToken);
+
     // ── Lookup ────────────────────────────────────────────────────────────────
 
     /// <summary>
