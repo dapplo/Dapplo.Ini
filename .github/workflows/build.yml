@@ -18,7 +18,7 @@ jobs:
       checks: write
 
     env:
-      SOLUTION: 'Dapplo.IniConfig.slnx'
+      SOLUTION: 'Dapplo.Ini.slnx'
       BUILD_CONFIGURATION: 'Release'
 
     steps:
