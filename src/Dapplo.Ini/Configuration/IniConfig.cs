@@ -46,6 +46,18 @@ public sealed class IniConfig : IDisposable
     /// </summary>
     internal IniMetadataConfig? MetadataConfig;
 
+    // ── Deferred-load configuration (set by IniConfigBuilder.Create) ──────────
+
+    // These fields are populated by IniConfigBuilder.CreateCore() so that Load() / LoadAsync()
+    // can perform the full post-load setup without any reference back to the builder.
+
+    internal bool ShouldLockFile;
+    internal bool ShouldMonitorFile;
+    internal FileChangedCallback? PendingMonitorCallback;
+    internal bool ShouldSaveOnExit;
+    internal TimeSpan? ConfiguredAutoSaveInterval;
+    internal string? WritablePath;
+
     /// <summary>
     /// The metadata that was read from the <c>[__metadata__]</c> section of the INI file
     /// on the last load / reload.
@@ -599,6 +611,250 @@ public sealed class IniConfig : IDisposable
         }, null, interval, interval);
     }
 
+    // ── Pre-load section registration (plugin / distributed registrations) ────
+
+    /// <summary>
+    /// Registers a section instance without loading any values from disk.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the mechanism for <em>distributed registrations</em> used in plugin-based
+    /// applications.  The host calls <see cref="IniConfigBuilder.Create"/> to create the
+    /// <see cref="IniConfig"/> and register it in the global registry without loading files.
+    /// Each plugin's pre-initialization method then retrieves the shared config from
+    /// <see cref="IniConfigRegistry.Get"/> and registers its own section:
+    /// </para>
+    /// <code>
+    /// // Host startup (phase 1 — create, don't load yet):
+    /// var config = IniConfigRegistry.ForFile("app.ini")
+    ///     .AddSearchPath(dir)
+    ///     .RegisterSection&lt;IHostSettings&gt;(hostSection)
+    ///     .Create();
+    ///
+    /// // Plugin pre-init (phase 2 — add sections, no I/O):
+    /// IniConfigRegistry.Get("app.ini").AddSection&lt;IPluginSettings&gt;(pluginSection);
+    ///
+    /// // Host startup (phase 3 — load everything at once):
+    /// config.Load();
+    /// </code>
+    /// <para>
+    /// If a section of the same type has already been registered, it is replaced.
+    /// Call <see cref="Load"/> (or <see cref="LoadAsync"/>) after all sections have been
+    /// added to read the INI file(s) exactly once for all sections.
+    /// </para>
+    /// </remarks>
+    /// <typeparam name="T">The INI section interface type.</typeparam>
+    /// <param name="section">The concrete section instance to register.</param>
+    /// <returns>The <paramref name="section"/> instance (for fluent chaining).</returns>
+    public T AddSection<T>(T section) where T : IIniSection
+    {
+        if (section is null) throw new ArgumentNullException(nameof(section));
+        Sections[typeof(T)] = section;
+        return section;
+    }
+
+#if NET
+    /// <summary>
+    /// Registers a section instance without loading any values from disk,
+    /// inferring the section interface type at runtime.
+    /// </summary>
+    /// <remarks>
+    /// Prefer the generic overload <see cref="AddSection{T}"/> for explicit control and
+    /// AOT/trim compatibility.  When the concrete class implements more than one
+    /// <see cref="IIniSection"/>-derived interface, the first one found by reflection is
+    /// selected; use the generic overload to remove this ambiguity.
+    /// </remarks>
+    [System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode(
+        "Inspects implemented interfaces at runtime to infer the section type. " +
+        "Use the generic AddSection<T> overload instead to preserve trim/AOT compatibility.")]
+#endif
+    public IIniSection AddSection(IIniSection section)
+    {
+        if (section is null) throw new ArgumentNullException(nameof(section));
+
+        var ifaceType = section.GetType().GetInterfaces()
+            .FirstOrDefault(i => typeof(IIniSection).IsAssignableFrom(i) && i != typeof(IIniSection))
+            ?? section.GetType();
+
+        Sections[ifaceType] = section;
+        return section;
+    }
+
+    // ── Load (initial / deferred) ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Reads all registered default, user, and constant INI files and applies external value
+    /// sources to every registered section — exactly once, in a single pass.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Call this after all sections have been registered via
+    /// <see cref="IniConfigBuilder.RegisterSection{T}"/> (builder) or
+    /// <see cref="AddSection{T}"/> (plugin pre-init) to load all of them together without
+    /// repeated file I/O.
+    /// </para>
+    /// <para>
+    /// This method is called internally by <see cref="IniConfigBuilder.Build"/>;
+    /// call it explicitly only when using <see cref="IniConfigBuilder.Create"/> for
+    /// deferred loading.
+    /// </para>
+    /// </remarks>
+    /// <returns>This <see cref="IniConfig"/> instance for fluent chaining.</returns>
+    public IniConfig Load()
+    {
+        // 1. Reset all sections to compiled defaults
+        foreach (var section in Sections.Values)
+            section.ResetToDefaults();
+
+        // 2. Apply default files
+        foreach (var path in DefaultFilePaths)
+        {
+            if (File.Exists(path))
+                ApplyIniFile(IniFileParser.ParseFile(path, Encoding));
+        }
+
+        // 3. Resolve and apply user file
+        var resolved = ResolveFilePath();
+        if (resolved != null)
+        {
+            LoadedFromPath = resolved;
+            ApplyIniFile(IniFileParser.ParseFile(resolved, Encoding));
+        }
+        else
+        {
+            // Determine write target for future saves
+            if (WritablePath != null)
+            {
+                LoadedFromPath = WritablePath;
+            }
+            else
+            {
+                var firstWritable = SearchPaths.FirstOrDefault(Directory.Exists);
+                if (firstWritable != null)
+                    LoadedFromPath = Path.Combine(firstWritable, FileName);
+            }
+        }
+
+        // 4. Apply constant files
+        foreach (var path in ConstantFilePaths)
+        {
+            if (File.Exists(path))
+                ApplyIniFile(IniFileParser.ParseFile(path, Encoding));
+        }
+
+        // 5. Apply external value sources
+        ApplyValueSources();
+
+        // 6. Fire IAfterLoad hooks
+        foreach (var section in Sections.Values)
+        {
+            if (section is IAfterLoad afterLoad)
+                afterLoad.OnAfterLoad();
+        }
+
+        // 7. Clear dirty flags — initial load is not considered unsaved
+        ClearAllDirtyFlags();
+
+        // 8. Post-load setup (file lock, monitoring, save-on-exit, auto-save)
+        if (ShouldLockFile)
+            AcquireFileLock();
+        if (ShouldMonitorFile)
+            StartMonitoring(PendingMonitorCallback);
+        if (ShouldSaveOnExit)
+            EnableSaveOnExit();
+        if (ConfiguredAutoSaveInterval.HasValue)
+            StartAutoSave(ConfiguredAutoSaveInterval.Value);
+
+        return this;
+    }
+
+    /// <summary>
+    /// Asynchronously reads all registered default, user, and constant INI files and applies
+    /// external value sources to every registered section — exactly once, in a single pass.
+    /// </summary>
+    /// <remarks>
+    /// Async lifecycle hooks (<see cref="IAfterLoadAsync"/>) are preferred; when a section
+    /// implements only the synchronous <see cref="IAfterLoad"/> hook, that is called instead.
+    /// Async value sources (<see cref="IValueSourceAsync"/>) are applied after all synchronous
+    /// sources.
+    /// <para>
+    /// Call this after all sections have been registered via
+    /// <see cref="IniConfigBuilder.RegisterSection{T}"/> (builder) or
+    /// <see cref="AddSection{T}"/> (plugin pre-init) to load all of them together without
+    /// repeated file I/O.
+    /// </para>
+    /// </remarks>
+    /// <param name="cancellationToken">Token to cancel the async operation.</param>
+    /// <returns>This <see cref="IniConfig"/> instance for fluent chaining.</returns>
+    public async Task<IniConfig> LoadAsync(CancellationToken cancellationToken = default)
+    {
+        // 1. Reset all sections to compiled defaults
+        foreach (var section in Sections.Values)
+            section.ResetToDefaults();
+
+        // 2. Apply default files
+        foreach (var path in DefaultFilePaths)
+        {
+            if (File.Exists(path))
+                ApplyIniFile(await IniFileParser.ParseFileAsync(path, Encoding, cancellationToken).ConfigureAwait(false));
+        }
+
+        // 3. Resolve and apply user file
+        var resolved = ResolveFilePath();
+        if (resolved != null)
+        {
+            LoadedFromPath = resolved;
+            ApplyIniFile(await IniFileParser.ParseFileAsync(resolved, Encoding, cancellationToken).ConfigureAwait(false));
+        }
+        else
+        {
+            if (WritablePath != null)
+            {
+                LoadedFromPath = WritablePath;
+            }
+            else
+            {
+                var firstWritable = SearchPaths.FirstOrDefault(Directory.Exists);
+                if (firstWritable != null)
+                    LoadedFromPath = Path.Combine(firstWritable, FileName);
+            }
+        }
+
+        // 4. Apply constant files
+        foreach (var path in ConstantFilePaths)
+        {
+            if (File.Exists(path))
+                ApplyIniFile(await IniFileParser.ParseFileAsync(path, Encoding, cancellationToken).ConfigureAwait(false));
+        }
+
+        // 5. Apply external value sources (sync + async)
+        await ApplyValueSourcesAsync(cancellationToken).ConfigureAwait(false);
+
+        // 6. Fire IAfterLoadAsync hooks (preferred) or fall back to sync IAfterLoad.
+        foreach (var section in Sections.Values)
+        {
+            if (section is IAfterLoadAsync afterLoadAsync)
+                await afterLoadAsync.OnAfterLoadAsync(cancellationToken).ConfigureAwait(false);
+            else if (section is IAfterLoad afterLoad)
+                afterLoad.OnAfterLoad();
+        }
+
+        // 7. Clear dirty flags — initial load is not considered unsaved
+        ClearAllDirtyFlags();
+
+        // 8. Post-load setup
+        if (ShouldLockFile)
+            AcquireFileLock();
+        if (ShouldMonitorFile)
+            StartMonitoring(PendingMonitorCallback);
+        if (ShouldSaveOnExit)
+            EnableSaveOnExit();
+        if (ConfiguredAutoSaveInterval.HasValue)
+            StartAutoSave(ConfiguredAutoSaveInterval.Value);
+
+        return this;
+    }
+
     // ── Value sources ─────────────────────────────────────────────────────────
 
     internal void ApplyValueSources()
@@ -714,6 +970,18 @@ public sealed class IniConfig : IDisposable
                 }
             }
         }
+    }
+
+    /// <summary>Resolves the file path by searching <see cref="SearchPaths"/>.</summary>
+    private string? ResolveFilePath()
+    {
+        foreach (var dir in SearchPaths)
+        {
+            var candidate = Path.Combine(dir, FileName);
+            if (File.Exists(candidate))
+                return candidate;
+        }
+        return null;
     }
 
     // ── IDisposable ───────────────────────────────────────────────────────────

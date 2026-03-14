@@ -106,8 +106,41 @@ var settings = IniConfigRegistry.GetSection<IAppSettings>("appsettings.ini");
 
 ---
 
+## Plugin-based apps — DI with deferred loading
+
+When plugins register their own sections before the INI file is read, use `Create()` +
+`AddSection<T>()` + `LoadAsync()`.  Section references are stable and injectable from the
+moment `Create()` returns:
+
+```csharp
+var hostSection   = new HostSettingsImpl();
+var pluginSection = new PluginSettingsImpl();
+
+// Phase 1 — create (no I/O); references are stable for DI
+var config = IniConfigRegistry.ForFile("app.ini")
+    .AddSearchPath(AppContext.BaseDirectory)
+    .RegisterSection<IHostSettings>(hostSection)
+    .Create();
+
+// Phase 2 — plugins add their sections
+config.AddSection<IPluginSettings>(pluginSection);
+
+// Register as DI singletons
+builder.Services.AddSingleton<IHostSettings>(hostSection);
+builder.Services.AddSingleton<IPluginSettings>(pluginSection);
+builder.Services.AddSingleton(config);
+
+// Phase 3 — load (fire-and-forget if needed)
+await config.LoadAsync(cancellationToken);
+```
+
+See [[Plugin-Registrations]] for the full pattern and more examples.
+
+---
+
 ## See also
 
+- [[Plugin-Registrations]] — three-phase pattern for plugin-based apps
 - [[Reloading]] — in-place reload and the `Reloaded` event
 - [[Registry-API]] — full `IniConfigRegistry` and `IniConfig` API reference
 - [[Async-Support]] — `BuildAsync`, `InitialLoadTask`, and the full async API

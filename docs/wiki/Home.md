@@ -63,6 +63,7 @@ config.Save();
 | [[Getting-Started]] | Installation, NuGet package, and first steps |
 | [[Defining-Sections]] | `[IniSection]` and `[IniValue]` attribute reference, generated class naming |
 | [[Loading-Life-Cycle]] | Complete order in which values are resolved during `Build()` / `Reload()` |
+| [[Plugin-Registrations]] | Three-phase `Create()` / `AddSection` / `Load()` pattern for plugin-based apps |
 | [[Loading-Configuration]] | `IniConfigBuilder` fluent API, AppData, write target |
 | [[Reloading]] | `Reload()`, `ReloadAsync()`, singleton guarantee, `Reloaded` event |
 | [[Saving]] | `Save()`, `SaveAsync()`, `IBeforeSave`, `IAfterSave` |

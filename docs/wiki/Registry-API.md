@@ -11,6 +11,7 @@ loaded configurations.
 | `Get(fileName)` | Returns the `IniConfig` for the file; throws if not registered |
 | `TryGet(fileName, out config)` | Returns `false` if the file has not been registered |
 | `GetSection<T>(fileName)` | Shortcut for `Get(fileName).GetSection<T>()` |
+| `AddSection<T>(fileName, section)` | Registers a section on an existing config without I/O — for plugin pre-init. See [[Plugin-Registrations]]. |
 | `Unregister(fileName)` | Removes a registration (useful in tests) |
 | `Clear()` | Removes all registrations (useful in tests) |
 
@@ -21,6 +22,10 @@ loaded configurations.
 | Member | Description |
 |--------|-------------|
 | `GetSection<T>()` | Returns the registered section instance; throws if not found. **Always returns the same object reference.** |
+| `AddSection<T>(section)` | Registers a section without any file I/O. Returns `section` for chaining. For use between `Create()` and `Load()`. See [[Plugin-Registrations]]. |
+| `AddSection(section)` | Non-generic overload; infers the interface type at runtime. Prefer the generic overload (AOT/trim safe). |
+| `Load()` | Reads all files and applies value sources once for every registered section. Returns `this`. |
+| `LoadAsync(ct)` | Async variant of `Load()`; also applies `IValueSourceAsync` sources and calls `IAfterLoadAsync` hooks. |
 | `Save()` | Writes all section values to disk, honoring `IBeforeSave`/`IAfterSave` hooks |
 | `SaveAsync(ct)` | Async variant of `Save()`; prefers `IBeforeSaveAsync`/`IAfterSaveAsync` hooks, falls back to sync hooks |
 | `Reload()` | Re-reads all layers in place; section references remain valid |
@@ -56,6 +61,7 @@ loaded configurations.
 | `OnUnknownKey(callback)` | Registers a global `UnknownKeyCallback` invoked for keys that have no matching section property. Used for migration scenarios. See [[Migration]]. |
 | `EnableMetadata(version?, applicationName?)` | Opts in to writing a `[__metadata__]` section as the first section in the file on every save. Exposes `IniConfig.Metadata` to `IAfterLoad` hooks for version-gated migrations. See [[Migration]]. |
 | `RegisterSection<T>(impl)` | Registers a section with its generated implementation |
+| `Create()` | Creates and registers the `IniConfig` without loading any files. Enables plugin sections to be added via `AddSection<T>()` before the first `Load()`. See [[Plugin-Registrations]]. |
 | `Build()` | Loads the file synchronously, fires hooks, and registers the config in the global registry |
 | `BuildAsync(ct)` | Async variant of `Build()`; also applies `IValueSourceAsync` sources and calls async lifecycle hooks. Registers in the global registry and sets `InitialLoadTask` before I/O starts, enabling DI fire-and-forget patterns |
 
@@ -74,6 +80,7 @@ All generated section classes implement `IIniSection`:
 
 ## See also
 
+- [[Plugin-Registrations]] — `Create()` + `AddSection<T>()` + `Load()` for plugin-based apps
 - [[Migration]] — unknown-key callbacks, `IUnknownKey<TSelf>`, `EnableMetadata`, and version-gated upgrades
 - [[Loading-Configuration]] — builder method examples
 - [[Reloading]] — `Reload()` / `ReloadAsync()` and `HasPendingChanges()`

@@ -4,7 +4,6 @@
 using System.Text;
 using Dapplo.Ini.Configuration;
 using Dapplo.Ini.Interfaces;
-using Dapplo.Ini.Parsing;
 #if NET
 using System.Diagnostics.CodeAnalysis;
 #endif
@@ -316,7 +315,44 @@ public sealed class IniConfigBuilder
         return this;
     }
 
-    // ── build ─────────────────────────────────────────────────────────────────
+    // ── build / create ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Creates and registers the <see cref="IniConfig"/> in the global registry
+    /// <em>without</em> loading any INI files.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Use this instead of <see cref="Build"/> when plugins or other components need to
+    /// register their own INI sections before the files are parsed.  The typical three-phase
+    /// flow is:
+    /// </para>
+    /// <code>
+    /// // Phase 1 — host creates the config (no I/O yet):
+    /// var config = IniConfigRegistry.ForFile("app.ini")
+    ///     .AddSearchPath(dir)
+    ///     .RegisterSection&lt;IHostSettings&gt;(hostSection)
+    ///     .Create();
+    ///
+    /// // Phase 2 — plugins register their sections (no I/O):
+    /// foreach (var plugin in LoadPlugins())
+    ///     plugin.PreInit(config);   // plugin calls config.AddSection&lt;IPluginSettings&gt;(...)
+    ///
+    /// // Phase 3 — load everything at once (single file read):
+    /// config.Load();
+    /// </code>
+    /// <para>
+    /// The returned <see cref="IniConfig"/> is immediately accessible via
+    /// <see cref="IniConfigRegistry.Get"/> so that plugins can discover it during phase 2.
+    /// </para>
+    /// </remarks>
+    /// <returns>The newly created (not yet loaded) <see cref="IniConfig"/>.</returns>
+    public IniConfig Create()
+    {
+        var config = CreateCore();
+        IniConfigRegistry.Register(_fileName, config);
+        return config;
+    }
 
     /// <summary>
     /// Builds, loads and registers the <see cref="IniConfig"/> in the global registry.
@@ -324,94 +360,9 @@ public sealed class IniConfigBuilder
     /// </summary>
     public IniConfig Build()
     {
-        var encoding = _encoding ?? Encoding.UTF8;
-
-        var config = new IniConfig(_fileName);
-        config.Encoding = encoding;
-        config.SearchPaths.AddRange(_searchPaths);
-        config.DefaultFilePaths.AddRange(_defaultFilePaths);
-        config.ConstantFilePaths.AddRange(_constantFilePaths);
-        config.ValueSources.AddRange(_valueSources);
-        config.ValueSourcesAsync.AddRange(_valueSourcesAsync);
-        config.UnknownKeyHandler = _unknownKeyCallback;
-        config.MetadataConfig = _metadataConfig;
-
-        // Seed sections with defaults
-        foreach (var kvp in _sections)
-        {
-            kvp.Value.ResetToDefaults();
-            config.Sections[kvp.Key] = kvp.Value;
-        }
-
-        // Load default files (layered)
-        foreach (var path in _defaultFilePaths)
-        {
-            if (File.Exists(path))
-                ApplyIniFile(config, IniFileParser.ParseFile(path, encoding));
-        }
-
-        // Load user file
-        var resolved = ResolveFilePath(_fileName, _searchPaths);
-        if (resolved != null)
-        {
-            config.LoadedFromPath = resolved;
-            ApplyIniFile(config, IniFileParser.ParseFile(resolved, encoding));
-        }
-        else
-        {
-            // Determine write target for future saves:
-            // 1. explicit SetWritablePath wins
-            // 2. fall back to first existing search directory
-            if (_writablePath != null)
-            {
-                config.LoadedFromPath = _writablePath;
-            }
-            else
-            {
-                var firstWritable = _searchPaths.FirstOrDefault(p => Directory.Exists(p));
-                if (firstWritable != null)
-                    config.LoadedFromPath = Path.Combine(firstWritable, _fileName);
-            }
-        }
-
-        // Apply constant files (admin overrides, last wins)
-        foreach (var path in _constantFilePaths)
-        {
-            if (File.Exists(path))
-                ApplyIniFile(config, IniFileParser.ParseFile(path, encoding));
-        }
-
-        // Apply external value sources
-        config.ApplyValueSources();
-
-        // Fire IAfterLoad hooks
-        foreach (var section in config.Sections.Values)
-        {
-            if (section is IAfterLoad afterLoad)
-                afterLoad.OnAfterLoad();
-        }
-
-        // Clear dirty flags — initial load is not considered unsaved
-        config.ClearAllDirtyFlags();
-
-        // Acquire file lock (if requested)
-        if (_lockFile)
-            config.AcquireFileLock();
-
-        // Start file monitoring (if requested)
-        if (_monitorFile)
-            config.StartMonitoring(_fileChangedCallback);
-
-        // Register save-on-exit handler (if requested)
-        if (_saveOnExit)
-            config.EnableSaveOnExit();
-
-        // Start auto-save timer (if requested)
-        if (_autoSaveInterval.HasValue)
-            config.StartAutoSave(_autoSaveInterval.Value);
-
+        var config = CreateCore();
         IniConfigRegistry.Register(_fileName, config);
-        return config;
+        return config.Load();
     }
 
     /// <summary>
@@ -447,24 +398,7 @@ public sealed class IniConfigBuilder
     /// <param name="cancellationToken">Token to cancel the async operation.</param>
     public async Task<IniConfig> BuildAsync(CancellationToken cancellationToken = default)
     {
-        var encoding = _encoding ?? Encoding.UTF8;
-
-        var config = new IniConfig(_fileName);
-        config.Encoding = encoding;
-        config.SearchPaths.AddRange(_searchPaths);
-        config.DefaultFilePaths.AddRange(_defaultFilePaths);
-        config.ConstantFilePaths.AddRange(_constantFilePaths);
-        config.ValueSources.AddRange(_valueSources);
-        config.ValueSourcesAsync.AddRange(_valueSourcesAsync);
-        config.UnknownKeyHandler = _unknownKeyCallback;
-        config.MetadataConfig = _metadataConfig;
-
-        // Seed sections with defaults
-        foreach (var kvp in _sections)
-        {
-            kvp.Value.ResetToDefaults();
-            config.Sections[kvp.Key] = kvp.Value;
-        }
+        var config = CreateCore();
 
         // Register in the global registry and expose InitialLoadTask BEFORE any I/O starts.
         // This lets DI consumers get a reference to the config (or its sections) and
@@ -475,72 +409,7 @@ public sealed class IniConfigBuilder
 
         try
         {
-            // Load default files (layered)
-            foreach (var path in _defaultFilePaths)
-            {
-                if (File.Exists(path))
-                    ApplyIniFile(config, await IniFileParser.ParseFileAsync(path, encoding, cancellationToken).ConfigureAwait(false));
-            }
-
-            // Load user file
-            var resolved = ResolveFilePath(_fileName, _searchPaths);
-            if (resolved != null)
-            {
-                config.LoadedFromPath = resolved;
-                ApplyIniFile(config, await IniFileParser.ParseFileAsync(resolved, encoding, cancellationToken).ConfigureAwait(false));
-            }
-            else
-            {
-                if (_writablePath != null)
-                {
-                    config.LoadedFromPath = _writablePath;
-                }
-                else
-                {
-                    var firstWritable = _searchPaths.FirstOrDefault(p => Directory.Exists(p));
-                    if (firstWritable != null)
-                        config.LoadedFromPath = Path.Combine(firstWritable, _fileName);
-                }
-            }
-
-            // Apply constant files (admin overrides, last wins)
-            foreach (var path in _constantFilePaths)
-            {
-                if (File.Exists(path))
-                    ApplyIniFile(config, await IniFileParser.ParseFileAsync(path, encoding, cancellationToken).ConfigureAwait(false));
-            }
-
-            // Apply external value sources
-            await config.ApplyValueSourcesAsync(cancellationToken).ConfigureAwait(false);
-
-            // Fire IAfterLoadAsync hooks (preferred) or fall back to sync IAfterLoad.
-            foreach (var section in config.Sections.Values)
-            {
-                if (section is IAfterLoadAsync afterLoadAsync)
-                    await afterLoadAsync.OnAfterLoadAsync(cancellationToken).ConfigureAwait(false);
-                else if (section is IAfterLoad afterLoad)
-                    afterLoad.OnAfterLoad();
-            }
-
-            // Clear dirty flags — initial load is not considered unsaved
-            config.ClearAllDirtyFlags();
-
-            // Acquire file lock (if requested)
-            if (_lockFile)
-                config.AcquireFileLock();
-
-            // Start file monitoring (if requested)
-            if (_monitorFile)
-                config.StartMonitoring(_fileChangedCallback);
-
-            // Register save-on-exit handler (if requested)
-            if (_saveOnExit)
-                config.EnableSaveOnExit();
-
-            // Start auto-save timer (if requested)
-            if (_autoSaveInterval.HasValue)
-                config.StartAutoSave(_autoSaveInterval.Value);
-
+            await config.LoadAsync(cancellationToken).ConfigureAwait(false);
             tcs.SetResult(true);
         }
         catch (Exception ex)
@@ -556,52 +425,33 @@ public sealed class IniConfigBuilder
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
-    private static string? ResolveFilePath(string fileName, IEnumerable<string> searchPaths)
+    /// <summary>
+    /// Creates the <see cref="IniConfig"/>, transfers all builder state to it, and seeds all
+    /// registered sections — without touching the file system.
+    /// </summary>
+    private IniConfig CreateCore()
     {
-        foreach (var dir in searchPaths)
-        {
-            var candidate = Path.Combine(dir, fileName);
-            if (File.Exists(candidate))
-                return candidate;
-        }
-        return null;
-    }
+        var config = new IniConfig(_fileName);
+        config.Encoding = _encoding ?? Encoding.UTF8;
+        config.WritablePath = _writablePath;
+        config.ShouldLockFile = _lockFile;
+        config.ShouldMonitorFile = _monitorFile;
+        config.PendingMonitorCallback = _fileChangedCallback;
+        config.ShouldSaveOnExit = _saveOnExit;
+        config.ConfiguredAutoSaveInterval = _autoSaveInterval;
+        config.UnknownKeyHandler = _unknownKeyCallback;
+        config.MetadataConfig = _metadataConfig;
 
-    private static void ApplyIniFile(IniConfig config, IniFile iniFile)
-    {
-        // Read and store the metadata section when it exists in the file.
-        var metaIniSection = iniFile.GetSection(IniConfig.MetadataSectionName);
-        if (metaIniSection != null)
-        {
-            config.Metadata = new IniMetadata
-            {
-                Version         = metaIniSection.GetValue("Version"),
-                ApplicationName = metaIniSection.GetValue("CreatedBy"),
-                SavedOn         = metaIniSection.GetValue("SavedOn"),
-            };
-        }
-        else
-        {
-            config.Metadata = null;
-        }
+        config.SearchPaths.AddRange(_searchPaths);
+        config.DefaultFilePaths.AddRange(_defaultFilePaths);
+        config.ConstantFilePaths.AddRange(_constantFilePaths);
+        config.ValueSources.AddRange(_valueSources);
+        config.ValueSourcesAsync.AddRange(_valueSourcesAsync);
 
-        foreach (var section in config.Sections.Values)
-        {
-            var iniSection = iniFile.GetSection(section.SectionName);
-            if (iniSection == null) continue;
+        // Seed sections (no I/O — Load() will reset and populate them)
+        foreach (var kvp in _sections)
+            config.Sections[kvp.Key] = kvp.Value;
 
-            foreach (var entry in iniSection.Entries)
-            {
-                section.SetRawValue(entry.Key, entry.Value);
-
-                // Notify listeners when the key is not recognised by the section's interface.
-                if (section is IniSectionBase sectionBase && !sectionBase.IsKnownKey(entry.Key))
-                {
-                    if (section is IUnknownKey unknownKeyHandler)
-                        unknownKeyHandler.OnUnknownKey(entry.Key, entry.Value);
-                    config.UnknownKeyHandler?.Invoke(section.SectionName, entry.Key, entry.Value);
-                }
-            }
-        }
+        return config;
     }
 }

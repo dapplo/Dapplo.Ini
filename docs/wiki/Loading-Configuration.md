@@ -130,8 +130,37 @@ using var config = IniConfigRegistry.ForFile("app.ini")
 
 ---
 
+## Deferred loading for plugin scenarios
+
+When plugins need to register their own INI sections before the file is read, use
+`Create()` instead of `Build()`.  `Create()` constructs the `IniConfig`, registers it in
+the global registry, and returns it — **without reading any file**.  Plugins can then
+call `AddSection<T>()` on the config, and the host calls `Load()` once when all sections
+are registered.
+
+See [[Plugin-Registrations]] for the full three-phase pattern and examples.
+
+```csharp
+// Phase 1 — create (no I/O); config is immediately visible in IniConfigRegistry
+var config = IniConfigRegistry.ForFile("myapp.ini")
+    .AddSearchPath(AppContext.BaseDirectory)
+    .RegisterSection<IHostSettings>(new HostSettingsImpl())
+    .Create();
+
+// Phase 2 — plugins add their sections (no I/O)
+foreach (var plugin in LoadPlugins())
+    plugin.PreInit();   // calls config.AddSection<IPluginSettings>(...)
+
+// Phase 3 — single load reads all files for every section
+config.Load();
+// Or: await config.LoadAsync(cancellationToken);
+```
+
+---
+
 ## See also
 
+- [[Plugin-Registrations]] — `Create()` + `AddSection` + `Load()` for plugin-based apps
 - [[Loading-Life-Cycle]] — value resolution order
 - [[Reloading]] — `Reload()` / `ReloadAsync()` and the singleton guarantee
 - [[Saving]] — `Save()` / `SaveAsync()` and `IBeforeSave` / `IAfterSave` hooks

@@ -15,6 +15,7 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
 - ✅ Extensible **value converter** system (custom converters for encryption etc.)
 - ✅ **Async support** — `BuildAsync`, `ReloadAsync`, `SaveAsync`, async lifecycle hooks, and `IValueSourceAsync` for REST APIs / remote stores
 - ✅ **DI-friendly async loading** — `InitialLoadTask` lets consumers await the initial load while sections are injected as singletons immediately
+- ✅ **Plugin / distributed registrations** — `Create()` + `AddSection<T>()` + `Load()` lets plugins register INI sections before the single file read
 
 ---
 
@@ -40,11 +41,12 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
     - [ReloadAsync and SaveAsync](#reloadasync-and-saveasync)
     - [IValueSourceAsync — async external sources](#ivaluesourceasync--async-external-sources)
 13. [Singleton guarantee and dependency injection](#singleton-guarantee-and-dependency-injection)
-14. [Transactional updates](#transactional-updates)
-15. [Property-change notifications](#property-change-notifications)
-16. [Value converters](#value-converters)
+14. [Plugin / distributed registrations](#plugin--distributed-registrations)
+15. [Transactional updates](#transactional-updates)
+16. [Property-change notifications](#property-change-notifications)
+17. [Value converters](#value-converters)
     - [Encrypting sensitive values](#encrypting-sensitive-values)
-17. [Registry API reference](#registry-api-reference)
+18. [Registry API reference](#registry-api-reference)
 
 ---
 
@@ -773,6 +775,36 @@ public class MyService
 
 ---
 
+## Plugin / distributed registrations
+
+Plugin-based applications need to register INI sections *after* the host has already
+configured the builder, without access to the original builder instance.  Use the
+three-phase **Create / AddSection / Load** pattern:
+
+```csharp
+// Phase 1 — host creates the config; no file I/O yet; config is in the global registry
+var config = IniConfigRegistry.ForFile("app.ini")
+    .AddSearchPath(AppContext.BaseDirectory)
+    .RegisterSection<IHostSettings>(new HostSettingsImpl())
+    .Create();
+
+// Phase 2 — each plugin retrieves the config and adds its own section (no I/O)
+foreach (var plugin in LoadPlugins())
+    plugin.PreInit();   // calls IniConfigRegistry.Get("app.ini").AddSection<IXxx>(...)
+
+// Phase 3 — single load applies all layers for every registered section
+config.Load();
+// Or: await config.LoadAsync(cancellationToken);
+```
+
+`Build()` remains unchanged — it is equivalent to `Create()` followed immediately by
+`Load()`.  No changes are required for applications that do not use plugins.
+
+> For the full pattern including async, DI integration, and the complete API summary,
+> see [[Plugin-Registrations]] in the wiki.
+
+---
+
 ## Transactional updates
 
 Implement `ITransactional` on your section interface to enable atomic, rollback-capable updates.
@@ -985,6 +1017,7 @@ public interface ICredentials
 | `Get(fileName)` | Returns the `IniConfig` for the file; throws if not registered |
 | `TryGet(fileName, out config)` | Returns `false` if the file has not been registered |
 | `GetSection<T>(fileName)` | Shortcut for `Get(fileName).GetSection<T>()` |
+| `AddSection<T>(fileName, section)` | Registers a section without I/O — for plugin pre-init between `Create()` and `Load()` |
 | `Unregister(fileName)` | Removes a registration (useful in tests) |
 | `Clear()` | Removes all registrations (useful in tests) |
 
@@ -993,6 +1026,9 @@ public interface ICredentials
 | Member | Description |
 |--------|-------------|
 | `GetSection<T>()` | Returns the registered section instance; throws if not found. **Always returns the same object reference.** |
+| `AddSection<T>(section)` | Registers a section without any file I/O. Returns `section` for chaining. Use between `Create()` and `Load()`. |
+| `Load()` | Reads all files and applies value sources once for every registered section. Returns `this`. |
+| `LoadAsync(ct)` | Async variant of `Load()`; also applies `IValueSourceAsync` and calls `IAfterLoadAsync` hooks. |
 | `Save()` | Writes all section values to disk, honoring `IBeforeSave`/`IAfterSave` hooks |
 | `Reload()` | Re-reads all layers in place; section references remain valid |
 | `RequestPostponedReload()` | Triggers a reload that was earlier postponed by a `FileChangedCallback` |
@@ -1014,4 +1050,5 @@ public interface ICredentials
 | `LockFile()` | Holds the file open read-exclusively for the process lifetime |
 | `MonitorFile([callback])` | Installs a `FileSystemWatcher`; optional callback controls reload decision |
 | `RegisterSection<T>(impl)` | Registers a section with its generated implementation |
+| `Create()` | Creates and registers the `IniConfig` without loading any files. Enables plugin sections via `AddSection<T>()`. |
 | `Build()` | Loads the file, fires hooks, and registers the config in the global registry |

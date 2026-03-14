@@ -37,6 +37,26 @@ public static class IniConfigRegistry
         }
     }
 
+    /// <summary>
+    /// Registers a section of type <typeparamref name="T"/> on the <see cref="IniConfig"/>
+    /// registered for <paramref name="fileName"/> without triggering any file I/O.
+    /// </summary>
+    /// <remarks>
+    /// This is a convenience overload for plugin-style distributed registrations.
+    /// It is equivalent to <c>IniConfigRegistry.Get(fileName).AddSection&lt;T&gt;(section)</c>.
+    /// Call <see cref="IniConfig.Load"/> (or <see cref="IniConfig.LoadAsync"/>) after all
+    /// sections have been added to read all files at once.
+    /// </remarks>
+    /// <typeparam name="T">The INI section interface type.</typeparam>
+    /// <param name="fileName">The INI file name the config was registered under.</param>
+    /// <param name="section">The concrete section instance to register.</param>
+    /// <returns>The <paramref name="section"/> instance (for fluent chaining).</returns>
+    /// <exception cref="KeyNotFoundException">
+    /// Thrown when no config is registered for <paramref name="fileName"/>.
+    /// </exception>
+    public static T AddSection<T>(string fileName, T section) where T : IIniSection
+        => Get(fileName).AddSection(section);
+
     // ── Lookup ────────────────────────────────────────────────────────────────
 
     /// <summary>
