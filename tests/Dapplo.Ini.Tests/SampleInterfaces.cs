@@ -232,7 +232,36 @@ public sealed class AsyncDictionaryValueSource : IValueSourceAsync
 }
 
 
-// ── Migration sample interfaces ────────────────────────────────────────────────
+// ── Collection (list, array, dictionary) sample interfaces ───────────────────
+
+/// <summary>
+/// Section that exercises list, array, and dictionary property types.
+/// Verifies that comma-separated values in INI files round-trip correctly.
+/// </summary>
+[IniSection("Collections")]
+public interface ICollectionSettings : IIniSection
+{
+    /// <summary>Comma-separated list of strings, e.g. <c>Feature1,Feature2,Feature3</c>.</summary>
+    [IniValue(DefaultValue = "A,B,C")]
+    List<string>? StringList { get; set; }
+
+    /// <summary>Comma-separated list of integers, e.g. <c>1,2,3</c>.</summary>
+    [IniValue(DefaultValue = "1,2,3")]
+    List<int>? IntList { get; set; }
+
+    /// <summary>Property typed as <see cref="IList{T}"/> to verify interface-typed properties work.</summary>
+    [IniValue(DefaultValue = "X,Y,Z")]
+    IList<string>? StringIList { get; set; }
+
+    /// <summary>Array of strings, e.g. <c>red,green,blue</c>.</summary>
+    [IniValue(DefaultValue = "red,green,blue")]
+    string[]? StringArray { get; set; }
+
+    /// <summary>Dictionary mapping string keys to integer values, e.g. <c>a=1,b=2</c>.</summary>
+    [IniValue(DefaultValue = "x=10,y=20")]
+    Dictionary<string, int>? StringIntDictionary { get; set; }
+}
+
 
 /// <summary>
 /// Section that uses the generic IUnknownKey&lt;TSelf&gt; pattern to handle a renamed key.

@@ -1,5 +1,6 @@
 // Copyright (c) Dapplo. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for details.
+using System.Collections.Generic;
 #if NET
 using System.Diagnostics.CodeAnalysis;
 #endif
@@ -12,6 +13,24 @@ namespace Dapplo.Ini.Converters;
 public static class ValueConverterRegistry
 {
     private static readonly Dictionary<Type, IValueConverter> _converters = new();
+
+    // Generic type definitions used for collection/dictionary detection
+    private static readonly HashSet<Type> _listLikeGenericDefinitions = new()
+    {
+        typeof(List<>),
+        typeof(IList<>),
+        typeof(ICollection<>),
+        typeof(IEnumerable<>),
+        typeof(IReadOnlyList<>),
+        typeof(IReadOnlyCollection<>),
+    };
+
+    private static readonly HashSet<Type> _dictionaryLikeGenericDefinitions = new()
+    {
+        typeof(Dictionary<,>),
+        typeof(IDictionary<,>),
+        typeof(IReadOnlyDictionary<,>),
+    };
 
     static ValueConverterRegistry()
     {
@@ -39,17 +58,21 @@ public static class ValueConverterRegistry
     }
 
     /// <summary>
-    /// Returns the converter for <paramref name="type"/>, supporting nullable value types and enums.
+    /// Returns the converter for <paramref name="type"/>, supporting nullable value types, enums,
+    /// collection types (<see cref="List{T}"/>, <c>IList&lt;T&gt;</c>, <c>T[]</c>, etc.),
+    /// and dictionary types (<see cref="Dictionary{TKey,TValue}"/>, <c>IDictionary&lt;TKey,TValue&gt;</c>, etc.).
     /// Returns <c>null</c> when no converter is found.
     /// </summary>
     /// <remarks>
     /// Enum support requires dynamic code and unreferenced-code access. For full trim/AOT
     /// compatibility register a typed <see cref="ValueConverterBase{T}"/> for each enum type
     /// instead of relying on the automatic <see cref="EnumConverter"/>.
+    /// Collection and dictionary converters are created on demand using reflection and are cached
+    /// for subsequent lookups.
     /// </remarks>
 #if NET
-    [RequiresDynamicCode("Auto-registering an EnumConverter for unknown enum types requires dynamic code. Register a typed converter for full AOT compatibility.")]
-    [RequiresUnreferencedCode("Auto-registering an EnumConverter for unknown enum types accesses type metadata at runtime. Register a typed converter for full trim compatibility.")]
+    [RequiresDynamicCode("Auto-registering converters for enum, collection, and dictionary types requires dynamic code. Register typed converters for full AOT compatibility.")]
+    [RequiresUnreferencedCode("Auto-registering converters for enum, collection, and dictionary types accesses type metadata at runtime. Register typed converters for full trim compatibility.")]
 #endif
     public static IValueConverter? GetConverter(Type type)
     {
@@ -73,6 +96,55 @@ public static class ValueConverterRegistry
         // Plain enum
         if (type.IsEnum)
             return GetOrCreateEnumConverter(type);
+
+        // T[] array
+        if (type.IsArray)
+        {
+            var elementType = type.GetElementType()!;
+            var elementConverter = GetConverter(elementType);
+            if (elementConverter != null)
+            {
+                var arrayConverterType = typeof(ArrayConverter<>).MakeGenericType(elementType);
+                converter = (IValueConverter)Activator.CreateInstance(arrayConverterType, elementConverter, ',')!;
+                _converters[type] = converter;
+                return converter;
+            }
+        }
+
+        // Generic collection and dictionary types
+        if (type.IsGenericType)
+        {
+            var genericDef = type.GetGenericTypeDefinition();
+            var typeArgs = type.GetGenericArguments();
+
+            // List-like: List<T>, IList<T>, ICollection<T>, IEnumerable<T>, IReadOnlyList<T>, IReadOnlyCollection<T>
+            if (typeArgs.Length == 1 && _listLikeGenericDefinitions.Contains(genericDef))
+            {
+                var elementType = typeArgs[0];
+                var elementConverter = GetConverter(elementType);
+                if (elementConverter != null)
+                {
+                    var listConverterType = typeof(ListConverter<>).MakeGenericType(elementType);
+                    converter = (IValueConverter)Activator.CreateInstance(listConverterType, elementConverter, ',')!;
+                    _converters[type] = converter;
+                    return converter;
+                }
+            }
+
+            // Dictionary-like: Dictionary<TK,TV>, IDictionary<TK,TV>, IReadOnlyDictionary<TK,TV>
+            if (typeArgs.Length == 2 && _dictionaryLikeGenericDefinitions.Contains(genericDef))
+            {
+                var keyConverter = GetConverter(typeArgs[0]);
+                var valueConverter = GetConverter(typeArgs[1]);
+                if (keyConverter != null && valueConverter != null)
+                {
+                    var dictConverterType = typeof(DictionaryConverter<,>).MakeGenericType(typeArgs[0], typeArgs[1]);
+                    converter = (IValueConverter)Activator.CreateInstance(dictConverterType, keyConverter, valueConverter, ',', '=')!;
+                    _converters[type] = converter;
+                    return converter;
+                }
+            }
+        }
 
         return null;
     }

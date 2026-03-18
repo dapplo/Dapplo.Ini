@@ -1,7 +1,9 @@
 // Copyright (c) Dapplo. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
+using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 #if NET
 using System.Diagnostics.CodeAnalysis;
 #endif
@@ -21,9 +23,19 @@ public abstract class ValueConverterBase<T> : IValueConverter<T>
     /// <inheritdoc/>
     public virtual string? ConvertToString(T? value) => value?.ToString();
 
-    // Non-generic IValueConverter interface
+    // Non-generic IValueConverter interface — delegates to a virtual helper so subclasses
+    // can broaden the accepted type (e.g. ListConverter<T> accepts IEnumerable<T>).
     object? IValueConverter.ConvertFromString(string? raw) => ConvertFromString(raw);
-    string? IValueConverter.ConvertToString(object? value) => ConvertToString(value is T typed ? typed : default);
+    string? IValueConverter.ConvertToString(object? value) => ConvertToStringFromObject(value);
+
+    /// <summary>
+    /// Converts an untyped value to its INI string representation.
+    /// Override in a subclass to accept types broader than <typeparamref name="T"/>
+    /// (for example, accepting <c>IEnumerable&lt;T&gt;</c> for a list converter).
+    /// The default implementation casts to <typeparamref name="T"/> and falls back to <c>null</c>.
+    /// </summary>
+    protected virtual string? ConvertToStringFromObject(object? value)
+        => ConvertToString(value is T typed ? typed : default);
 }
 
 // ─── Built-in converters ────────────────────────────────────────────────────
@@ -185,6 +197,165 @@ public sealed class UriConverter : ValueConverterBase<Uri>
 
     public override string? ConvertToString(Uri? value)
         => value?.ToString();
+}
+
+/// <summary>
+/// Converts <see cref="List{T}"/> to/from a delimiter-separated string (default separator: <c>,</c>).
+/// This converter is also returned by <see cref="ValueConverterRegistry"/> for <c>IList&lt;T&gt;</c>,
+/// <c>ICollection&lt;T&gt;</c>, <c>IEnumerable&lt;T&gt;</c>, <c>IReadOnlyList&lt;T&gt;</c>, and
+/// <c>IReadOnlyCollection&lt;T&gt;</c> — all of which are satisfied by the <see cref="List{T}"/>
+/// instance returned from <see cref="ConvertFromString(string?, List{T}?)"/>.
+/// </summary>
+/// <typeparam name="T">The element type. Must have a registered <see cref="IValueConverter"/>.</typeparam>
+public sealed class ListConverter<T> : ValueConverterBase<List<T>>
+{
+    private readonly IValueConverter _elementConverter;
+    private readonly char _separator;
+
+    /// <param name="elementConverter">Converter for the individual list elements.</param>
+    /// <param name="separator">Delimiter used between elements. Defaults to <c>,</c>.</param>
+    public ListConverter(IValueConverter elementConverter, char separator = ',')
+    {
+        _elementConverter = elementConverter ?? throw new ArgumentNullException(nameof(elementConverter));
+        _separator = separator;
+    }
+
+    /// <inheritdoc/>
+    public override List<T>? ConvertFromString(string? raw, List<T>? defaultValue = default)
+    {
+        if (raw == null) return defaultValue;
+        if (raw.Length == 0) return new List<T>();
+        var result = new List<T>();
+        foreach (var part in raw.Split(_separator))
+        {
+            var item = _elementConverter.ConvertFromString(part.Trim());
+            result.Add(item is T typed ? typed : default!);
+        }
+        return result;
+    }
+
+    /// <inheritdoc/>
+    public override string? ConvertToString(List<T>? value)
+    {
+        if (value == null) return null;
+        return string.Join(_separator.ToString(),
+            value.Select(item => _elementConverter.ConvertToString(item) ?? string.Empty));
+    }
+
+    /// <inheritdoc/>
+    protected override string? ConvertToStringFromObject(object? value)
+    {
+        if (value is List<T> list) return ConvertToString(list);
+        if (value is IEnumerable<T> enumerable) return ConvertToString(new List<T>(enumerable));
+        return null;
+    }
+}
+
+/// <summary>
+/// Converts <c>T[]</c> to/from a delimiter-separated string (default separator: <c>,</c>).
+/// Backed by <see cref="ListConverter{T}"/>: parses into a <see cref="List{T}"/> and converts to an array.
+/// </summary>
+/// <typeparam name="T">The element type. Must have a registered <see cref="IValueConverter"/>.</typeparam>
+public sealed class ArrayConverter<T> : IValueConverter
+{
+    private readonly ListConverter<T> _listConverter;
+
+    /// <param name="elementConverter">Converter for the individual array elements.</param>
+    /// <param name="separator">Delimiter used between elements. Defaults to <c>,</c>.</param>
+    public ArrayConverter(IValueConverter elementConverter, char separator = ',')
+    {
+        _listConverter = new ListConverter<T>(elementConverter, separator);
+    }
+
+    /// <inheritdoc/>
+    public Type TargetType => typeof(T[]);
+
+    /// <inheritdoc/>
+    public object? ConvertFromString(string? raw)
+        => _listConverter.ConvertFromString(raw)?.ToArray();
+
+    /// <inheritdoc/>
+    public string? ConvertToString(object? value)
+    {
+        if (value is T[] arr) return _listConverter.ConvertToString(new List<T>(arr));
+        if (value is IEnumerable<T> enumerable) return _listConverter.ConvertToString(new List<T>(enumerable));
+        return null;
+    }
+}
+
+/// <summary>
+/// Converts <see cref="Dictionary{TKey, TValue}"/> to/from a delimiter-separated list of
+/// <c>key=value</c> pairs (pair separator: <c>,</c>, key/value separator: <c>=</c> by default).
+/// This converter is also returned by <see cref="ValueConverterRegistry"/> for
+/// <c>IDictionary&lt;TKey,TValue&gt;</c> and <c>IReadOnlyDictionary&lt;TKey,TValue&gt;</c>.
+/// </summary>
+/// <typeparam name="TKey">Key type. Must have a registered <see cref="IValueConverter"/>.</typeparam>
+/// <typeparam name="TValue">Value type. Must have a registered <see cref="IValueConverter"/>.</typeparam>
+public sealed class DictionaryConverter<TKey, TValue> : ValueConverterBase<Dictionary<TKey, TValue>>
+    where TKey : notnull
+{
+    private readonly IValueConverter _keyConverter;
+    private readonly IValueConverter _valueConverter;
+    private readonly char _pairSeparator;
+    private readonly char _keyValueSeparator;
+
+    /// <param name="keyConverter">Converter for dictionary keys.</param>
+    /// <param name="valueConverter">Converter for dictionary values.</param>
+    /// <param name="pairSeparator">Delimiter between key=value pairs. Defaults to <c>,</c>.</param>
+    /// <param name="keyValueSeparator">Delimiter between a key and its value. Defaults to <c>=</c>.</param>
+    public DictionaryConverter(
+        IValueConverter keyConverter,
+        IValueConverter valueConverter,
+        char pairSeparator = ',',
+        char keyValueSeparator = '=')
+    {
+        _keyConverter = keyConverter ?? throw new ArgumentNullException(nameof(keyConverter));
+        _valueConverter = valueConverter ?? throw new ArgumentNullException(nameof(valueConverter));
+        _pairSeparator = pairSeparator;
+        _keyValueSeparator = keyValueSeparator;
+    }
+
+    /// <inheritdoc/>
+    public override Dictionary<TKey, TValue>? ConvertFromString(
+        string? raw, Dictionary<TKey, TValue>? defaultValue = default)
+    {
+        if (raw == null) return defaultValue;
+        if (raw.Length == 0) return new Dictionary<TKey, TValue>();
+        var result = new Dictionary<TKey, TValue>();
+        foreach (var pair in raw.Split(_pairSeparator))
+        {
+            var kv = pair.Trim();
+            var sepIdx = kv.IndexOf(_keyValueSeparator);
+            if (sepIdx < 0) continue;
+            var keyStr = kv.Substring(0, sepIdx).Trim();
+            var valStr = kv.Substring(sepIdx + 1).Trim();
+            var keyObj = _keyConverter.ConvertFromString(keyStr);
+            var valObj = _valueConverter.ConvertFromString(valStr);
+            if (keyObj is TKey typedKey)
+                result[typedKey] = valObj is TValue typedVal ? typedVal : default!;
+        }
+        return result;
+    }
+
+    /// <inheritdoc/>
+    public override string? ConvertToString(Dictionary<TKey, TValue>? value)
+    {
+        if (value == null) return null;
+        return string.Join(_pairSeparator.ToString(), value.Select(kvp =>
+            $"{_keyConverter.ConvertToString(kvp.Key) ?? string.Empty}{_keyValueSeparator}{_valueConverter.ConvertToString(kvp.Value) ?? string.Empty}"));
+    }
+
+    /// <inheritdoc/>
+    protected override string? ConvertToStringFromObject(object? value)
+    {
+        if (value is Dictionary<TKey, TValue> dict) return ConvertToString(dict);
+        if (value is IEnumerable<KeyValuePair<TKey, TValue>> pairs)
+        {
+            return string.Join(_pairSeparator.ToString(), pairs.Select(kvp =>
+                $"{_keyConverter.ConvertToString(kvp.Key) ?? string.Empty}{_keyValueSeparator}{_valueConverter.ConvertToString(kvp.Value) ?? string.Empty}"));
+        }
+        return null;
+    }
 }
 
 /// <summary>Converts any <see cref="Enum"/> type using its name.</summary>
