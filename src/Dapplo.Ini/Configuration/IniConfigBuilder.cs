@@ -431,6 +431,11 @@ public sealed class IniConfigBuilder
     /// </summary>
     private IniConfig CreateCore()
     {
+        if (_lockFile && _monitorFile)
+            throw new InvalidOperationException(
+                $"{nameof(LockFile)} and {nameof(MonitorFile)} are mutually exclusive: " +
+                "a read-locked file cannot be modified by external processes, so monitoring for changes is meaningless.");
+
         var config = new IniConfig(_fileName);
         config.Encoding = _encoding ?? Encoding.UTF8;
         config.WritablePath = _writablePath;

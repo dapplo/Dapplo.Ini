@@ -162,6 +162,36 @@ public sealed class FileLockAndMonitorTests : IDisposable
         Assert.Equal("postponed", section.Value);
     }
 
+    // ── Mutual exclusivity tests ──────────────────────────────────────────────
+
+    [Fact]
+    public void LockFile_And_MonitorFile_ThrowsInvalidOperationException()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+        {
+            IniConfigRegistry.ForFile("conflict.ini")
+                .AddSearchPath(_tempDir)
+                .LockFile()
+                .MonitorFile()
+                .Create();
+        });
+        Assert.Contains("mutually exclusive", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void MonitorFile_And_LockFile_ThrowsInvalidOperationException()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+        {
+            IniConfigRegistry.ForFile("conflict2.ini")
+                .AddSearchPath(_tempDir)
+                .MonitorFile()
+                .LockFile()
+                .Create();
+        });
+        Assert.Contains("mutually exclusive", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void Save_DoesNotTriggerMonitorReload()
     {
