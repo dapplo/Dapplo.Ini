@@ -1,6 +1,9 @@
 // Copyright (c) Dapplo. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Runtime.Serialization;
 using Dapplo.Ini.Attributes;
 using Dapplo.Ini.Interfaces;
 
@@ -308,4 +311,80 @@ public interface ILegacyMigrationSettings : IIniSection, IUnknownKey
 {
     [IniValue(DefaultValue = "0")]
     int Value { get; set; }
+}
+
+// ── Standard .NET attribute support sample interfaces ────────────────────────
+
+/// <summary>
+/// Section that uses standard .NET attributes for its properties.
+/// [DataMember(Name=...)] sets the key name, [DefaultValue] sets the default,
+/// [IgnoreDataMember] excludes the property from INI read/write.
+/// Note: [DataContract] cannot be applied to interface declarations in .NET;
+/// the [IniSection] attribute is used to name the section.
+/// </summary>
+[IniSection("StandardSection")]
+[Description("A section using standard .NET attributes")]
+public interface IStandardAttributeSettings : IIniSection
+{
+    /// <summary>Property whose key name comes from [DataMember(Name="...")] .</summary>
+    [DataMember(Name = "display_name")]
+    [DefaultValue("World")]
+    [Description("The display name")]
+    string? DisplayName { get; set; }
+
+    /// <summary>Property with a numeric default supplied via [DefaultValue].</summary>
+    [DefaultValue(10)]
+    int RetryCount { get; set; }
+
+    /// <summary>Property excluded from the INI file via [IgnoreDataMember].</summary>
+    [IgnoreDataMember]
+    string? Transient { get; set; }
+
+    /// <summary>Property where [IniValue] takes precedence over [DataMember].</summary>
+    [IniValue(KeyName = "ini_key", DefaultValue = "IniWins")]
+    [DataMember(Name = "data_member_key")]
+    string? Precedence { get; set; }
+}
+
+/// <summary>
+/// Section that uses DataAnnotations validation attributes ([Required], [Range], [MaxLength]).
+/// Validation errors are surfaced via INotifyDataErrorInfo without any exception being thrown.
+/// </summary>
+[IniSection("AnnotatedSection")]
+public interface IAnnotatedSettings : IIniSection
+{
+    /// <summary>Required string — must not be null or empty.</summary>
+    [Required(ErrorMessage = "Name is required.")]
+    string? Name { get; set; }
+
+    /// <summary>Integer value that must be between 1 and 100.</summary>
+    [Range(1, 100, ErrorMessage = "Score must be between 1 and 100.")]
+    int Score { get; set; }
+
+    /// <summary>String whose length must not exceed 20 characters.</summary>
+    [MaxLength(20, ErrorMessage = "Tag must not exceed 20 characters.")]
+    string? Tag { get; set; }
+}
+
+/// <summary>
+/// Section that combines DataAnnotations attributes with IDataValidation&lt;TSelf&gt; so that
+/// both the generated attribute rules and the custom consumer rules are enforced.
+/// </summary>
+[IniSection("CombinedValidation")]
+public interface ICombinedValidationSettings : IIniSection, IDataValidation<ICombinedValidationSettings>
+{
+    [Required(ErrorMessage = "Host is required.")]
+    [IniValue(NotifyPropertyChanged = true)]
+    string? Host { get; set; }
+
+    [Range(1, 65535, ErrorMessage = "Port must be between 1 and 65535.")]
+    [IniValue(DefaultValue = "8080", NotifyPropertyChanged = true)]
+    int Port { get; set; }
+
+    // Custom rule: Host must not equal "banned"
+    static new IEnumerable<string> ValidateProperty(ICombinedValidationSettings self, string propertyName)
+    {
+        if (propertyName == nameof(Host) && string.Equals(self.Host, "banned", StringComparison.OrdinalIgnoreCase))
+            yield return "Host value 'banned' is not allowed.";
+    }
 }

@@ -20,6 +20,16 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
     private const string IniSectionAttributeFqn = "Dapplo.Ini.Attributes.IniSectionAttribute";
     private const string IniValueAttributeFqn   = "Dapplo.Ini.Attributes.IniValueAttribute";
 
+    // FQNs for standard .NET attributes whose semantics we honour in addition to our own
+    private const string DefaultValueAttributeFqn    = "System.ComponentModel.DefaultValueAttribute";
+    private const string DescriptionAttributeFqn     = "System.ComponentModel.DescriptionAttribute";
+    private const string DataContractAttributeFqn    = "System.Runtime.Serialization.DataContractAttribute";
+    private const string DataMemberAttributeFqn      = "System.Runtime.Serialization.DataMemberAttribute";
+    private const string IgnoreDataMemberAttributeFqn = "System.Runtime.Serialization.IgnoreDataMemberAttribute";
+    private const string RequiredAttributeFqn        = "System.ComponentModel.DataAnnotations.RequiredAttribute";
+    private const string RangeAttributeFqn           = "System.ComponentModel.DataAnnotations.RangeAttribute";
+    private const string MaxLengthAttributeFqn       = "System.ComponentModel.DataAnnotations.MaxLengthAttribute";
+
     // FQNs used for non-generic (dispatch) lifecycle interfaces
     private const string IAfterLoadFqn        = "Dapplo.Ini.Interfaces.IAfterLoad";
     private const string IBeforeSaveFqn       = "Dapplo.Ini.Interfaces.IBeforeSave";
@@ -72,6 +82,18 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         public bool IsSubKeyDictionary { get; set; }
         // Full C# type name of the dictionary value type (e.g. "int") when IsSubKeyDictionary is true.
         public string? DictionaryValueTypeFullName { get; set; }
+        // True when [IgnoreDataMember] is present — property is excluded from INI read/write.
+        public bool IsIgnored { get; set; }
+        // Validation attributes from System.ComponentModel.DataAnnotations
+        public bool IsRequired { get; set; }
+        public string? RequiredErrorMessage { get; set; }
+        public string? RangeMinRaw { get; set; }
+        public string? RangeMaxRaw { get; set; }
+        public string? RangeErrorMessage { get; set; }
+        public int? MaxLength { get; set; }
+        public string? MaxLengthErrorMessage { get; set; }
+        // Convenience: true when any DataAnnotations validation attributes are present
+        public bool HasValidationAttributes => IsRequired || RangeMinRaw != null || MaxLength.HasValue;
     }
 
     private sealed class SectionModel
@@ -96,6 +118,8 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         // Unknown-key migration
         public bool ImplementsUnknownKeyGeneric { get; set; }
         public bool ImplementsUnknownKey { get; set; }
+        // True when any property carries DataAnnotations validation attributes
+        public bool HasAttributeBasedValidation { get; set; }
         public List<PropertyModel> Properties { get; set; } = new();
     }
 
@@ -117,21 +141,48 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             ? ""
             : symbol.ContainingNamespace.ToDisplayString();
 
-        // Determine section name: attribute arg → strip leading 'I' → use interface name
+        // Determine section name: [IniSection] arg → [DataContract] Name → strip leading 'I' → use interface name
         string sectionName;
         if (iniSectionAttr.ConstructorArguments.Length > 0 &&
             iniSectionAttr.ConstructorArguments[0].Value is string sn && !string.IsNullOrEmpty(sn))
             sectionName = sn;
-        else if (interfaceName.StartsWith("I") && interfaceName.Length > 1)
-            sectionName = interfaceName.Substring(1);
         else
-            sectionName = interfaceName;
+        {
+            // Fall back to [DataContract(Name="...")] if present.
+            // Note: in most .NET runtime versions DataContractAttribute does not allow
+            // AttributeTargets.Interface, so this path is rarely exercised.  The logic is
+            // retained here for forward-compatibility and edge cases.
+            var dataContractAttr = symbol.GetAttributes()
+                .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == DataContractAttributeFqn);
+            string? dataContractName = null;
+            if (dataContractAttr != null)
+                foreach (var na in dataContractAttr.NamedArguments)
+                    if (na.Key == "Name" && na.Value.Value is string dcn && !string.IsNullOrEmpty(dcn))
+                        dataContractName = dcn;
+
+            if (dataContractName != null)
+                sectionName = dataContractName;
+            else if (interfaceName.StartsWith("I") && interfaceName.Length > 1)
+                sectionName = interfaceName.Substring(1);
+            else
+                sectionName = interfaceName;
+        }
 
         string? description = null;
         foreach (var na in iniSectionAttr.NamedArguments)
         {
             if (na.Key == "Description" && na.Value.Value is string d)
                 description = d;
+        }
+
+        // Fall back to [Description("...")] on the interface if [IniSection] doesn't specify Description
+        if (description == null)
+        {
+            var descAttrOnIface = symbol.GetAttributes()
+                .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == DescriptionAttributeFqn);
+            if (descAttrOnIface != null && descAttrOnIface.ConstructorArguments.Length > 0 &&
+                descAttrOnIface.ConstructorArguments[0].Value is string ifaceDesc)
+                description = ifaceDesc;
         }
 
         // Check which additional interfaces are implemented
@@ -157,11 +208,16 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         var properties = new List<PropertyModel>();
         foreach (var member in symbol.GetMembers().OfType<IPropertySymbol>())
         {
+            // Skip properties marked [IgnoreDataMember]
+            bool isIgnored = member.GetAttributes()
+                .Any(a => a.AttributeClass?.ToDisplayString() == IgnoreDataMemberAttributeFqn);
+
             var prop = new PropertyModel
             {
                 Name = member.Name,
                 TypeFullName = member.Type.ToDisplayString(),
                 IsValueType  = member.Type.IsValueType,
+                IsIgnored    = isIgnored,
                 // A getter-only interface property ({ get; }) is treated as read-only:
                 // the value is loaded from the INI file and defaults are applied, but
                 // it is never written back to disk.  The generated implementation still
@@ -186,7 +242,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 }
             }
 
-            // Collect [IniValue] attribute
+            // ── Collect [IniValue] attribute (takes precedence) ──────────────────
             var iniValueAttr = member.GetAttributes()
                 .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == IniValueAttributeFqn);
             if (iniValueAttr != null)
@@ -205,8 +261,82 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 }
             }
 
+            // ── Standard .NET attribute fallbacks ────────────────────────────────
+
+            // [DataMember(Name="...")] → KeyName fallback (only when [IniValue] didn't set it)
+            if (prop.KeyName == null)
+            {
+                var dataMemberAttr = member.GetAttributes()
+                    .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == DataMemberAttributeFqn);
+                if (dataMemberAttr != null)
+                    foreach (var na in dataMemberAttr.NamedArguments)
+                        if (na.Key == "Name" && na.Value.Value is string dmName && !string.IsNullOrEmpty(dmName))
+                            prop.KeyName = dmName;
+            }
+
+            // [DefaultValue(...)] → DefaultValue fallback
+            if (prop.DefaultValue == null)
+            {
+                var defaultValueAttr = member.GetAttributes()
+                    .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == DefaultValueAttributeFqn);
+                if (defaultValueAttr != null && defaultValueAttr.ConstructorArguments.Length > 0)
+                {
+                    var raw = defaultValueAttr.ConstructorArguments[0].Value;
+                    prop.DefaultValue = raw == null ? null : FormatDefaultValueAsString(raw);
+                }
+            }
+
+            // [Description("...")] → Description fallback
+            if (prop.Description == null)
+            {
+                var descAttr = member.GetAttributes()
+                    .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == DescriptionAttributeFqn);
+                if (descAttr != null && descAttr.ConstructorArguments.Length > 0 &&
+                    descAttr.ConstructorArguments[0].Value is string desc)
+                    prop.Description = desc;
+            }
+
+            // ── DataAnnotations validation attributes ────────────────────────────
+
+            // [Required]
+            var requiredAttr = member.GetAttributes()
+                .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == RequiredAttributeFqn);
+            if (requiredAttr != null)
+            {
+                prop.IsRequired = true;
+                foreach (var na in requiredAttr.NamedArguments)
+                    if (na.Key == "ErrorMessage" && na.Value.Value is string em)
+                        prop.RequiredErrorMessage = em;
+            }
+
+            // [Range(min, max)]
+            var rangeAttr = member.GetAttributes()
+                .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == RangeAttributeFqn);
+            if (rangeAttr != null && rangeAttr.ConstructorArguments.Length >= 2)
+            {
+                prop.RangeMinRaw = FormatRangeArgAsLiteral(rangeAttr.ConstructorArguments[0]);
+                prop.RangeMaxRaw = FormatRangeArgAsLiteral(rangeAttr.ConstructorArguments[1]);
+                foreach (var na in rangeAttr.NamedArguments)
+                    if (na.Key == "ErrorMessage" && na.Value.Value is string em)
+                        prop.RangeErrorMessage = em;
+            }
+
+            // [MaxLength(n)]
+            var maxLengthAttr = member.GetAttributes()
+                .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == MaxLengthAttributeFqn);
+            if (maxLengthAttr != null && maxLengthAttr.ConstructorArguments.Length > 0 &&
+                maxLengthAttr.ConstructorArguments[0].Value is int ml)
+            {
+                prop.MaxLength = ml;
+                foreach (var na in maxLengthAttr.NamedArguments)
+                    if (na.Key == "ErrorMessage" && na.Value.Value is string em)
+                        prop.MaxLengthErrorMessage = em;
+            }
+
             properties.Add(prop);
         }
+
+        bool hasAttributeBasedValidation = properties.Any(p => p.HasValidationAttributes);
 
         return new SectionModel
         {
@@ -226,6 +356,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             ImplementsDataValidation    = implementsDataValidation,
             ImplementsUnknownKeyGeneric = implementsUnknownKeyGeneric,
             ImplementsUnknownKey        = implementsUnknownKey,
+            HasAttributeBasedValidation = hasAttributeBasedValidation,
+            // All properties are included so the generated class satisfies the interface contract.
+            // Properties with IsIgnored=true are excluded only from INI read/write operations.
             Properties                 = properties
         };
     }
@@ -282,7 +415,8 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         }
 
         bool needsNpc = m.Properties.Any(p => p.NotifyPropertyChanged);
-        bool needsValidation = m.ImplementsDataValidationGeneric || m.ImplementsDataValidation;
+        bool needsValidation = m.ImplementsDataValidationGeneric || m.ImplementsDataValidation
+            || m.HasAttributeBasedValidation;
 
         // Build base class list.
         // When generic lifecycle interfaces are used, the generator also adds the non-generic
@@ -296,11 +430,18 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         if (needsValidation)
         {
             extraBases.Add("System.ComponentModel.INotifyDataErrorInfo");
-            if (m.ImplementsDataValidationGeneric)
+            // IDataValidation is added as a base when we have a validation bridge to emit.
+            if (m.ImplementsDataValidationGeneric || m.HasAttributeBasedValidation)
                 extraBases.Add("Dapplo.Ini.Interfaces.IDataValidation");
         }
         if (m.ImplementsAfterLoadGeneric)
             extraBases.Add("Dapplo.Ini.Interfaces.IAfterLoad");
+        else if (m.HasAttributeBasedValidation && !m.ImplementsAfterLoad)
+        {
+            // Attribute-based validation needs to run after load even when the consumer
+            // did not explicitly implement IAfterLoad.  Add it here; the bridge is emitted below.
+            extraBases.Add("Dapplo.Ini.Interfaces.IAfterLoad");
+        }
         if (m.ImplementsBeforeSaveGeneric)
             extraBases.Add("Dapplo.Ini.Interfaces.IBeforeSave");
         if (m.ImplementsAfterSaveGeneric)
@@ -405,41 +546,49 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 sb.AppendLine($"                PropertyChanging?.Invoke(this, new PropertyChangingEventArgs(nameof({p.Name})));");
             }
 
-            string keyNameForSet = EscapeString(p.KeyName ?? p.Name);
-            if (p.IsSubKeyDictionary)
+            if (p.IsIgnored)
             {
-                // Sub-key dictionary: emit one SetRawValue call per dictionary entry.
-                // The key in the INI file is "PropertyName.dictionaryKey".
-                if (usesTx)
+                // [IgnoreDataMember] — only update the backing field; no INI interaction.
+                sb.AppendLine($"                {fieldName} = value;");
+            }
+            else
+            {
+                string keyNameForSet = EscapeString(p.KeyName ?? p.Name);
+                if (p.IsSubKeyDictionary)
+                {
+                    // Sub-key dictionary: emit one SetRawValue call per dictionary entry.
+                    // The key in the INI file is "PropertyName.dictionaryKey".
+                    if (usesTx)
+                    {
+                        sb.AppendLine($"                {txFieldName} = value;");
+                        sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = value; {fieldName}HasRawEntries = true; if (value != null) foreach (var __kvp in value) SetRawValue($\"{keyNameForSet}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value)); }}");
+                    }
+                    else
+                    {
+                        sb.AppendLine($"                {fieldName} = value;");
+                        sb.AppendLine($"                {fieldName}HasRawEntries = true;");
+                        sb.AppendLine($"                if (value != null) foreach (var __kvp in value) SetRawValue($\"{keyNameForSet}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value));");
+                    }
+                }
+                else if (usesTx)
                 {
                     sb.AppendLine($"                {txFieldName} = value;");
-                    sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = value; {fieldName}HasRawEntries = true; if (value != null) foreach (var __kvp in value) SetRawValue($\"{keyNameForSet}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value)); }}");
+                    sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = value; SetRawValue(\"{keyNameForSet}\", ConvertToRaw(value)); }}");
                 }
                 else
                 {
                     sb.AppendLine($"                {fieldName} = value;");
-                    sb.AppendLine($"                {fieldName}HasRawEntries = true;");
-                    sb.AppendLine($"                if (value != null) foreach (var __kvp in value) SetRawValue($\"{keyNameForSet}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value));");
+                    sb.AppendLine($"                SetRawValue(\"{keyNameForSet}\", ConvertToRaw(value));");
                 }
-            }
-            else if (usesTx)
-            {
-                sb.AppendLine($"                {txFieldName} = value;");
-                sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = value; SetRawValue(\"{keyNameForSet}\", ConvertToRaw(value)); }}");
-            }
-            else
-            {
-                sb.AppendLine($"                {fieldName} = value;");
-                sb.AppendLine($"                SetRawValue(\"{keyNameForSet}\", ConvertToRaw(value));");
             }
 
             if (p.NotifyPropertyChanged)
             {
                 sb.AppendLine($"                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof({p.Name})));");
-                if (needsValidation)
-                {
-                    sb.AppendLine($"                RunValidation(nameof({p.Name}));");
-                }
+            }
+            if (needsValidation && (p.NotifyPropertyChanged || p.HasValidationAttributes))
+            {
+                sb.AppendLine($"                RunValidation(nameof({p.Name}));");
             }
             sb.AppendLine("            }");
             sb.AppendLine("        }");
@@ -451,6 +600,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         sb.AppendLine("        {");
         foreach (var p in m.Properties)
         {
+            // [IgnoreDataMember] properties are not managed by the INI system; leave them untouched.
+            if (p.IsIgnored) continue;
+
             string fieldName = $"_{Camel(p.Name)}";
             if (p.IsSubKeyDictionary)
             {
@@ -479,6 +631,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         sb.AppendLine("            {");
         foreach (var p in m.Properties)
         {
+            // [IgnoreDataMember] properties are not loaded from INI.
+            if (p.IsIgnored) continue;
+
             string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
             string fieldName = $"_{Camel(p.Name)}";
             if (p.IsSubKeyDictionary)
@@ -509,6 +664,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         sb.AppendLine("            {");
         foreach (var p in m.Properties)
         {
+            // [IgnoreDataMember] properties are not known INI keys.
+            if (p.IsIgnored) continue;
+
             string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
             if (p.IsSubKeyDictionary)
                 sb.AppendLine($"                case var __k when __k.StartsWith(\"{EscapeString(keyName)}.\"):  return true;");
@@ -525,7 +683,8 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         sb.AppendLine("        {");
         foreach (var p in m.Properties)
         {
-            if (p.IsReadOnly) continue;
+            // [IgnoreDataMember] and read-only properties are not serialized to the INI file.
+            if (p.IsIgnored || p.IsReadOnly) continue;
             string fieldName = $"_{Camel(p.Name)}";
             string keyName = p.KeyName ?? p.Name;
             if (p.IsSubKeyDictionary)
@@ -586,10 +745,32 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
 
         if (m.ImplementsAfterLoadGeneric)
         {
-            sb.AppendLine("        void Dapplo.Ini.Interfaces.IAfterLoad.OnAfterLoad()");
-            sb.AppendLine($"            => {ifaceFqn}.OnAfterLoad(this);");
+            // When attribute-based validation is also present, run it alongside the consumer hook.
+            if (m.HasAttributeBasedValidation)
+            {
+                sb.AppendLine("        void Dapplo.Ini.Interfaces.IAfterLoad.OnAfterLoad()");
+                sb.AppendLine("        {");
+                sb.AppendLine($"            {ifaceFqn}.OnAfterLoad(this);");
+                sb.AppendLine("            RunAllAttributeValidations();");
+                sb.AppendLine("        }");
+            }
+            else
+            {
+                sb.AppendLine("        void Dapplo.Ini.Interfaces.IAfterLoad.OnAfterLoad()");
+                sb.AppendLine($"            => {ifaceFqn}.OnAfterLoad(this);");
+            }
             sb.AppendLine();
         }
+        else if (m.HasAttributeBasedValidation && !m.ImplementsAfterLoad)
+        {
+            // No consumer IAfterLoad hook: emit our own bridge to run attribute validation after load.
+            sb.AppendLine("        void Dapplo.Ini.Interfaces.IAfterLoad.OnAfterLoad()");
+            sb.AppendLine("            => RunAllAttributeValidations();");
+            sb.AppendLine();
+        }
+        // When m.ImplementsAfterLoad (non-generic) AND m.HasAttributeBasedValidation:
+        // The consumer implements OnAfterLoad() in a partial class; we expose RunAllAttributeValidations()
+        // as a protected helper they can call explicitly.
 
         if (m.ImplementsBeforeSaveGeneric)
         {
@@ -615,11 +796,83 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             sb.AppendLine();
         }
 
-        // ── IDataValidation bridges ───────────────────────────────────────────
-        // When the generic IDataValidation<TSelf> is used, emit a bridge so the framework
-        // can call it through the non-generic IDataValidation dispatch interface and wire
-        // it to RunValidation() which feeds INotifyDataErrorInfo.
-        if (m.ImplementsDataValidationGeneric)
+        // ── IDataValidation bridges and attribute-based ValidateProperty ──────
+        // The private ValidateProperty(string) helper is used by RunValidation().
+        // When attribute-based validation is active it includes the DataAnnotations rules.
+        // When IDataValidation<TSelf> or IDataValidation is also present, both rule sets
+        // are merged so the consumer's custom rules are honoured as well.
+        if (m.HasAttributeBasedValidation)
+        {
+            // Emit ValidateAttributeRules — the generated per-property checks.
+            sb.AppendLine("        private System.Collections.Generic.IEnumerable<string> ValidateAttributeRules(string propertyName)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            switch (propertyName)");
+            sb.AppendLine("            {");
+            foreach (var p in m.Properties)
+            {
+                if (!p.HasValidationAttributes) continue;
+                string fieldName = $"_{Camel(p.Name)}";
+                sb.AppendLine($"                case nameof({p.Name}):");
+                bool isStringType = p.TypeFullName == "string" || p.TypeFullName == "string?";
+                // A non-nullable value type (int, bool, struct) can never be null at runtime,
+                // so [Required] is always satisfied — we skip the check entirely.
+                // Nullable value types (int?, bool?) end with '?' and still need a null check.
+                bool isNonNullableValueType = p.IsValueType && !p.TypeFullName.EndsWith("?");
+                if (p.IsRequired)
+                {
+                    string requiredMsg = EscapeString(p.RequiredErrorMessage ?? $"{p.Name} is required.");
+                    if (isStringType)
+                        sb.AppendLine($"                    if (string.IsNullOrEmpty({fieldName})) yield return \"{requiredMsg}\";");
+                    else if (!isNonNullableValueType)
+                        // Covers nullable value types (int?, etc.) and reference types (string already handled above)
+                        sb.AppendLine($"                    if ({fieldName} == null) yield return \"{requiredMsg}\";");
+                    // Non-nullable value types are always satisfied; skip.
+                }
+                if (p.RangeMinRaw != null && p.RangeMaxRaw != null)
+                {
+                    string rangeMsg = EscapeString(p.RangeErrorMessage ?? $"{p.Name} must be between {p.RangeMinRaw} and {p.RangeMaxRaw}.");
+                    // Use IComparable for generic range check to support int, double, etc.
+                    sb.AppendLine($"                    {{ var __cv = (System.IComparable){fieldName}; if (__cv.CompareTo({p.RangeMinRaw}) < 0 || __cv.CompareTo({p.RangeMaxRaw}) > 0) yield return \"{rangeMsg}\"; }}");
+                }
+                if (p.MaxLength.HasValue)
+                {
+                    string maxLenMsg = EscapeString(p.MaxLengthErrorMessage ?? $"{p.Name} must not exceed {p.MaxLength.Value} characters.");
+                    sb.AppendLine($"                    if ({fieldName} != null && {fieldName}.Length > {p.MaxLength.Value}) yield return \"{maxLenMsg}\";");
+                }
+                sb.AppendLine("                    break;");
+            }
+            sb.AppendLine("                default: break;");
+            sb.AppendLine("            }");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+
+            // Emit RunAllAttributeValidations — calls RunValidation for every validated property.
+            var validatedPropNames = m.Properties.Where(p => p.HasValidationAttributes)
+                .Select(p => p.Name).ToList();
+            sb.AppendLine("        protected void RunAllAttributeValidations()");
+            sb.AppendLine("        {");
+            foreach (var propName in validatedPropNames)
+                sb.AppendLine($"            RunValidation(nameof({propName}));");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+
+            // Emit explicit IDataValidation.ValidateProperty bridge.
+            sb.AppendLine("        System.Collections.Generic.IEnumerable<string> Dapplo.Ini.Interfaces.IDataValidation.ValidateProperty(string propertyName)");
+            sb.AppendLine("            => ValidateProperty(propertyName);");
+            sb.AppendLine();
+
+            // Emit the private ValidateProperty helper, merging attribute rules with any consumer rules.
+            sb.AppendLine("        private System.Collections.Generic.IEnumerable<string> ValidateProperty(string propertyName)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            foreach (var __e in ValidateAttributeRules(propertyName)) yield return __e;");
+            if (m.ImplementsDataValidationGeneric)
+                sb.AppendLine($"            foreach (var __e in {ifaceFqn}.ValidateProperty(this, propertyName)) yield return __e;");
+            else if (m.ImplementsDataValidation)
+                sb.AppendLine("            foreach (var __e in ((Dapplo.Ini.Interfaces.IDataValidation)this).ValidateProperty(propertyName)) yield return __e;");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+        }
+        else if (m.ImplementsDataValidationGeneric)
         {
             sb.AppendLine("        System.Collections.Generic.IEnumerable<string> Dapplo.Ini.Interfaces.IDataValidation.ValidateProperty(string propertyName)");
             sb.AppendLine($"            => {ifaceFqn}.ValidateProperty(this, propertyName);");
@@ -653,4 +906,39 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
 
     private static string EscapeString(string s)
         => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+
+    /// <summary>
+    /// Formats the <paramref name="value"/> from a <c>[DefaultValue(...)]</c> constructor argument
+    /// into the string representation understood by the registered converters (invariant culture).
+    /// </summary>
+    private static string FormatDefaultValueAsString(object value)
+    {
+        return value switch
+        {
+            bool b   => b ? "True" : "False",
+            double d => d.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+            float f  => f.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+            decimal dc => dc.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            _        => System.Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? ""
+        };
+    }
+
+    /// <summary>
+    /// Formats a <c>[Range]</c> constructor argument (<see cref="TypedConstant"/>) as an inline C# literal
+    /// suitable for use in a comparison expression.
+    /// </summary>
+    private static string FormatRangeArgAsLiteral(TypedConstant arg)
+    {
+        if (arg.Value == null) return "null";
+        return arg.Value switch
+        {
+            int i    => i.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            long l   => $"{l.ToString(System.Globalization.CultureInfo.InvariantCulture)}L",
+            double d => $"{d.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}d",
+            float f  => $"{f.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}f",
+            decimal dc => $"{dc.ToString(System.Globalization.CultureInfo.InvariantCulture)}m",
+            string s => $"\"{EscapeString(s)}\"",
+            _        => System.Convert.ToString(arg.Value, System.Globalization.CultureInfo.InvariantCulture) ?? "0"
+        };
+    }
 }
