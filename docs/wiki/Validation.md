@@ -209,12 +209,83 @@ var errors = validation.ValidateProperty(nameof(IServerSettings.Port)).ToList();
 This works whether the section uses DataAnnotations attributes, `IDataValidation<TSelf>`,
 or both.
 
-### Post-load validation in a lifecycle hook
+---
 
-If the section does **not** use `NotifyPropertyChanged = true` but you still
-want to surface all validation errors after the file is loaded, use the
-generated `RunAllAttributeValidations()` helper from an `IAfterLoad` hook in
-a partial class:
+## Validation errors after loading — and settings screens
+
+### How errors survive from load to UI
+
+When the INI file is loaded (`Build()` / `Reload()`), the generator automatically
+runs all validation rules via an `IAfterLoad` hook and stores any errors in the
+section's `_validationErrors` dictionary.  This happens for **all** validation
+approaches — DataAnnotations attributes, `IDataValidation<TSelf>`, or both.
+No exceptions are thrown; bad values are stored as-is and the errors are available
+immediately after `Build()` returns.
+
+You can query them straight away:
+
+```csharp
+var config = IniConfigRegistry.ForFile("myapp.ini")
+    .AddSearchPath(appDir)
+    .RegisterSection<IServerSettings>()
+    .Build();
+
+var section  = config.GetSection<IServerSettings>();
+var errorInfo = (INotifyDataErrorInfo)section;
+
+if (errorInfo.HasErrors)
+{
+    // Errors detected in the loaded file — log or show a notification
+    foreach (var err in errorInfo.GetErrors(null).Cast<string>())
+        Console.WriteLine(err);
+}
+```
+
+### Opening a WPF / Avalonia settings screen
+
+WPF and Avalonia only re-query `INotifyDataErrorInfo.GetErrors()` for a binding
+when the `ErrorsChanged` event fires **after** the binding is established.
+If errors were stored during `Build()` but the settings window was opened *later*,
+the bindings set up by that window will not see the pre-existing errors — because
+`ErrorsChanged` was fired before the bindings existed.
+
+**Solution:** call `RunAllValidations()` after the window is shown.  This method
+re-validates every property and fires `ErrorsChanged` for each one, allowing all
+bindings in the newly opened window to pick up the current error state.
+
+```csharp
+// ViewModel or code-behind for the settings window:
+public partial class SettingsWindow : Window
+{
+    private readonly ServerSettingsImpl _settings;
+
+    public SettingsWindow(ServerSettingsImpl settings)
+    {
+        _settings = settings;
+        DataContext = settings;
+        InitializeComponent();
+    }
+
+    private void Window_Loaded(object sender, RoutedEventArgs e)
+    {
+        // Re-raise ErrorsChanged for every property so that bindings in this
+        // window can display any validation errors that were detected on load.
+        _settings.RunAllValidations();
+    }
+}
+```
+
+> **Why `ServerSettingsImpl` and not `IServerSettings`?**
+> `RunAllValidations()` is a generated method on the concrete implementation class,
+> not part of the section interface.  In typical DI setups the interface is registered
+> against the concrete instance, so you can obtain the concrete type from the DI
+> container or store it separately at registration time.
+
+### Calling `RunAllValidations()` explicitly in lifecycle hooks
+
+If you implement `IAfterLoad` in a partial class (for example when also doing
+post-load normalisation), call `RunAllValidations()` inside `OnAfterLoad()` to
+ensure errors are populated:
 
 ```csharp
 // In a separate partial class file:
@@ -222,15 +293,29 @@ public partial class ServerSettingsImpl : IAfterLoad
 {
     public void OnAfterLoad()
     {
-        RunAllAttributeValidations(); // re-validates all DataAnnotations-annotated properties
+        // e.g. normalise the host name
+        if (Host is not null)
+            Host = Host.Trim().ToLowerInvariant();
+
+        // Re-validate after normalisation so errors reflect the final values
+        RunAllValidations();
     }
 }
 ```
 
-> **Note:** When a section uses only DataAnnotations attributes (no
-> `IDataValidation<TSelf>`), the generator emits an `IAfterLoad` bridge
-> automatically, so validation runs immediately after the file is loaded even
-> without an explicit lifecycle hook.
+> **Note:** When a section does **not** explicitly implement `IAfterLoad`, the
+> generator emits its own `IAfterLoad` bridge that calls `RunAllValidations()`
+> automatically, so you only need the explicit call above when you override the
+> hook yourself.
+
+---
+
+## Post-load validation — DataAnnotations only (legacy helper)
+
+The generated class also exposes a narrower helper, `RunAllAttributeValidations()`,
+that re-validates only the properties annotated with DataAnnotations attributes
+(skipping any custom `IDataValidation<TSelf>` rules).  Prefer `RunAllValidations()`
+in new code; `RunAllAttributeValidations()` is retained for backward compatibility.
 
 ---
 

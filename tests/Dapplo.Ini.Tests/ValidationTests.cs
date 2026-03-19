@@ -42,6 +42,13 @@ public sealed class ValidationTests : IDisposable
         return section;
     }
 
+    private string WriteIni(string fileName, string content)
+    {
+        var path = Path.Combine(_tempDir, fileName);
+        File.WriteAllText(path, content);
+        return path;
+    }
+
     // ── Tests ─────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -132,5 +139,93 @@ public sealed class ValidationTests : IDisposable
         section.Port = 99999;
         var errors = validation.ValidateProperty(nameof(IServerConfigSettings.Port)).ToList();
         Assert.NotEmpty(errors);
+    }
+
+    // ── Post-load validation (IDataValidation<TSelf>) ─────────────────────────
+
+    /// <summary>
+    /// When an INI file contains an invalid value and the section uses
+    /// <see cref="IDataValidation{TSelf}"/>, the generated IAfterLoad bridge
+    /// must run <c>RunAllValidations()</c> so that errors are immediately
+    /// available after Build() — without any property-setter interaction.
+    /// </summary>
+    [Fact]
+    public void IDataValidation_ValidationRunsAfterLoad_WhenFileContainsInvalidPort()
+    {
+        // Write a file with Port = 0 (invalid: must be 1–65535)
+        WriteIni("dataval_load.ini", "[ServerConfig]\nPort = 0\nHost = myhost");
+
+        var section = new ServerConfigSettingsImpl();
+        IniConfigRegistry.ForFile("dataval_load.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IServerConfigSettings>(section)
+            .Build();
+
+        // Errors should be populated immediately after Build() — no setter call needed
+        var errors = ((INotifyDataErrorInfo)section)
+            .GetErrors(nameof(IServerConfigSettings.Port)).Cast<string>().ToList();
+        Assert.NotEmpty(errors);
+        Assert.Contains("Port must be between 1 and 65535.", errors);
+    }
+
+    [Fact]
+    public void IDataValidation_ValidationRunsAfterLoad_ValidValuesHaveNoErrors()
+    {
+        WriteIni("dataval_valid.ini", "[ServerConfig]\nPort = 443\nHost = myhost");
+
+        var section = new ServerConfigSettingsImpl();
+        IniConfigRegistry.ForFile("dataval_valid.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IServerConfigSettings>(section)
+            .Build();
+
+        Assert.False(((INotifyDataErrorInfo)section).HasErrors);
+    }
+
+    // ── RunAllValidations ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// <c>RunAllValidations()</c> re-fires <c>ErrorsChanged</c> for every non-ignored
+    /// property.  This is the recommended pattern for settings screens: call it after
+    /// the UI window is shown so that WPF/Avalonia bindings pick up any pre-existing
+    /// validation errors.
+    /// </summary>
+    [Fact]
+    public void RunAllValidations_FiresErrorsChangedForAllProperties()
+    {
+        var section = BuildSection();
+        var changedProps = new List<string?>();
+        ((INotifyDataErrorInfo)section).ErrorsChanged += (_, e) => changedProps.Add(e.PropertyName);
+
+        section.RunAllValidations();
+
+        // Both Port and Host should have fired ErrorsChanged
+        Assert.Contains(nameof(IServerConfigSettings.Port), changedProps);
+        Assert.Contains(nameof(IServerConfigSettings.Host), changedProps);
+    }
+
+    [Fact]
+    public void RunAllValidations_ReportsInvalidValuesSet_BeforeWindowOpens()
+    {
+        // Simulate: settings loaded with invalid values, window then opens and
+        // calls RunAllValidations() to surface the errors
+        WriteIni("screen.ini", "[ServerConfig]\nPort = 0\nHost = myhost");
+
+        var section = new ServerConfigSettingsImpl();
+        IniConfigRegistry.ForFile("screen.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IServerConfigSettings>(section)
+            .Build();
+
+        // Simulate "window opened" — re-raise all error events for WPF bindings
+        var changedProps = new List<string?>();
+        ((INotifyDataErrorInfo)section).ErrorsChanged += (_, e) => changedProps.Add(e.PropertyName);
+        section.RunAllValidations();
+
+        // Port error should be re-raised so the new binding can see it
+        Assert.Contains(nameof(IServerConfigSettings.Port), changedProps);
+        var errors = ((INotifyDataErrorInfo)section)
+            .GetErrors(nameof(IServerConfigSettings.Port)).Cast<string>().ToList();
+        Assert.Contains("Port must be between 1 and 65535.", errors);
     }
 }
