@@ -29,7 +29,7 @@ other so that the most useful ones can be ported or consciously omitted.
 | **Save on process exit** | ✅ `SaveOnExit = true` hooks `AppDomain.CurrentDomain.ProcessExit` | ✅ `SaveOnExit()` builder method hooks `AppDomain.CurrentDomain.ProcessExit`; handler is unregistered on `Dispose()` | Works on both .NET Framework and .NET. |
 | **Change tracking / dirty flag** | ✅ `HasChanges()` per section; `HasPendingChanges()` on the container | ✅ `bool HasChanges` on `IIniSection`; `bool HasPendingChanges()` on `IniConfig` | Flag is set by `SetRawValue`, cleared by `Save()` and `Reload()`. Initial load does not mark sections dirty. |
 | **Write protection** | ✅ `RemoveWriteProtection()` / implicit protection after load | ❌ Not implemented | Prevents accidental modification before a transaction is started. |
-| **Async I/O** | ✅ `ReadFromStreamAsync`, `WriteAsync`, `Task`-based load | ❌ Synchronous only | See [`docs/async-await-benefits.md`](async-await-benefits.md) for a full analysis. |
+| **Async I/O** | ✅ `ReadFromStreamAsync`, `WriteAsync`, `Task`-based load | ✅ `BuildAsync`/`SaveAsync`/`ReloadAsync`, `IAfterLoadAsync`, `IValueSourceAsync` | See [[Async-Support]]. |
 | **Configurable file encoding** | ✅ `FileEncoding` property (default UTF-8) | ✅ `WithEncoding(Encoding)` builder method; encoding is passed to `IniFileParser.ParseFile` and `IniFileWriter.WriteFile` | Rarely needed, but some legacy systems use ISO-8859-1 or Windows-1252. |
 | **Structured logging (Dapplo.Log)** | ✅ Verbose/Debug/Warn log calls throughout | ❌ No logging | Adding logging would aid diagnostics but introduces a dependency. |
 | **Postfix-based defaults/constants convention** | ✅ `appname-defaults.ini`, `appname-constants.ini` discovered automatically by naming convention | ❌ Callers must pass explicit paths to `AddDefaultsFile`/`AddConstantsFile` | The convention approach requires less configuration. |
@@ -44,14 +44,14 @@ other so that the most useful ones can be ported or consciously omitted.
 | **Source-generator approach** | ❌ | ✅ | Zero runtime reflection for the common path; trim- and AOT-safe. |
 | **Global registry** | ❌ (DI container used instead) | ✅ `IniConfigRegistry` | Allows access anywhere without DI. |
 | **Multiple ordered search paths** | ❌ Fixed directory or AppData | ✅ `AddSearchPath`, `AddSearchPaths` | Flexible layering (e.g., system → user → AppData). |
-| **External value sources** | ❌ | ✅ `IValueSource` | Pluggable non-file sources (environment variables, registry, cloud config). |
+| **External value sources** | ❌ | ✅ `IValueSource` | Pluggable non-file sources (environment variables, registry, cloud config). See [[External-Value-Sources]]. |
 | **Explicit write target** | ❌ | ✅ `SetWritablePath(path)` | Control the write location independently of the search path order. |
 | **AppData helper** | ❌ (logic buried inside `IniFileContainer`) | ✅ `AddAppDataPath(applicationName)` | One-liner to use the per-user AppData directory. |
-| **Transactional updates** | ❌ | ✅ `ITransactional` with `Begin`/`Commit`/`Rollback` | Atomic multi-property updates. |
-| **`INotifyDataErrorInfo` validation** | ❌ | ✅ `IDataValidation<TSelf>` | WPF/Avalonia binding-aware validation. |
-| **Static-virtual lifecycle hooks** | ❌ | ✅ `IAfterLoad<TSelf>`, `IBeforeSave<TSelf>`, `IAfterSave<TSelf>` | C# 11+ pattern; no allocating delegate registration. |
-| **File-change postponement** | ❌ | ✅ `ReloadDecision.Postpone` + `RequestPostponedReload()` | Consumer decides when to apply external changes. |
-| **File locking** | ❌ | ✅ `LockFile()` | Prevents external processes overwriting the file while the application runs. |
+| **Transactional updates** | ✅ `ITransactionalProperties` | ✅ `ITransactional` with `Begin`/`Commit`/`Rollback` | Atomic multi-property updates. See [[Transactional-Updates]]. |
+| **`INotifyDataErrorInfo` validation** | ❌ | ✅ `IDataValidation<TSelf>` | WPF/Avalonia binding-aware validation. See [[Validation]]. |
+| **Static-virtual lifecycle hooks** | ❌ | ✅ `IAfterLoad<TSelf>`, `IBeforeSave<TSelf>`, `IAfterSave<TSelf>` | C# 11+ pattern; no allocating delegate registration. See [[Lifecycle-Hooks]]. |
+| **File-change postponement** | ❌ | ✅ `ReloadDecision.Postpone` + `RequestPostponedReload()` | Consumer decides when to apply external changes. See [[File-Change-Monitoring]]. |
+| **File locking** | ❌ | ✅ `LockFile()` | Prevents external processes overwriting the file while the application runs. See [[File-Locking]]. |
 
 ---
 
@@ -174,7 +174,7 @@ The most impactful gaps have been closed:
 3. ✅ **Change tracking** (`HasChanges` / `HasPendingChanges`) — prerequisite for
    auto-save and efficient save-only-when-dirty behaviour.
 4. ✅ **Configurable encoding** — `WithEncoding(Encoding)` on `IniConfigBuilder`.
-5. **Async I/O** — see [[Async-Await-Benefits]].
+5. ✅ **Async I/O** — `BuildAsync`/`SaveAsync`/`ReloadAsync` on `IniConfigBuilder`/`IniConfig`. See [[Async-Support]].
 
 All other gaps are either intentionally omitted (proxy model, Dapplo.Log coupling,
 fixed postfix convention) or superseded by new Dapplo.Ini features.

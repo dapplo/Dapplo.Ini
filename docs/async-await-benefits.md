@@ -1,7 +1,8 @@
 # Benefits of async/await for Dapplo.Ini
 
-This document analyses what `async`/`await` support would bring to
-`Dapplo.Ini` and where the trade-offs lie.
+> **Note:** Async/await support is now fully implemented.
+> This document captures the pre-implementation analysis only.
+> For practical usage, see [Async-Support](wiki/Async-Support.md).
 
 ---
 
