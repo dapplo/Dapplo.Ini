@@ -451,10 +451,11 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         }
         if (m.ImplementsAfterLoadGeneric)
             extraBases.Add("Dapplo.Ini.Interfaces.IAfterLoad");
-        else if (m.HasAttributeBasedValidation && !m.ImplementsAfterLoad)
+        else if (needsValidation && !m.ImplementsAfterLoad)
         {
-            // Attribute-based validation needs to run after load even when the consumer
-            // did not explicitly implement IAfterLoad.  Add it here; the bridge is emitted below.
+            // Any form of validation needs to run after load so that errors are populated
+            // in _validationErrors immediately (e.g. for WPF settings-screen scenarios).
+            // Add IAfterLoad here; the bridge is emitted below.
             extraBases.Add("Dapplo.Ini.Interfaces.IAfterLoad");
         }
         if (m.ImplementsBeforeSaveGeneric)
@@ -511,6 +512,16 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             sb.AppendLine("            else");
             sb.AppendLine("                _validationErrors[propertyName] = errorList;");
             sb.AppendLine("            ErrorsChanged?.Invoke(this, new System.ComponentModel.DataErrorsChangedEventArgs(propertyName));");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+
+            // Emit RunAllValidations — re-validates every non-ignored property and fires
+            // ErrorsChanged for each one.  Consumers can call this after opening a
+            // settings screen (or any other UI) to ensure all validation errors are visible.
+            sb.AppendLine("        public void RunAllValidations()");
+            sb.AppendLine("        {");
+            foreach (var p in m.Properties.Where(p => !p.IsIgnored))
+                sb.AppendLine($"            RunValidation(nameof({p.Name}));");
             sb.AppendLine("        }");
             sb.AppendLine();
         }
@@ -760,13 +771,13 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
 
         if (m.ImplementsAfterLoadGeneric)
         {
-            // When attribute-based validation is also present, run it alongside the consumer hook.
-            if (m.HasAttributeBasedValidation)
+            // When any validation is also present, run it alongside the consumer hook.
+            if (needsValidation)
             {
                 sb.AppendLine("        void Dapplo.Ini.Interfaces.IAfterLoad.OnAfterLoad()");
                 sb.AppendLine("        {");
                 sb.AppendLine($"            {ifaceFqn}.OnAfterLoad(this);");
-                sb.AppendLine("            RunAllAttributeValidations();");
+                sb.AppendLine("            RunAllValidations();");
                 sb.AppendLine("        }");
             }
             else
@@ -776,15 +787,15 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             }
             sb.AppendLine();
         }
-        else if (m.HasAttributeBasedValidation && !m.ImplementsAfterLoad)
+        else if (needsValidation && !m.ImplementsAfterLoad)
         {
-            // No consumer IAfterLoad hook: emit our own bridge to run attribute validation after load.
+            // No consumer IAfterLoad hook: emit our own bridge to run all validation after load.
             sb.AppendLine("        void Dapplo.Ini.Interfaces.IAfterLoad.OnAfterLoad()");
-            sb.AppendLine("            => RunAllAttributeValidations();");
+            sb.AppendLine("            => RunAllValidations();");
             sb.AppendLine();
         }
-        // When m.ImplementsAfterLoad (non-generic) AND m.HasAttributeBasedValidation:
-        // The consumer implements OnAfterLoad() in a partial class; we expose RunAllAttributeValidations()
+        // When m.ImplementsAfterLoad (non-generic) AND needsValidation:
+        // The consumer implements OnAfterLoad() in a partial class; we expose RunAllValidations()
         // as a protected helper they can call explicitly.
 
         if (m.ImplementsBeforeSaveGeneric)
