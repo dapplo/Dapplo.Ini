@@ -1,6 +1,8 @@
 // Copyright (c) Dapplo. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
+using Dapplo.Ini.Internationalization;
+
 namespace Dapplo.Ini.Internationalization.Configuration;
 
 /// <summary>
@@ -198,6 +200,10 @@ public sealed class LanguageConfigBuilder
     /// Use it when plugins or other components need to register their own sections before
     /// loading begins.
     /// </para>
+    /// <para>
+    /// The returned <see cref="LanguageConfig"/> is immediately accessible via
+    /// <see cref="LanguageConfigRegistry.Get"/> so that plugins can discover it during phase 2.
+    /// </para>
     /// </remarks>
     /// <returns>The newly created (not yet loaded) <see cref="LanguageConfig"/>.</returns>
     public LanguageConfig Create()
@@ -210,7 +216,7 @@ public sealed class LanguageConfigBuilder
 
         var sections = _sections.Select(s => (s.Type, s.Section, s.Directory)).ToList();
 
-        return new LanguageConfig(
+        var config = new LanguageConfig(
             _basename,
             _baseLanguage!,
             _currentLanguage ?? _baseLanguage!,
@@ -218,6 +224,9 @@ public sealed class LanguageConfigBuilder
             _monitorFiles,
             _defaultDirectory,
             sections);
+
+        LanguageConfigRegistry.Register(_basename, config);
+        return config;
     }
 
     /// <summary>
