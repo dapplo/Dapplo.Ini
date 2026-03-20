@@ -97,11 +97,50 @@ public static class LanguageConfigRegistry
     }
 
     /// <summary>
+    /// Returns the single registered <see cref="LanguageConfig"/>.
+    /// This convenience overload is useful when the application registers exactly one language
+    /// configuration, which is the common case, so the caller does not need to specify the basename.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when no language configuration is registered, or when more than one is registered
+    /// (in which case use <see cref="Get(string)"/> with an explicit basename).
+    /// </exception>
+    public static LanguageConfig Get()
+    {
+        lock (_lock)
+        {
+            return _registry.Count switch
+            {
+                0 => throw new InvalidOperationException(
+                    "No language configuration has been registered. " +
+                    "Call LanguageConfigRegistry.ForFile(...).Build() during application startup."),
+                1 => _registry.Values.First(),
+                _ => throw new InvalidOperationException(
+                    $"More than one language configuration is registered ({_registry.Count}). " +
+                    "Use Get(basename) to specify which configuration to retrieve.")
+            };
+        }
+    }
+
+    /// <summary>
     /// Returns the section of type <typeparamref name="T"/> from the configuration registered for
     /// <paramref name="basename"/>.
     /// </summary>
     public static T GetSection<T>(string basename) where T : class
         => Get(basename).GetSection<T>();
+
+    /// <summary>
+    /// Returns the section of type <typeparamref name="T"/> from the single registered language
+    /// configuration.
+    /// This convenience overload is useful when the application registers exactly one language
+    /// configuration.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when no language configuration is registered, or when more than one is registered
+    /// (in which case use <see cref="GetSection{T}(string)"/> with an explicit basename).
+    /// </exception>
+    public static T GetSection<T>() where T : class
+        => Get().GetSection<T>();
 
     /// <summary>
     /// Attempts to return the <see cref="LanguageConfig"/> registered for <paramref name="basename"/>.

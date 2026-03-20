@@ -96,11 +96,48 @@ public static class IniConfigRegistry
     }
 
     /// <summary>
+    /// Returns the single registered <see cref="IniConfig"/>.
+    /// This convenience overload is useful when the application registers exactly one INI file,
+    /// which is the common case, so the caller does not need to specify the file name.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when no configuration is registered, or when more than one configuration is registered
+    /// (in which case use <see cref="Get(string)"/> with an explicit file name).
+    /// </exception>
+    public static IniConfig Get()
+    {
+        lock (_lock)
+        {
+            return _registry.Count switch
+            {
+                0 => throw new InvalidOperationException(
+                    "No INI configuration has been registered. " +
+                    "Call IniConfigRegistry.ForFile(...).Build() during application startup."),
+                1 => _registry.Values.First(),
+                _ => throw new InvalidOperationException(
+                    $"More than one INI configuration is registered ({_registry.Count}). " +
+                    "Use Get(fileName) to specify which configuration to retrieve.")
+            };
+        }
+    }
+
+    /// <summary>
     /// Returns the section of type <typeparamref name="T"/> from the configuration registered for
     /// <paramref name="fileName"/>.
     /// </summary>
     public static T GetSection<T>(string fileName) where T : IIniSection
         => Get(fileName).GetSection<T>();
+
+    /// <summary>
+    /// Returns the section of type <typeparamref name="T"/> from the single registered configuration.
+    /// This convenience overload is useful when the application registers exactly one INI file.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when no configuration is registered, or when more than one configuration is registered
+    /// (in which case use <see cref="GetSection{T}(string)"/> with an explicit file name).
+    /// </exception>
+    public static T GetSection<T>() where T : IIniSection
+        => Get().GetSection<T>();
 
     /// <summary>
     /// Attempts to return the <see cref="IniConfig"/> registered for <paramref name="fileName"/>.

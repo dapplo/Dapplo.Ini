@@ -691,4 +691,53 @@ public sealed class LanguageConfigTests : IDisposable
         var retrieved = LanguageConfigRegistry.Get("directbuild");
         Assert.Same(config, retrieved);
     }
+
+    [Fact]
+    public void LanguageConfigRegistry_Get_NoArg_SingleRegistration_ReturnsConfig()
+    {
+        var section = new MainLanguageImpl();
+        using var config = LanguageConfigRegistry.ForFile("singleapp")
+            .AddSearchPath(LangDir)
+            .WithBaseLanguage("en-US")
+            .RegisterSection<IMainLanguage>(section)
+            .Build();
+
+        var retrieved = LanguageConfigRegistry.Get();
+        Assert.Same(config, retrieved);
+    }
+
+    [Fact]
+    public void LanguageConfigRegistry_Get_NoArg_NoRegistration_Throws()
+    {
+        Assert.Throws<InvalidOperationException>(() => LanguageConfigRegistry.Get());
+    }
+
+    [Fact]
+    public void LanguageConfigRegistry_Get_NoArg_MultipleRegistrations_Throws()
+    {
+        using var config1 = LanguageConfigBuilder.ForBasename("multi1lang")
+            .AddSearchPath(LangDir)
+            .WithBaseLanguage("en-US")
+            .Build();
+        using var config2 = LanguageConfigBuilder.ForBasename("multi2lang")
+            .AddSearchPath(LangDir)
+            .WithBaseLanguage("en-US")
+            .Build();
+
+        Assert.Throws<InvalidOperationException>(() => LanguageConfigRegistry.Get());
+    }
+
+    [Fact]
+    public void LanguageConfigRegistry_GetSection_NoArg_SingleRegistration_ReturnsSection()
+    {
+        var section = new MainLanguageImpl();
+        using var config = LanguageConfigRegistry.ForFile("singlesectapp")
+            .AddSearchPath(LangDir)
+            .WithBaseLanguage("en-US")
+            .RegisterSection<IMainLanguage>(section)
+            .Build();
+
+        var retrieved = LanguageConfigRegistry.GetSection<IMainLanguage>();
+        Assert.Same(section, retrieved);
+    }
 }
