@@ -25,10 +25,11 @@ public interface IMainLanguage
 }
 
 /// <summary>
-/// Named section "core" — reads the <c>[core]</c> block from <c>testapp.{ietf}.ini</c> (no module file).
+/// Named section — no explicit name, derives to "CoreLanguage" from interface name.
+/// No ModuleName → reads the <c>[CoreLanguage]</c> block from <c>testapp.{ietf}.ini</c>.
 /// Optionally extends ILanguageSection to show it still works when present.
 /// </summary>
-[IniLanguageSection("core")]
+[IniLanguageSection]
 public interface ICoreLanguage : ILanguageSection
 {
     string CoreTitle { get; }
@@ -48,16 +49,16 @@ public interface IDictionaryLanguage : IReadOnlyDictionary<string, string>
 
 /// <summary>
 /// Plugin / module language section.
-/// SectionName = "core" (explicit), ModuleName = "core" → reads <c>[core]</c> from
-/// <c>testapp.core.{ietf}.ini</c>.
-/// Demonstrates the separate file selection (<see cref="IniLanguageSectionAttribute.ModuleName"/>)
-/// and section routing (<see cref="IniLanguageSectionAttribute.SectionName"/>) concerns.
+/// No explicit SectionName → derives to "PluginLanguage" from interface name.
+/// ModuleName = "core" → reads <c>[PluginLanguage]</c> from <c>testapp.core.{ietf}.ini</c>.
+/// Demonstrates separate file selection (<see cref="IniLanguageSectionAttribute.ModuleName"/>)
+/// and section routing (<see cref="IniLanguageSectionAttribute.SectionName"/>).
 /// </summary>
-[IniLanguageSection("core", ModuleName = "core")]
+[IniLanguageSection(ModuleName = "core")]
 public interface IPluginLanguage
 {
-    string CoreTitle { get; }
-    string CoreStatus { get; }
+    string PluginTitle { get; }
+    string PluginStatus { get; }
 }
 
 

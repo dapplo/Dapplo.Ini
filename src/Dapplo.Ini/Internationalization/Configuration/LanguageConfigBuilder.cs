@@ -20,9 +20,9 @@ namespace Dapplo.Ini.Internationalization.Configuration;
 ///     All sections are registered on the builder and the config is built and loaded in one step:
 ///     <code>
 ///     using var config = LanguageConfigBuilder.ForBasename("myapp")
-///         .WithDirectory("/path/to/lang")
+///         .AddSearchPath("/path/to/lang")
 ///         .WithBaseLanguage("en-US")
-///         .AddSection&lt;IMainLanguage&gt;(new MainLanguageImpl())
+///         .RegisterSection&lt;IMainLanguage&gt;(new MainLanguageImpl())
 ///         .Build();
 ///     </code>
 ///     </description>
@@ -35,13 +35,13 @@ namespace Dapplo.Ini.Internationalization.Configuration;
 ///     <code>
 ///     // Host (Phase 1) — create without loading:
 ///     var config = LanguageConfigBuilder.ForBasename("myapp")
-///         .WithDirectory("/path/to/lang")
+///         .AddSearchPath("/path/to/lang")
 ///         .WithBaseLanguage("en-US")
-///         .AddSection&lt;IMainLanguage&gt;(new MainLanguageImpl())
+///         .RegisterSection&lt;IMainLanguage&gt;(new MainLanguageImpl())
 ///         .Create();
 ///
 ///     // Plugin (Phase 2) — register own section:
-///     config.AddSection&lt;IPluginLanguage&gt;(new PluginLanguageImpl(), "/path/to/plugin/lang");
+///     config.RegisterSection&lt;IPluginLanguage&gt;(new PluginLanguageImpl(), "/path/to/plugin/lang");
 ///
 ///     // Host (Phase 3) — load all sections at once:
 ///     config.Load();
@@ -89,15 +89,16 @@ public sealed class LanguageConfigBuilder
     // ── Configuration ─────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Sets the default directory that is searched for language pack files.
-    /// Individual sections can override this via <see cref="AddSection{T}(T, string)"/>.
+    /// Adds a search path for language pack files.
+    /// Individual sections can override this via <see cref="RegisterSection{T}(T, string)"/>.
     /// </summary>
-    public LanguageConfigBuilder WithDirectory(string directory)
+    /// <param name="path">The directory path to search for language pack files.</param>
+    public LanguageConfigBuilder AddSearchPath(string path)
     {
-        if (string.IsNullOrWhiteSpace(directory))
-            throw new ArgumentException("Directory must not be empty.", nameof(directory));
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("Search path must not be empty.", nameof(path));
 
-        _defaultDirectory = directory;
+        _defaultDirectory = path;
         return this;
     }
 
@@ -165,14 +166,14 @@ public sealed class LanguageConfigBuilder
     /// </summary>
     /// <typeparam name="T">The language section interface or class type.</typeparam>
     /// <param name="section">The generated concrete section instance.</param>
-    /// <param name="directory">
-    /// Optional override directory for this section's language files.
-    /// When <c>null</c> the default directory set by <see cref="WithDirectory"/> is used.
+    /// <param name="path">
+    /// Optional override search path for this section's language files.
+    /// When <c>null</c> the default path set by <see cref="AddSearchPath"/> is used.
     /// </param>
     /// <exception cref="ArgumentException">
     /// Thrown when <paramref name="section"/> does not derive from <see cref="LanguageSectionBase"/>.
     /// </exception>
-    public LanguageConfigBuilder AddSection<T>(T section, string? directory = null)
+    public LanguageConfigBuilder RegisterSection<T>(T section, string? path = null)
         where T : class
     {
         if (section is null) throw new ArgumentNullException(nameof(section));
@@ -181,7 +182,7 @@ public sealed class LanguageConfigBuilder
                 $"Section must be a generated language section (must derive from {nameof(LanguageSectionBase)}).",
                 nameof(section));
 
-        _sections.Add((typeof(T), baseSection, directory));
+        _sections.Add((typeof(T), baseSection, path));
         return this;
     }
 
@@ -239,7 +240,6 @@ public sealed class LanguageConfigBuilder
     public async Task<LanguageConfig> BuildAsync(CancellationToken cancellationToken = default)
     {
         var config = Create();
-        await config.LoadAsync(cancellationToken).ConfigureAwait(false);
-        return config;
+        return await config.LoadAsync(cancellationToken).ConfigureAwait(false);
     }
 }

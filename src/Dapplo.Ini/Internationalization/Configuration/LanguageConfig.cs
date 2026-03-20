@@ -42,7 +42,7 @@ namespace Dapplo.Ini.Internationalization.Configuration;
 /// <para>
 /// Supports a two-phase registration pattern for plugin/addon scenarios:
 /// use <see cref="LanguageConfigBuilder.Create()"/> to create the config without loading,
-/// let plugins call <see cref="AddSection{T}"/> to register their own sections,
+/// let plugins call <see cref="RegisterSection{T}"/> to register their own sections,
 /// and then call <see cref="Load"/> (or <see cref="LoadAsync"/>) to load all sections at once.
 /// </para>
 /// </remarks>
@@ -128,15 +128,15 @@ public sealed class LanguageConfig : IDisposable
     /// </remarks>
     /// <typeparam name="T">The language section interface or class type.</typeparam>
     /// <param name="section">The generated concrete section instance.</param>
-    /// <param name="directory">
-    /// Optional directory for this section's language files.
-    /// When <c>null</c> the default directory of this <see cref="LanguageConfig"/> is used.
+    /// <param name="path">
+    /// Optional search path for this section's language files.
+    /// When <c>null</c> the default search path of this <see cref="LanguageConfig"/> is used.
     /// </param>
     /// <returns>The <paramref name="section"/> instance (for fluent chaining).</returns>
     /// <exception cref="ArgumentException">
     /// Thrown when <paramref name="section"/> is not a generated language section.
     /// </exception>
-    public T AddSection<T>(T section, string? directory = null) where T : class
+    public T RegisterSection<T>(T section, string? path = null) where T : class
     {
         if (section is null) throw new ArgumentNullException(nameof(section));
         if (section is not LanguageSectionBase baseSection)
@@ -144,7 +144,7 @@ public sealed class LanguageConfig : IDisposable
                 $"Section must be a generated language section (must derive from {nameof(LanguageSectionBase)}).",
                 nameof(section));
 
-        _sections[typeof(T)] = (baseSection, directory ?? _defaultDirectory ?? string.Empty);
+        _sections[typeof(T)] = (baseSection, path ?? _defaultDirectory ?? string.Empty);
         return section;
     }
 
@@ -170,13 +170,16 @@ public sealed class LanguageConfig : IDisposable
     /// Automatically called by <see cref="LanguageConfigBuilder.BuildAsync"/>.
     /// Call this explicitly when using <see cref="LanguageConfigBuilder.Create()"/> for deferred loading.
     /// </summary>
-    public async Task LoadAsync(CancellationToken cancellationToken = default)
+    /// <returns>This <see cref="LanguageConfig"/> instance (for fluent chaining).</returns>
+    public async Task<LanguageConfig> LoadAsync(CancellationToken cancellationToken = default)
     {
         ValidateSectionDirectories();
         await LoadLanguageAsync(_currentLanguage, cancellationToken).ConfigureAwait(false);
 
         if (_monitorFiles)
             StartMonitoring();
+
+        return this;
     }
 
     /// <summary>
@@ -246,8 +249,8 @@ public sealed class LanguageConfig : IDisposable
         {
             if (string.IsNullOrEmpty(kvp.Value.Directory))
                 throw new InvalidOperationException(
-                    $"No directory configured for language section '{kvp.Key.Name}'. " +
-                    "Specify a directory via AddSection() or LanguageConfigBuilder.WithDirectory().");
+                    $"No search path configured for language section '{kvp.Key.Name}'. " +
+                    "Specify a path via RegisterSection() or LanguageConfigBuilder.AddSearchPath().");
         }
     }
 
