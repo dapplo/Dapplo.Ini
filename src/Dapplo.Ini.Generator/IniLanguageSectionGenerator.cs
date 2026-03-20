@@ -79,16 +79,16 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
             ? ""
             : symbol.ContainingNamespace.ToDisplayString();
 
-        // Read optional ModuleName from attribute constructor argument
+        // Read optional SectionName from attribute constructor argument
         string? moduleName = null;
         if (attr.ConstructorArguments.Length > 0 &&
             attr.ConstructorArguments[0].Value is string mn &&
             !string.IsNullOrEmpty(mn))
             moduleName = mn;
 
-        // Also check named argument (in case the user wrote [IniLanguageSection(ModuleName = "x")])
+        // Also check named argument (in case the user wrote [IniLanguageSection(SectionName = "x")])
         foreach (var na in attr.NamedArguments)
-            if (na.Key == "ModuleName" && na.Value.Value is string mnNamed)
+            if ((na.Key == "SectionName" || na.Key == "ModuleName") && na.Value.Value is string mnNamed)
                 moduleName = mnNamed;
 
         // Check whether the interface extends IReadOnlyDictionary<string, string>
@@ -189,11 +189,11 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
         sb.AppendLine($"    public sealed partial class {m.GeneratedClassName} : {baseClasses}");
         sb.AppendLine("    {");
 
-        // ModuleName override
+        // ModuleName override → renamed to SectionName
         var moduleExpr = m.ModuleName != null
             ? $"\"{EscapeString(m.ModuleName)}\""
             : "null";
-        sb.AppendLine($"        public override string? ModuleName => {moduleExpr};");
+        sb.AppendLine($"        public override string? SectionName => {moduleExpr};");
         sb.AppendLine();
 
         // Generate one property per string property declared on the interface

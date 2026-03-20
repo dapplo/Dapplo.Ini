@@ -4,15 +4,18 @@
 namespace Dapplo.Ini.Internationalization.Interfaces;
 
 /// <summary>
-/// Marker interface for language sections generated from interfaces annotated with
+/// Optional marker interface for language sections generated from interfaces annotated with
 /// <see cref="Attributes.IniLanguageSectionAttribute"/>.
+/// Consumer interfaces are not required to extend this.
 /// </summary>
 public interface ILanguageSection
 {
     /// <summary>
-    /// Optional module name used to locate the correct language pack file.
-    /// Corresponds to <see cref="Attributes.IniLanguageSectionAttribute.ModuleName"/>.
-    /// <c>null</c> when no module name was specified.
+    /// Optional section name used for file naming and section routing.
+    /// Corresponds to <see cref="Attributes.IniLanguageSectionAttribute.SectionName"/>.
+    /// <c>null</c> when no section name was specified.
     /// </summary>
-    string? ModuleName { get; }
+    string? SectionName { get; }
 }
+
+

@@ -7,21 +7,30 @@ using System.Text;
 namespace Dapplo.Ini.Internationalization.Configuration;
 
 /// <summary>
-/// Manages one or more language sections loaded from <c>.ini</c> language packs.
+/// Manages one or more language sections loaded from full <c>.ini</c> language packs.
 /// </summary>
 /// <remarks>
-/// Language files follow the naming convention:
-/// <list type="bullet">
-///   <item><c>{basename}.{ietf}.ini</c> — for sections without a module name.</item>
-///   <item><c>{basename}.{moduleName}.{ietf}.ini</c> — for sections with a module name.</item>
-/// </list>
-/// Values support escape sequences: <c>\n</c> → newline, <c>\t</c> → tab, <c>\\</c> → backslash.
-/// Keys are normalized: trimmed, underscores and dashes removed, lowercased.
 /// <para>
-/// Supports a two-phase registration pattern for plugin scenarios:
-/// use <see cref="LanguageConfigBuilder.Prepare"/> to create the config without loading,
-/// then let plugins call <see cref="AddSection{T}"/> to register their own sections,
-/// and finally call <see cref="Load"/> (or <see cref="LoadAsync"/>) to load all sections at once.
+/// Language files are standard <c>.ini</c> files and may contain <c>[SectionName]</c> headers.
+/// The file naming convention is:
+/// </para>
+/// <list type="bullet">
+///   <item><c>{basename}.{ietf}.ini</c> — for sections without a section name.</item>
+///   <item>
+///     <c>{basename}.{sectionName}.{ietf}.ini</c> — optional dedicated file for a named section;
+///     when this file is missing the loader reads the <c>[sectionName]</c> section from the main
+///     <c>{basename}.{ietf}.ini</c> file instead.
+///   </item>
+/// </list>
+/// <para>
+/// Values support escape sequences: <c>\n</c> \u2192 newline, <c>\t</c> \u2192 tab, <c>\\</c> \u2192 backslash.
+/// Keys are normalized: trimmed, underscores and dashes removed, lowercased.
+/// </para>
+/// <para>
+/// Supports a two-phase registration pattern for plugin/addon scenarios:
+/// use <see cref="LanguageConfigBuilder.Create()"/> to create the config without loading,
+/// let plugins call <see cref="AddSection{T}"/> to register their own sections,
+/// and then call <see cref="Load"/> (or <see cref="LoadAsync"/>) to load all sections at once.
 /// </para>
 /// </remarks>
 public sealed class LanguageConfig : IDisposable
@@ -34,7 +43,7 @@ public sealed class LanguageConfig : IDisposable
     // Default directory used for sections that don't specify their own.
     private readonly string? _defaultDirectory;
 
-    // Maps section type → (section instance, directory for its language files)
+    // Maps section type \u2192 (section instance, directory for its language files)
     private readonly Dictionary<Type, (LanguageSectionBase Section, string Directory)> _sections = new();
 
     // File watchers keyed by directory
@@ -53,7 +62,7 @@ public sealed class LanguageConfig : IDisposable
     /// </summary>
     public event EventHandler? LanguageChanged;
 
-    // ── Constructor (internal — use LanguageConfigBuilder) ────────────────────
+    // \u2500\u2500 Constructor (internal \u2014 use LanguageConfigBuilder) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
     internal LanguageConfig(
         string basename,
@@ -75,7 +84,7 @@ public sealed class LanguageConfig : IDisposable
             _sections[type] = (section, dir ?? defaultDirectory ?? string.Empty);
     }
 
-    // ── Public API ────────────────────────────────────────────────────────────
+    // \u2500\u2500 Public API \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
     /// <summary>The IETF language tag that is currently active.</summary>
     public string CurrentLanguage => _currentLanguage;
@@ -101,10 +110,10 @@ public sealed class LanguageConfig : IDisposable
     /// </summary>
     /// <remarks>
     /// Use this in plugin/addon scenarios where the host creates the <see cref="LanguageConfig"/>
-    /// via <see cref="LanguageConfigBuilder.Prepare"/> and plugins then register their own sections
+    /// via <see cref="LanguageConfigBuilder.Create()"/> and plugins then register their own sections
     /// before the host calls <see cref="Load"/> (or <see cref="LoadAsync"/>).
     /// </remarks>
-    /// <typeparam name="T">The language section interface type.</typeparam>
+    /// <typeparam name="T">The language section interface or class type.</typeparam>
     /// <param name="section">The generated concrete section instance.</param>
     /// <param name="directory">
     /// Optional directory for this section's language files.
@@ -112,8 +121,7 @@ public sealed class LanguageConfig : IDisposable
     /// </param>
     /// <returns>The <paramref name="section"/> instance (for fluent chaining).</returns>
     /// <exception cref="ArgumentException">
-    /// Thrown when <paramref name="section"/> is not a generated language section
-    /// (i.e. does not derive from <see cref="LanguageSectionBase"/>).
+    /// Thrown when <paramref name="section"/> is not a generated language section.
     /// </exception>
     public T AddSection<T>(T section, string? directory = null) where T : class
     {
@@ -130,7 +138,7 @@ public sealed class LanguageConfig : IDisposable
     /// <summary>
     /// Loads all language sections using the current language.
     /// Automatically called by <see cref="LanguageConfigBuilder.Build"/>.
-    /// Call this explicitly when using <see cref="LanguageConfigBuilder.Prepare"/> for deferred loading.
+    /// Call this explicitly when using <see cref="LanguageConfigBuilder.Create()"/> for deferred loading.
     /// </summary>
     /// <exception cref="InvalidOperationException">
     /// Thrown when a registered section has no directory configured.
@@ -147,7 +155,7 @@ public sealed class LanguageConfig : IDisposable
     /// <summary>
     /// Asynchronously loads all language sections using the current language.
     /// Automatically called by <see cref="LanguageConfigBuilder.BuildAsync"/>.
-    /// Call this explicitly when using <see cref="LanguageConfigBuilder.Prepare"/> for deferred loading.
+    /// Call this explicitly when using <see cref="LanguageConfigBuilder.Create()"/> for deferred loading.
     /// </summary>
     public async Task LoadAsync(CancellationToken cancellationToken = default)
     {
@@ -193,11 +201,6 @@ public sealed class LanguageConfig : IDisposable
     /// Each entry contains the IETF language tag and the native name of the language
     /// according to <see cref="CultureInfo.NativeName"/>.
     /// </summary>
-    /// <returns>
-    /// Distinct IETF tags (as <c>(Ietf, NativeName)</c> tuples) discovered from any of the
-    /// registered section directories.  Languages that cannot be parsed as a valid
-    /// <see cref="CultureInfo"/> are silently skipped.
-    /// </returns>
     public IReadOnlyList<(string Ietf, string NativeName)> GetAvailableLanguages()
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -222,7 +225,7 @@ public sealed class LanguageConfig : IDisposable
         return result;
     }
 
-    // ── Section directory validation ──────────────────────────────────────────
+    // \u2500\u2500 Section directory validation \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
     private void ValidateSectionDirectories()
     {
@@ -235,7 +238,7 @@ public sealed class LanguageConfig : IDisposable
         }
     }
 
-    // ── Language loading ──────────────────────────────────────────────────────
+    // \u2500\u2500 Language loading \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
     private void LoadLanguage(string language)
     {
@@ -248,18 +251,18 @@ public sealed class LanguageConfig : IDisposable
 
             section.ClearTranslations();
 
-            // 1. Load fallback/base language first — ensures missing keys fall back gracefully
-            LoadLanguageFileIntoSection(section, dir, fallback);
+            // 1. Load fallback/base language first
+            LoadIetfIntoSection(section, dir, fallback);
 
             if (!string.Equals(language, fallback, StringComparison.OrdinalIgnoreCase))
             {
-                // 2. Progressive fallback: try the parent culture (e.g. "fr" before "fr-FR")
+                // 2. Progressive fallback: parent culture (e.g. "fr" before "fr-FR")
                 var hyphen = language.IndexOf('-');
                 if (hyphen > 0)
-                    LoadLanguageFileIntoSection(section, dir, language.Substring(0, hyphen));
+                    LoadIetfIntoSection(section, dir, language.Substring(0, hyphen));
 
-                // 3. Load the most-specific language file (overrides all previous)
-                LoadLanguageFileIntoSection(section, dir, language);
+                // 3. Most-specific language (overrides all previous)
+                LoadIetfIntoSection(section, dir, language);
             }
         }
     }
@@ -275,62 +278,95 @@ public sealed class LanguageConfig : IDisposable
 
             section.ClearTranslations();
 
-            await LoadLanguageFileIntoSectionAsync(section, dir, fallback, cancellationToken).ConfigureAwait(false);
+            await LoadIetfIntoSectionAsync(section, dir, fallback, cancellationToken).ConfigureAwait(false);
 
             if (!string.Equals(language, fallback, StringComparison.OrdinalIgnoreCase))
             {
                 var hyphen = language.IndexOf('-');
                 if (hyphen > 0)
-                    await LoadLanguageFileIntoSectionAsync(section, dir, language.Substring(0, hyphen), cancellationToken).ConfigureAwait(false);
+                    await LoadIetfIntoSectionAsync(section, dir, language.Substring(0, hyphen), cancellationToken).ConfigureAwait(false);
 
-                await LoadLanguageFileIntoSectionAsync(section, dir, language, cancellationToken).ConfigureAwait(false);
+                await LoadIetfIntoSectionAsync(section, dir, language, cancellationToken).ConfigureAwait(false);
             }
         }
     }
 
-    private void LoadLanguageFileIntoSection(LanguageSectionBase section, string directory, string ietf)
+    /// <summary>
+    /// Loads translations for one IETF tag into a section.
+    /// When <see cref="LanguageSectionBase.SectionName"/> is non-null:
+    ///   (1) tries the dedicated file <c>{basename}.{sectionName}.{ietf}.ini</c> (all keys),
+    ///   (2) falls back to the main file with a <c>[sectionName]</c> section filter.
+    /// When <see cref="LanguageSectionBase.SectionName"/> is null:
+    ///   reads all keys from <c>{basename}.{ietf}.ini</c>.
+    /// </summary>
+    private void LoadIetfIntoSection(LanguageSectionBase section, string directory, string ietf)
     {
-        var filePath = ResolveLanguageFilePath(directory, section.ModuleName, ietf);
-        if (filePath == null) return;
-
-        var content = File.ReadAllText(filePath, Encoding.UTF8);
-        ParseAndApply(section, content);
+        foreach (var (filePath, sectionFilter) in ResolveLanguageFiles(directory, section.SectionName, ietf))
+        {
+            var content = File.ReadAllText(filePath, Encoding.UTF8);
+            ParseAndApply(section, content, sectionFilter);
+        }
     }
 
-    private async Task LoadLanguageFileIntoSectionAsync(
+    private async Task LoadIetfIntoSectionAsync(
         LanguageSectionBase section, string directory, string ietf, CancellationToken cancellationToken)
     {
-        var filePath = ResolveLanguageFilePath(directory, section.ModuleName, ietf);
-        if (filePath == null) return;
-
-        string content;
+        foreach (var (filePath, sectionFilter) in ResolveLanguageFiles(directory, section.SectionName, ietf))
+        {
+            string content;
 #if NET
-        content = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
+            content = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
 #else
-        using var reader = new StreamReader(filePath, Encoding.UTF8);
-        content = await reader.ReadToEndAsync().ConfigureAwait(false);
+            using var reader = new StreamReader(filePath, Encoding.UTF8);
+            content = await reader.ReadToEndAsync().ConfigureAwait(false);
 #endif
-        ParseAndApply(section, content);
-    }
-
-    private string? ResolveLanguageFilePath(string directory, string? moduleName, string ietf)
-    {
-        var fileName = string.IsNullOrEmpty(moduleName)
-            ? $"{_basename}.{ietf}.ini"
-            : $"{_basename}.{moduleName}.{ietf}.ini";
-
-        var path = Path.Combine(directory, fileName);
-        return File.Exists(path) ? path : null;
+            ParseAndApply(section, content, sectionFilter);
+        }
     }
 
     /// <summary>
-    /// Parses <paramref name="content"/> as a flat key=value language file and applies
-    /// each entry to <paramref name="section"/>.
-    /// Sections within the file (e.g. <c>[SectionName]</c>) are ignored for key routing —
-    /// all entries are loaded regardless of which section they appear in.
+    /// Resolves the file(s) and optional section filter for one IETF tag.
     /// </summary>
-    private static void ParseAndApply(LanguageSectionBase section, string content)
+    private IEnumerable<(string FilePath, string? SectionFilter)> ResolveLanguageFiles(
+        string directory, string? sectionName, string ietf)
     {
+        if (!string.IsNullOrEmpty(sectionName))
+        {
+            // Try dedicated file first (no section filter needed).
+            var dedicatedFile = Path.Combine(directory, $"{_basename}.{sectionName}.{ietf}.ini");
+            if (File.Exists(dedicatedFile))
+            {
+                yield return (dedicatedFile, null);
+                yield break;
+            }
+
+            // Fall back to main file, reading only [sectionName] block.
+            var mainFile = Path.Combine(directory, $"{_basename}.{ietf}.ini");
+            if (File.Exists(mainFile))
+                yield return (mainFile, sectionName);
+        }
+        else
+        {
+            // No section name: load main file, all keys.
+            var mainFile = Path.Combine(directory, $"{_basename}.{ietf}.ini");
+            if (File.Exists(mainFile))
+                yield return (mainFile, null);
+        }
+    }
+
+    /// <summary>
+    /// Parses a full <c>.ini</c> file and applies matching key=value entries to the section.
+    /// </summary>
+    /// <param name="section">Target section.</param>
+    /// <param name="content">Raw file content.</param>
+    /// <param name="sectionFilter">
+    /// When non-null, only keys inside the matching <c>[sectionFilter]</c> block are read.
+    /// When null, all keys are read (section headers act as no-ops).
+    /// </param>
+    private static void ParseAndApply(LanguageSectionBase section, string content, string? sectionFilter = null)
+    {
+        bool inScope = sectionFilter == null;
+
         var span = content.AsSpan();
         while (!span.IsEmpty)
         {
@@ -338,18 +374,28 @@ public sealed class LanguageConfig : IDisposable
             if (line.IsEmpty) continue;
 
             var first = line[0];
-            // Skip comments and section headers — all entries go into a flat dictionary
-            if (first == ';' || first == '#' || first == '[') continue;
+
+            if (first == ';' || first == '#') continue;
+
+            if (first == '[')
+            {
+                var closeIdx = line.IndexOf(']');
+                if (closeIdx > 1)
+                {
+                    var header = line.Slice(1, closeIdx - 1).Trim().ToString();
+                    inScope = sectionFilter == null
+                        || string.Equals(header, sectionFilter, StringComparison.OrdinalIgnoreCase);
+                }
+                continue;
+            }
+
+            if (!inScope) continue;
 
             var eq = line.IndexOf('=');
             if (eq <= 0) continue;
 
-            // Key: trim, remove underscores and dashes, lowercase
             var rawKey = line.Slice(0, eq).TrimEnd().ToString();
             var normalizedKey = LanguageSectionBase.NormalizeKey(rawKey);
-
-            // Value: everything after the first '=' is taken as-is (no leading trim — trimming
-            // was intentionally excluded per spec to preserve leading spaces in translations)
             var rawValue = line.Slice(eq + 1).ToString();
             var value = UnescapeValue(rawValue);
 
@@ -379,28 +425,19 @@ public sealed class LanguageConfig : IDisposable
         return sb.ToString();
     }
 
-    // ── IETF extraction helpers ───────────────────────────────────────────────
+    // \u2500\u2500 IETF extraction helpers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
-    /// <summary>
-    /// Extracts the IETF language tag from a language pack file path.
-    /// Supports both <c>{basename}.{ietf}.ini</c> and <c>{basename}.{module}.{ietf}.ini</c>.
-    /// Returns <c>null</c> when the file name does not match the expected pattern.
-    /// </summary>
     private string? ExtractIetfFromFileName(string filePath)
     {
-        var fileName = Path.GetFileNameWithoutExtension(filePath); // strips ".ini"
+        var fileName = Path.GetFileNameWithoutExtension(filePath);
         if (fileName == null) return null;
 
-        // File must start with the basename (case-insensitive)
         if (!fileName.StartsWith(_basename + ".", StringComparison.OrdinalIgnoreCase))
             return null;
 
-        // Remainder after "{basename}."
         var remainder = fileName.Substring(_basename.Length + 1);
         if (string.IsNullOrEmpty(remainder)) return null;
 
-        // Could be "{ietf}" or "{module}.{ietf}"
-        // The last dot-separated segment is always the IETF tag.
         var dotIdx = remainder.LastIndexOf('.');
         return dotIdx >= 0 ? remainder.Substring(dotIdx + 1) : remainder;
     }
@@ -419,7 +456,7 @@ public sealed class LanguageConfig : IDisposable
         }
     }
 
-    // ── File monitoring ───────────────────────────────────────────────────────
+    // \u2500\u2500 File monitoring \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
     private void StartMonitoring()
     {
@@ -456,7 +493,7 @@ public sealed class LanguageConfig : IDisposable
         LanguageChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    // ── Line reader ───────────────────────────────────────────────────────────
+    // \u2500\u2500 Line reader \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
     private static ReadOnlySpan<char> ReadLine(ref ReadOnlySpan<char> remaining)
     {
@@ -476,7 +513,7 @@ public sealed class LanguageConfig : IDisposable
         return result;
     }
 
-    // ── IDisposable ───────────────────────────────────────────────────────────
+    // \u2500\u2500 IDisposable \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
     /// <inheritdoc/>
     public void Dispose()

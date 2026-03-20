@@ -350,16 +350,16 @@ public sealed class LanguageConfigTests
                 .Build());
     }
 
-    // ── ModuleName ────────────────────────────────────────────────────────────
+    // ── SectionName ────────────────────────────────────────────────────────────
 
     [Fact]
-    public void ModuleName_ReflectsAttributeValue()
+    public void SectionName_ReflectsAttributeValue()
     {
         var main = new MainLanguageImpl();
         var core = new CoreLanguageImpl();
 
-        Assert.Null(main.ModuleName);
-        Assert.Equal("core", core.ModuleName);
+        Assert.Null(main.SectionName);
+        Assert.Equal("core", core.SectionName);
     }
 
     // ── ILanguageSection is optional ──────────────────────────────────────────
@@ -378,19 +378,92 @@ public sealed class LanguageConfigTests
         Assert.Equal("Welcome to the application!", section.WelcomeMessage);
     }
 
-    // ── Deferred / plugin loading (Prepare + AddSection + Load) ──────────────
+    // ── ForBasename() factory aligned with IniConfigBuilder.ForFile() ─────────
 
     [Fact]
-    public void Prepare_ThenPluginAddSection_ThenLoad_LoadsAllSections()
+    public void ForBasename_CreatesBuilder()
     {
-        var main = new MainLanguageImpl();
+        var section = new MainLanguageImpl();
+        using var config = LanguageConfigBuilder.ForBasename("testapp")
+            .WithDirectory(LangDir)
+            .WithBaseLanguage("en-US")
+            .AddSection<IMainLanguage>(section)
+            .Build();
 
-        // Phase 1: host creates config without loading
-        var config = LanguageConfigBuilder.Create("testapp")
+        Assert.Equal("Welcome to the application!", section.WelcomeMessage);
+    }
+
+    // ── Section in main file (module keys inside [sectionName] block) ─────────
+
+    [Fact]
+    public void CoreSectionInMainFile_LoadsKeysFromSection()
+    {
+        // mergedapp.en-US.ini has WelcomeMessage + [core] section.
+        // No dedicated mergedapp.core.en-US.ini exists.
+        // ICoreLanguage should fall back to reading the [core] block in the main file.
+        var main = new MainLanguageImpl();
+        var core = new CoreLanguageImpl();
+
+        using var config = LanguageConfigBuilder.ForBasename("mergedapp")
             .WithDirectory(LangDir)
             .WithBaseLanguage("en-US")
             .AddSection<IMainLanguage>(main)
-            .Prepare();
+            .AddSection<ICoreLanguage>(core)
+            .Build();
+
+        Assert.Equal("Welcome (merged)", main.WelcomeMessage);
+        Assert.Equal("Core Module (merged)", core.CoreTitle);
+        Assert.Equal("Ready (merged)", core.CoreStatus);
+    }
+
+    [Fact]
+    public void MainFileWithSection_MainSectionReadsAllKeys()
+    {
+        // When SectionName is null (IMainLanguage), all keys are read from the file
+        // including those outside [section] blocks.
+        var main = new MainLanguageImpl();
+
+        using var config = LanguageConfigBuilder.ForBasename("mergedapp")
+            .WithDirectory(LangDir)
+            .WithBaseLanguage("en-US")
+            .AddSection<IMainLanguage>(main)
+            .Build();
+
+        Assert.Equal("Welcome (merged)", main.WelcomeMessage);
+        Assert.Equal("Error (merged)", main.ErrorTitle);
+    }
+
+    [Fact]
+    public void DedicatedFileHasPrecedenceOverSectionInMainFile()
+    {
+        // testapp has a dedicated testapp.core.en-US.ini file.
+        // That file should be used in preference to any [core] section in testapp.en-US.ini.
+        var core = new CoreLanguageImpl();
+
+        using var config = LanguageConfigBuilder.Create("testapp")
+            .WithDirectory(LangDir)
+            .WithBaseLanguage("en-US")
+            .AddSection<ICoreLanguage>(core)
+            .Build();
+
+        // Values from testapp.core.en-US.ini (not from a hypothetical [core] in testapp.en-US.ini)
+        Assert.Equal("Core Module", core.CoreTitle);
+        Assert.Equal("Ready", core.CoreStatus);
+    }
+
+    // ── Deferred / plugin loading (Create + AddSection + Load) ───────────────
+
+    [Fact]
+    public void Create_ThenPluginAddSection_ThenLoad_LoadsAllSections()
+    {
+        var main = new MainLanguageImpl();
+
+        // Phase 1: host creates config without loading (aligned with IniConfigBuilder.Create)
+        var config = LanguageConfigBuilder.ForBasename("testapp")
+            .WithDirectory(LangDir)
+            .WithBaseLanguage("en-US")
+            .AddSection<IMainLanguage>(main)
+            .Create();
 
         // Phase 2: plugin registers its own section
         var plugin = new PluginLanguageImpl();
@@ -406,14 +479,14 @@ public sealed class LanguageConfigTests
     }
 
     [Fact]
-    public void Prepare_WithoutLoad_SectionsHaveNoTranslations()
+    public void Create_WithoutLoad_SectionsHaveNoTranslations()
     {
         var main = new MainLanguageImpl();
         var config = LanguageConfigBuilder.Create("testapp")
             .WithDirectory(LangDir)
             .WithBaseLanguage("en-US")
             .AddSection<IMainLanguage>(main)
-            .Prepare();
+            .Create();
 
         // No Load() called — translations must not be present yet
         Assert.Equal("###WelcomeMessage###", main.WelcomeMessage);
@@ -427,7 +500,7 @@ public sealed class LanguageConfigTests
         var config = LanguageConfigBuilder.Create("testapp")
             .WithDirectory(LangDir)
             .WithBaseLanguage("en-US")
-            .Prepare();
+            .Create();
 
         var plugin = new PluginLanguageImpl();
         config.AddSection<IPluginLanguage>(plugin, LangDir);
@@ -445,10 +518,9 @@ public sealed class LanguageConfigTests
         // AddSection with no directory and no default directory → Load() should throw
         var config = LanguageConfigBuilder.Create("testapp")
             .WithBaseLanguage("en-US")
-            .Prepare();
+            .Create();
 
         var plugin = new PluginLanguageImpl();
-        // Add without a directory (empty string stored internally)
         config.AddSection<IPluginLanguage>(plugin);
 
         Assert.Throws<InvalidOperationException>(() => config.Load());

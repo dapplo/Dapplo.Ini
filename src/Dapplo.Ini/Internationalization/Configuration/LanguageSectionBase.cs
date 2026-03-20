@@ -21,8 +21,22 @@ public abstract class LanguageSectionBase : ILanguageSection, IReadOnlyDictionar
 
     // ── ILanguageSection ──────────────────────────────────────────────────────
 
-    /// <inheritdoc/>
-    public abstract string? ModuleName { get; }
+    /// <summary>
+    /// Optional section name used for file naming and section routing within a
+    /// full <c>.ini</c> file.
+    /// <list type="bullet">
+    ///   <item>Dedicated file: <c>{basename}.{sectionName}.{ietf}.ini</c></item>
+    ///   <item>Fallback: <c>[sectionName]</c> section in <c>{basename}.{ietf}.ini</c></item>
+    /// </list>
+    /// Returns <c>null</c> when the section reads from the main file (no section filter).
+    /// </summary>
+    public abstract string? SectionName { get; }
+
+    /// <summary>
+    /// Obsolete: use <see cref="SectionName"/> instead.
+    /// </summary>
+    [Obsolete("Use SectionName instead.")]
+    public string? ModuleName => SectionName;
 
     // ── Internal helpers used by LanguageConfig ───────────────────────────────
 
@@ -102,3 +116,4 @@ public abstract class LanguageSectionBase : ILanguageSection, IReadOnlyDictionar
     System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
         => _translations.GetEnumerator();
 }
+

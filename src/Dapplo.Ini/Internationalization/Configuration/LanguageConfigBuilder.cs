@@ -7,6 +7,11 @@ namespace Dapplo.Ini.Internationalization.Configuration;
 /// Fluent builder that configures a <see cref="LanguageConfig"/>.
 /// </summary>
 /// <remarks>
+/// <para>
+/// The API is aligned with <see cref="IniConfigBuilder"/>:
+/// <see cref="Create()"/> creates without loading (deferred, for plugin scenarios),
+/// <see cref="Build"/> creates and loads immediately.
+/// </para>
 /// Two usage patterns are supported:
 /// <list type="number">
 ///   <item>
@@ -14,7 +19,7 @@ namespace Dapplo.Ini.Internationalization.Configuration;
 ///     <description>
 ///     All sections are registered on the builder and the config is built and loaded in one step:
 ///     <code>
-///     using var config = LanguageConfigBuilder.Create("myapp")
+///     using var config = LanguageConfigBuilder.ForBasename("myapp")
 ///         .WithDirectory("/path/to/lang")
 ///         .WithBaseLanguage("en-US")
 ///         .AddSection&lt;IMainLanguage&gt;(new MainLanguageImpl())
@@ -29,11 +34,11 @@ namespace Dapplo.Ini.Internationalization.Configuration;
 ///     and then the host triggers loading:
 ///     <code>
 ///     // Host (Phase 1) — create without loading:
-///     var config = LanguageConfigBuilder.Create("myapp")
+///     var config = LanguageConfigBuilder.ForBasename("myapp")
 ///         .WithDirectory("/path/to/lang")
 ///         .WithBaseLanguage("en-US")
 ///         .AddSection&lt;IMainLanguage&gt;(new MainLanguageImpl())
-///         .Prepare();
+///         .Create();
 ///
 ///     // Plugin (Phase 2) — register own section:
 ///     config.AddSection&lt;IPluginLanguage&gt;(new PluginLanguageImpl(), "/path/to/plugin/lang");
@@ -73,13 +78,21 @@ public sealed class LanguageConfigBuilder
     /// Base name used in the language file naming convention.  For an application named
     /// <c>"myapp"</c> the files would be named <c>myapp.en-US.ini</c>, etc.
     /// </param>
-    public static LanguageConfigBuilder Create(string basename)
+    public static LanguageConfigBuilder ForBasename(string basename)
     {
         if (string.IsNullOrWhiteSpace(basename))
             throw new ArgumentException("Basename must not be empty.", nameof(basename));
 
         return new LanguageConfigBuilder(basename);
     }
+
+    /// <summary>
+    /// Creates a new <see cref="LanguageConfigBuilder"/>.
+    /// </summary>
+    /// <remarks>Alias for <see cref="ForBasename"/> kept for backward compatibility.</remarks>
+    /// <param name="basename">Base name used in the language file naming convention.</param>
+    public static LanguageConfigBuilder Create(string basename)
+        => ForBasename(basename);
 
     // ── Configuration ─────────────────────────────────────────────────────────
 
@@ -129,7 +142,6 @@ public sealed class LanguageConfigBuilder
     /// <summary>
     /// Enables fallback behaviour: when a key is missing from the active language the
     /// framework uses the base language value instead of the <c>###key###</c> sentinel.
-    /// The base language file is always loaded first as the fallback layer.
     /// </summary>
     /// <param name="ietf">
     /// Optional IETF tag of a specific fallback language.
@@ -154,9 +166,9 @@ public sealed class LanguageConfigBuilder
     }
 
     /// <summary>
-    /// Registers a language section.
-    /// The module name (if any) is read from the section's <see cref="LanguageSectionBase.ModuleName"/>
-    /// at load time and determines which file name pattern is used.
+    /// Registers a language section on the builder.
+    /// The module name (if any) is read from the section's <see cref="LanguageSectionBase.SectionName"/>
+    /// at load time and determines which file / section within a file is used.
     /// </summary>
     /// <typeparam name="T">The language section interface or class type.</typeparam>
     /// <param name="section">The generated concrete section instance.</param>
@@ -165,8 +177,7 @@ public sealed class LanguageConfigBuilder
     /// When <c>null</c> the default directory set by <see cref="WithDirectory"/> is used.
     /// </param>
     /// <exception cref="ArgumentException">
-    /// Thrown when <paramref name="section"/> is not a generated language section
-    /// (i.e. does not derive from <see cref="LanguageSectionBase"/>).
+    /// Thrown when <paramref name="section"/> does not derive from <see cref="LanguageSectionBase"/>.
     /// </exception>
     public LanguageConfigBuilder AddSection<T>(T section, string? directory = null)
         where T : class
@@ -181,34 +192,21 @@ public sealed class LanguageConfigBuilder
         return this;
     }
 
-    // ── Build / Prepare ───────────────────────────────────────────────────────
+    // ── Create / Build ────────────────────────────────────────────────────────
 
     /// <summary>
     /// Creates the <see cref="LanguageConfig"/> and registers all builder sections
     /// <em>without loading any language files</em>.
     /// </summary>
     /// <remarks>
-    /// Use this instead of <see cref="Build"/> when plugins or other components need to
-    /// register their own language sections before loading begins.  The typical three-phase
-    /// flow is:
-    /// <code>
-    /// // Phase 1 — host creates the config (no I/O yet):
-    /// var config = LanguageConfigBuilder.Create("myapp")
-    ///     .WithDirectory(langDir)
-    ///     .WithBaseLanguage("en-US")
-    ///     .AddSection&lt;IMainLanguage&gt;(mainSection)
-    ///     .Prepare();
-    ///
-    /// // Phase 2 — plugins register their own sections (no I/O):
-    /// foreach (var plugin in LoadPlugins())
-    ///     plugin.PreInit(config);   // plugin calls config.AddSection&lt;IPluginLanguage&gt;(...)
-    ///
-    /// // Phase 3 — load everything at once (file I/O):
-    /// config.Load();
-    /// </code>
+    /// <para>
+    /// This is the deferred-loading entry point, aligned with <see cref="IniConfigBuilder.Create"/>.
+    /// Use it when plugins or other components need to register their own sections before
+    /// loading begins.
+    /// </para>
     /// </remarks>
     /// <returns>The newly created (not yet loaded) <see cref="LanguageConfig"/>.</returns>
-    public LanguageConfig Prepare()
+    public LanguageConfig Create()
     {
         if (string.IsNullOrEmpty(_baseLanguage))
             throw new InvalidOperationException(
@@ -229,6 +227,12 @@ public sealed class LanguageConfigBuilder
     }
 
     /// <summary>
+    /// Obsolete: use <see cref="Create()"/> instead.
+    /// </summary>
+    [Obsolete("Use Create() instead. Prepare() is an alias kept for backward compatibility.")]
+    public LanguageConfig Prepare() => Create();
+
+    /// <summary>
     /// Builds and loads a <see cref="LanguageConfig"/>.
     /// </summary>
     /// <exception cref="InvalidOperationException">
@@ -237,7 +241,7 @@ public sealed class LanguageConfigBuilder
     /// </exception>
     public LanguageConfig Build()
     {
-        var config = Prepare();
+        var config = Create();
         config.Load();
         return config;
     }
@@ -247,7 +251,7 @@ public sealed class LanguageConfigBuilder
     /// </summary>
     public async Task<LanguageConfig> BuildAsync(CancellationToken cancellationToken = default)
     {
-        var config = Prepare();
+        var config = Create();
         await config.LoadAsync(cancellationToken).ConfigureAwait(false);
         return config;
     }
