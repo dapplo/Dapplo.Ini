@@ -69,31 +69,6 @@ config.Save();
 
 Full documentation is available in the [project wiki](../../wiki):
 
-| Page | Description |
-|------|-------------|
-| [Getting Started](../../wiki/Getting-Started) | Installation, NuGet packages, and first steps |
-| [Defining Sections](../../wiki/Defining-Sections) | `[IniSection]` and `[IniValue]` attribute reference |
-| [Loading Life Cycle](../../wiki/Loading-Life-Cycle) | Complete value-resolution order during `Build()` / `Reload()` |
-| [Plugin Registrations](../../wiki/Plugin-Registrations) | Three-phase `Create()` / `AddSection` / `Load()` pattern |
-| [Loading Configuration](../../wiki/Loading-Configuration) | `IniConfigBuilder` fluent API, AppData, write target |
-| [Reloading](../../wiki/Reloading) | `Reload()`, `ReloadAsync()`, singleton guarantee, `Reloaded` event |
-| [Saving](../../wiki/Saving) | `Save()`, `SaveAsync()`, `IBeforeSave`, `IAfterSave` |
-| [File Locking](../../wiki/File-Locking) | Holding the file open exclusively |
-| [File Change Monitoring](../../wiki/File-Change-Monitoring) | `FileSystemWatcher`, `ReloadDecision`, postponed reload |
-| [External Value Sources](../../wiki/External-Value-Sources) | `IValueSource` and `IValueSourceAsync` — environment variables, registry, REST APIs |
-| [Validation](../../wiki/Validation) | `IDataValidation<TSelf>` and `INotifyDataErrorInfo` |
-| [Lifecycle Hooks](../../wiki/Lifecycle-Hooks) | `IAfterLoad`, `IBeforeSave`, `IAfterSave` and their async variants |
-| [Async Support](../../wiki/Async-Support) | `BuildAsync`, `ReloadAsync`, `SaveAsync`, `IValueSourceAsync`, `InitialLoadTask` |
-| [Singleton and DI](../../wiki/Singleton-and-DI) | Singleton guarantee, ASP.NET Core / Microsoft DI integration |
-| [Transactional Updates](../../wiki/Transactional-Updates) | `ITransactional`, `Begin()`, `Commit()`, `Rollback()` |
-| [Property Change Notifications](../../wiki/Property-Change-Notifications) | `INotifyPropertyChanged` / `INotifyPropertyChanging` |
-| [Value Converters](../../wiki/Value-Converters) | Built-in converters, custom converters, encrypting sensitive values |
-| [Registry API](../../wiki/Registry-API) | Complete `IniConfigRegistry`, `IniConfig`, and `IniConfigBuilder` API reference |
-| [Migration](../../wiki/Migration) | Unknown-key callbacks, `IUnknownKey<TSelf>`, `EnableMetadata`, version-gated upgrades |
-| [Gap Analysis](../../wiki/Gap-Analysis) | Feature comparison with the older `Dapplo.Config.Ini` library |
-
----
-
 ## License
 
 [MIT](LICENSE)
