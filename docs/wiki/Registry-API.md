@@ -2,18 +2,42 @@
 
 ## IniConfigRegistry
 
-`IniConfigRegistry` is a thread-safe global registry that maps file names to their
-loaded configurations.
+`IniConfigRegistry` is a thread-safe global registry that maps INI file basenames to their
+loaded `IniConfig` instances.
+
+The `.ini` extension is **optional** in every method that accepts a file name — `"myapp"` and
+`"myapp.ini"` resolve to the same registry entry.
 
 | Method | Description |
 |--------|-------------|
-| `ForFile(fileName)` | Returns a fluent `IniConfigBuilder` for the given file name |
-| `Get(fileName)` | Returns the `IniConfig` for the file; throws if not registered |
+| `ForFile(fileName)` | Returns a fluent `IniConfigBuilder` for the given file. The `.ini` extension is stripped if present. |
+| `Get(fileName)` | Returns the `IniConfig` for the file; throws `KeyNotFoundException` if not registered |
+| `Get()` | Returns the single registered `IniConfig`. Throws `InvalidOperationException` when 0 or more than one config is registered — use `Get(fileName)` in that case. |
 | `TryGet(fileName, out config)` | Returns `false` if the file has not been registered |
 | `GetSection<T>(fileName)` | Shortcut for `Get(fileName).GetSection<T>()` |
+| `GetSection<T>()` | Shortcut for `Get().GetSection<T>()` — works only when exactly one config is registered |
 | `AddSection<T>(fileName, section)` | Registers a section on an existing config without I/O — for plugin pre-init. See [[Plugin-Registrations]]. |
 | `Unregister(fileName)` | Removes a registration (useful in tests) |
 | `Clear()` | Removes all registrations (useful in tests) |
+
+### No-argument convenience overloads
+
+When an application registers exactly one INI file (the common case), the file name can be
+omitted entirely:
+
+```csharp
+// Startup
+IniConfigRegistry.ForFile("appsettings")   // ".ini" is optional here too
+    .AddSearchPath(AppContext.BaseDirectory)
+    .RegisterSection<IAppSettings>(new AppSettingsImpl())
+    .Build();
+
+// Anywhere in the app — no need to pass the file name
+var settings = IniConfigRegistry.GetSection<IAppSettings>();
+```
+
+If more than one INI file is registered, `Get()` / `GetSection<T>()` throw
+`InvalidOperationException` with a message that points to the named overload.
 
 ---
 
@@ -78,6 +102,49 @@ All generated section classes implement `IIniSection`:
 
 ---
 
+## LanguageConfigRegistry
+
+`LanguageConfigRegistry` is a thread-safe global registry for language configurations.
+It mirrors `IniConfigRegistry` exactly — including the `.ini`-optional basename convention
+and the no-arg convenience overloads.
+
+| Method | Description |
+|--------|-------------|
+| `ForFile(basename)` | Returns a fluent `LanguageConfigBuilder`. The `.ini` extension is stripped if present. Preferred entry point over `LanguageConfigBuilder.ForBasename()`. |
+| `Get(basename)` | Returns the `LanguageConfig` for the given basename; throws `KeyNotFoundException` if not registered |
+| `Get()` | Returns the single registered `LanguageConfig`. Throws `InvalidOperationException` when zero or more than one config is registered. |
+| `TryGet(basename, out config)` | Returns `false` if not registered |
+| `GetSection<T>(basename)` | Shortcut for `Get(basename).GetSection<T>()` |
+| `GetSection<T>()` | Shortcut for `Get().GetSection<T>()` — works only when exactly one language config is registered |
+| `Unregister(basename)` | Removes a registration (useful in tests) |
+| `Clear()` | Removes all registrations (useful in tests) |
+
+### Typical usage
+
+```csharp
+// Startup — register via LanguageConfigRegistry (preferred)
+LanguageConfigRegistry.ForFile("myapp")        // "myapp" and "myapp.ini" are equivalent
+    .AddSearchPath(langDir)
+    .WithBaseLanguage("en-US")
+    .RegisterSection<IMainLanguage>(new MainLanguageImpl())
+    .Build();
+
+// Anywhere in the app — single-registration shorthand
+var lang = LanguageConfigRegistry.GetSection<IMainLanguage>();
+
+// Or with an explicit basename when multiple language configs are registered:
+var lang = LanguageConfigRegistry.GetSection<IMainLanguage>("myapp");
+```
+
+`LanguageConfigBuilder.Build()` / `BuildAsync()` register into `LanguageConfigRegistry`
+automatically, so `ForBasename()` and `ForFile()` produce registry entries in the same way.
+
+---
+
+## IIniSection
+
+---
+
 ## See also
 
 - [[Plugin-Registrations]] — `Create()` + `AddSection<T>()` + `Load()` for plugin-based apps
@@ -87,3 +154,4 @@ All generated section classes implement `IIniSection`:
 - [[Saving]] — `Save()` / `SaveAsync()` and save hooks
 - [[Singleton-and-DI]] — `GetSection<T>()` and the singleton guarantee
 - [[Async-Support]] — full async API guide
+- [[Internationalization]] — `LanguageConfigRegistry`, language packs, and i18n builder API

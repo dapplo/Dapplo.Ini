@@ -58,6 +58,9 @@ using var config = IniConfigRegistry
 var settings = config.GetSection<IAppSettings>();
 Console.WriteLine($"{settings.AppName} is listening on port {settings.Port}");
 
+// 3b. Or retrieve from anywhere in the app — file name is optional when only one is registered
+var settings = IniConfigRegistry.GetSection<IAppSettings>();
+
 // 4. Save changes
 settings.AppName = "MyApp v2";
 config.Save();
