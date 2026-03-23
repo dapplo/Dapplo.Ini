@@ -11,33 +11,17 @@ namespace Dapplo.Ini.Interfaces;
 /// (language/i18n configuration).
 /// </summary>
 /// <remarks>
+/// <para>
 /// There is zero overhead when no listener is registered, and minimal overhead when one or
 /// more are registered (a single <c>Count == 0</c> guard is all that is evaluated on each
 /// operation when the listener list is empty).
 /// No logging framework dependency is introduced by this interface.
+/// </para>
+/// <para>
+/// See the project wiki page <em>Listeners</em> for the full callback reference, a complete
+/// logging example, and notes on which callbacks are raised by <c>LanguageConfig</c>.
+/// </para>
 /// </remarks>
-/// <example>
-/// <code>
-/// public sealed class MyLogger : IIniConfigListener
-/// {
-///     public void OnFileLoaded(string filePath)   => Log.Info($"INI loaded: {filePath}");
-///     public void OnFileNotFound(string fileName) => Log.Warn($"INI file not found: {fileName}, using defaults");
-///     public void OnSaved(string filePath)        => Log.Info($"INI saved: {filePath}");
-///     public void OnReloaded(string filePath)     => Log.Info($"INI reloaded: {filePath}");
-///     public void OnError(string operation, Exception exception) => Log.Error($"INI {operation} error", exception);
-///     public void OnUnknownKey(string sectionName, string key, string? rawValue)
-///         => Log.Warn($"Unknown key [{sectionName}] {key} = {rawValue}");
-///     public void OnValueConversionFailed(string sectionName, string key, string? rawValue, Exception exception)
-///         => Log.Warn($"Conversion failed [{sectionName}] {key} = {rawValue}: {exception.Message}");
-/// }
-///
-/// IniConfigRegistry.ForFile("app.ini")
-///     .AddSearchPath(dir)
-///     .RegisterSection&lt;IMySettings&gt;(section)
-///     .AddListener(new MyLogger())
-///     .Build();
-/// </code>
-/// </example>
 public interface IIniConfigListener
 {
     /// <summary>

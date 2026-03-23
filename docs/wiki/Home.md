@@ -17,6 +17,7 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
 - ✅ **DI-friendly async loading** — `InitialLoadTask` lets consumers await the initial load while sections are injected as singletons immediately
 - ✅ **Migration support** — unknown-key callbacks, `IUnknownKey<TSelf>`, and an optional `[__metadata__]` section for version-gated upgrades
 - ✅ **Internationalization** — `.ini`-based language packs with source-generated type-safe interfaces, progressive fallback, plugin-friendly deferred loading, and optional file monitoring
+- ✅ **Listeners** — zero-overhead `IIniConfigListener` interface for logging and diagnostics; notified on load, save, reload, missing files, unknown keys, and type-conversion failures; reused for both INI and i18n subsystems
 
 ---
 
@@ -84,5 +85,6 @@ config.Save();
 | [[Registry-API]] | Complete `IniConfigRegistry`, `LanguageConfigRegistry`, `IniConfig`, and `IniConfigBuilder` API reference |
 | [[Migration]] | Unknown-key callbacks, `IUnknownKey<TSelf>`, `EnableMetadata`, and version-gated upgrades |
 | [[Internationalization]] | `LanguageConfigRegistry`, `.ini`-based language packs, `LanguageConfigBuilder`, progressive fallback, file monitoring |
+| [[Listeners]] | `IIniConfigListener` — zero-overhead observer for load, save, reload, unknown keys, and conversion failures; works for both INI and i18n configs |
 | [[Gap-Analysis]] | Feature comparison with the older `Dapplo.Config.Ini` library |
 | [[Async-Await-Benefits]] | Background analysis of async/await trade-offs (pre-implementation reference) |

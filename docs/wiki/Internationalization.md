@@ -208,6 +208,7 @@ using var config = LanguageConfigRegistry.ForFile("myapp")   // preferred entry 
 | `RegisterSection<T>(impl, path?)` | Registers a language section; optional path overrides `AddSearchPath`. |
 | `UseFallback(ietf?)` | When a key is missing from the active language, use the base language (or the specified `ietf` tag) instead of the `###key###` sentinel. |
 | `MonitorFiles()` | Enables file-system monitoring. When any language file changes, all sections are reloaded and `LanguageChanged` is raised. |
+| `AddListener(listener)` | Registers an `IIniConfigListener` for diagnostic events. See [[Listeners]]. |
 | `Create()` | Creates `LanguageConfig` **without** loading any files. Use for plugin/deferred scenarios. |
 | `Build()` | Creates and loads `LanguageConfig` synchronously. |
 | `BuildAsync(ct?)` | Creates and loads `LanguageConfig` asynchronously. Returns `Task<LanguageConfig>`. |
@@ -424,6 +425,7 @@ config.LanguageChanged += (_, _) => RefreshUi();
 | `RegisterSection<T>(impl, path?)` | Registers a section; optional `path` overrides the default search path for this section only. |
 | `UseFallback(ietf?)` | Enables base-language fallback for missing keys. |
 | `MonitorFiles()` | Enables file-system change monitoring with debounce. |
+| `AddListener(listener)` | Registers an `IIniConfigListener` for diagnostic events. See [[Listeners]]. |
 | `Create()` | Creates `LanguageConfig` without loading. Plugin-friendly deferred pattern. |
 | `Build()` | Creates and loads `LanguageConfig` synchronously. Returns `LanguageConfig`. |
 | `BuildAsync(ct?)` | Creates and loads `LanguageConfig` asynchronously. Returns `Task<LanguageConfig>`. |

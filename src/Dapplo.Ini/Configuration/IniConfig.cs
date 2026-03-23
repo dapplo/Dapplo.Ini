@@ -135,10 +135,8 @@ public sealed class IniConfig : IDisposable
     /// </para>
     /// <para>
     /// Use this property in dependency-injection scenarios where the <see cref="IniConfig"/> or its
-    /// sections are injected before loading is complete:
-    /// <code>
-    /// await iniConfig.InitialLoadTask; // await here before accessing section values
-    /// </code>
+    /// sections are injected before loading is complete.
+    /// See the project wiki page <em>Singleton-and-DI</em> for a complete example.
     /// </para>
     /// </summary>
     public Task InitialLoadTask => _initialLoadTask;
@@ -667,21 +665,9 @@ public sealed class IniConfig : IDisposable
     /// applications.  The host calls <see cref="IniConfigBuilder.Create"/> to create the
     /// <see cref="IniConfig"/> and register it in the global registry without loading files.
     /// Each plugin's pre-initialization method then retrieves the shared config from
-    /// <see cref="IniConfigRegistry.Get"/> and registers its own section:
+    /// <see cref="IniConfigRegistry.Get"/> and registers its own section.
+    /// See the project wiki page <em>Plugin-Registrations</em> for the three-phase flow.
     /// </para>
-    /// <code>
-    /// // Host startup (phase 1 — create, don't load yet):
-    /// var config = IniConfigRegistry.ForFile("app.ini")
-    ///     .AddSearchPath(dir)
-    ///     .RegisterSection&lt;IHostSettings&gt;(hostSection)
-    ///     .Create();
-    ///
-    /// // Plugin pre-init (phase 2 — add sections, no I/O):
-    /// IniConfigRegistry.Get("app.ini").AddSection&lt;IPluginSettings&gt;(pluginSection);
-    ///
-    /// // Host startup (phase 3 — load everything at once):
-    /// config.Load();
-    /// </code>
     /// <para>
     /// If a section of the same type has already been registered, it is replaced.
     /// Call <see cref="Load"/> (or <see cref="LoadAsync"/>) after all sections have been

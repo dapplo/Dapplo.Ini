@@ -293,9 +293,13 @@ public sealed class IniConfigBuilder
 
     /// <summary>
     /// Registers a listener that will be called for diagnostic events such as file loaded,
-    /// file not found, saved, reloaded, and errors.  Multiple listeners may be registered;
-    /// they are invoked in registration order.
+    /// file not found, saved, reloaded, unknown keys, type-conversion failures, and errors.
+    /// Multiple listeners may be registered; they are invoked in registration order.
     /// </summary>
+    /// <remarks>
+    /// There is zero overhead when no listener is registered.
+    /// See the project wiki page <em>Listeners</em> for the full callback reference and examples.
+    /// </remarks>
     /// <param name="listener">The listener to register; must not be <c>null</c>.</param>
     public IniConfigBuilder AddListener(IIniConfigListener listener)
     {
@@ -348,23 +352,9 @@ public sealed class IniConfigBuilder
     /// <remarks>
     /// <para>
     /// Use this instead of <see cref="Build"/> when plugins or other components need to
-    /// register their own INI sections before the files are parsed.  The typical three-phase
-    /// flow is:
+    /// register their own INI sections before the files are parsed.
+    /// See the project wiki page <em>Plugin-Registrations</em> for the typical three-phase flow.
     /// </para>
-    /// <code>
-    /// // Phase 1 — host creates the config (no I/O yet):
-    /// var config = IniConfigRegistry.ForFile("app.ini")
-    ///     .AddSearchPath(dir)
-    ///     .RegisterSection&lt;IHostSettings&gt;(hostSection)
-    ///     .Create();
-    ///
-    /// // Phase 2 — plugins register their sections (no I/O):
-    /// foreach (var plugin in LoadPlugins())
-    ///     plugin.PreInit(config);   // plugin calls config.AddSection&lt;IPluginSettings&gt;(...)
-    ///
-    /// // Phase 3 — load everything at once (single file read):
-    /// config.Load();
-    /// </code>
     /// <para>
     /// The returned <see cref="IniConfig"/> is immediately accessible via
     /// <see cref="IniConfigRegistry.Get"/> so that plugins can discover it during phase 2.
@@ -398,21 +388,8 @@ public sealed class IniConfigBuilder
     /// The <see cref="IniConfig"/> is registered in <see cref="IniConfigRegistry"/> and its
     /// <see cref="IniConfig.InitialLoadTask"/> is set <em>before</em> any I/O begins.
     /// This enables dependency-injection scenarios where the configuration object (or its sections)
-    /// must be available for injection before loading is complete:
-    /// <code>
-    /// // DI setup — start loading without awaiting
-    /// var section = new MySettingsImpl();
-    /// _ = IniConfigRegistry.ForFile("app.ini")
-    ///     .AddSearchPath(dir)
-    ///     .RegisterSection&lt;IMySettings&gt;(section)
-    ///     .BuildAsync();
-    ///
-    /// services.AddSingleton&lt;IMySettings&gt;(section);
-    /// services.AddSingleton(IniConfigRegistry.Get("app.ini"));
-    ///
-    /// // Consumer — wait for initial load before accessing values
-    /// await iniConfig.InitialLoadTask;
-    /// </code>
+    /// must be available for injection before loading is complete.
+    /// See the project wiki page <em>Singleton-and-DI</em> for a complete example.
     /// </para>
     /// <para>
     /// Async lifecycle hooks (<see cref="IAfterLoadAsync"/>) are preferred; when a section

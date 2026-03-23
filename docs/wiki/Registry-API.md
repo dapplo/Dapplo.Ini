@@ -85,6 +85,7 @@ If more than one INI file is registered, `Get()` / `GetSection<T>()` throw
 | `OnUnknownKey(callback)` | Registers a global `UnknownKeyCallback` invoked for keys that have no matching section property. Used for migration scenarios. See [[Migration]]. |
 | `EnableMetadata(version?, applicationName?)` | Opts in to writing a `[__metadata__]` section as the first section in the file on every save. Exposes `IniConfig.Metadata` to `IAfterLoad` hooks for version-gated migrations. See [[Migration]]. |
 | `RegisterSection<T>(impl)` | Registers a section with its generated implementation |
+| `AddListener(listener)` | Registers an `IIniConfigListener` for diagnostic events (file loaded/not found/saved/reloaded, unknown keys, conversion failures, errors). Zero overhead when no listener is registered. See [[Listeners]]. |
 | `Create()` | Creates and registers the `IniConfig` without loading any files. Enables plugin sections to be added via `AddSection<T>()` before the first `Load()`. See [[Plugin-Registrations]]. |
 | `Build()` | Loads the file synchronously, fires hooks, and registers the config in the global registry |
 | `BuildAsync(ct)` | Async variant of `Build()`; also applies `IValueSourceAsync` sources and calls async lifecycle hooks. Registers in the global registry and sets `InitialLoadTask` before I/O starts, enabling DI fire-and-forget patterns |

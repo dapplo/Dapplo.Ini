@@ -15,43 +15,10 @@ namespace Dapplo.Ini.Internationalization.Configuration;
 /// <see cref="Create()"/> creates without loading (deferred, for plugin scenarios),
 /// <see cref="Build"/> creates and loads immediately.
 /// </para>
-/// Two usage patterns are supported:
-/// <list type="number">
-///   <item>
-///     <term>Direct build</term>
-///     <description>
-///     All sections are registered on the builder and the config is built and loaded in one step:
-///     <code>
-///     using var config = LanguageConfigBuilder.ForBasename("myapp")
-///         .AddSearchPath("/path/to/lang")
-///         .WithBaseLanguage("en-US")
-///         .RegisterSection&lt;IMainLanguage&gt;(new MainLanguageImpl())
-///         .Build();
-///     </code>
-///     </description>
-///   </item>
-///   <item>
-///     <term>Deferred (plugin-friendly) build</term>
-///     <description>
-///     The host creates the config without loading it, plugins register their own sections,
-///     and then the host triggers loading:
-///     <code>
-///     // Host (Phase 1) — create without loading:
-///     var config = LanguageConfigBuilder.ForBasename("myapp")
-///         .AddSearchPath("/path/to/lang")
-///         .WithBaseLanguage("en-US")
-///         .RegisterSection&lt;IMainLanguage&gt;(new MainLanguageImpl())
-///         .Create();
-///
-///     // Plugin (Phase 2) — register own section:
-///     config.RegisterSection&lt;IPluginLanguage&gt;(new PluginLanguageImpl(), "/path/to/plugin/lang");
-///
-///     // Host (Phase 3) — load all sections at once:
-///     config.Load();
-///     </code>
-///     </description>
-///   </item>
-/// </list>
+/// <para>
+/// See the project wiki page <em>Internationalization</em> for usage patterns including the
+/// direct-build pattern and the deferred (plugin-friendly) build pattern.
+/// </para>
 /// </remarks>
 public sealed class LanguageConfigBuilder
 {
@@ -199,6 +166,11 @@ public sealed class LanguageConfigBuilder
     /// file not found, reloaded, and errors.  Multiple listeners may be registered;
     /// they are invoked in registration order.
     /// </summary>
+    /// <remarks>
+    /// There is zero overhead when no listener is registered.
+    /// See the project wiki page <em>Listeners</em> for the full callback reference and notes on
+    /// which callbacks are raised by <c>LanguageConfig</c>.
+    /// </remarks>
     /// <param name="listener">The listener to register; must not be <c>null</c>.</param>
     public LanguageConfigBuilder AddListener(IIniConfigListener listener)
     {
