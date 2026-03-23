@@ -6,7 +6,7 @@ using Dapplo.Ini.Interfaces;
 namespace Dapplo.Ini;
 
 /// <summary>
-/// Thread-safe global registry that maps INI file names to their <see cref="IniConfig"/> instances.
+/// Thread-safe global registry that maps INI file basenames to their <see cref="IniConfig"/> instances.
 /// Consumers can retrieve their configuration from anywhere in the application without DI.
 /// </summary>
 public static class IniConfigRegistry
@@ -16,10 +16,27 @@ public static class IniConfigRegistry
 
     private static readonly object _lock = new();
 
+    // ── Key normalisation ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Strips the <c>.ini</c> extension (case-insensitive) so that both
+    /// <c>"myapp"</c> and <c>"myapp.ini"</c> resolve to the same registry entry.
+    /// Also strips any leading directory path so that full paths are handled safely.
+    /// </summary>
+    private static string NormalizeBasename(string fileNameOrBasename)
+    {
+        var name = Path.GetFileName(fileNameOrBasename) ?? fileNameOrBasename;
+        return string.Equals(Path.GetExtension(name), ".ini", StringComparison.OrdinalIgnoreCase)
+            ? Path.GetFileNameWithoutExtension(name)!
+            : name;
+    }
+
     // ── Registration ──────────────────────────────────────────────────────────
 
     /// <summary>
     /// Creates a new <see cref="IniConfigBuilder"/> for the file with the given <paramref name="fileName"/>.
+    /// The <c>.ini</c> extension is optional and is stripped if present; both
+    /// <c>ForFile("myapp")</c> and <c>ForFile("myapp.ini")</c> produce the same builder.
     /// </summary>
     public static IniConfigBuilder ForFile(string fileName)
     {
@@ -29,11 +46,11 @@ public static class IniConfigRegistry
         return new IniConfigBuilder(fileName);
     }
 
-    internal static void Register(string fileName, IniConfig config)
+    internal static void Register(string basename, IniConfig config)
     {
         lock (_lock)
         {
-            _registry[fileName] = config;
+            _registry[basename] = config;
         }
     }
 
@@ -48,7 +65,7 @@ public static class IniConfigRegistry
     /// sections have been added to read all files at once.
     /// </remarks>
     /// <typeparam name="T">The INI section interface type.</typeparam>
-    /// <param name="fileName">The INI file name the config was registered under.</param>
+    /// <param name="fileName">The INI file name or basename the config was registered under.</param>
     /// <param name="section">The concrete section instance to register.</param>
     /// <returns>The <paramref name="section"/> instance (for fluent chaining).</returns>
     /// <exception cref="KeyNotFoundException">
@@ -61,18 +78,47 @@ public static class IniConfigRegistry
 
     /// <summary>
     /// Returns the <see cref="IniConfig"/> registered for <paramref name="fileName"/>.
+    /// The <c>.ini</c> extension is optional; both <c>"myapp"</c> and <c>"myapp.ini"</c> resolve
+    /// to the same entry.
     /// </summary>
     /// <exception cref="KeyNotFoundException">Thrown when no config is registered for the given file name.</exception>
     public static IniConfig Get(string fileName)
     {
+        var key = NormalizeBasename(fileName);
         lock (_lock)
         {
-            if (_registry.TryGetValue(fileName, out var config))
+            if (_registry.TryGetValue(key, out var config))
                 return config;
         }
         throw new KeyNotFoundException(
             $"No INI configuration has been registered for file '{fileName}'. " +
             "Call IniConfigRegistry.ForFile(...).Build() during application startup.");
+    }
+
+    /// <summary>
+    /// Returns the single registered <see cref="IniConfig"/>.
+    /// This convenience overload is useful when the application registers exactly one INI file,
+    /// which is the common case, so the caller does not need to specify the file name.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when no configuration is registered, or when more than one configuration is registered
+    /// (in which case use <see cref="Get(string)"/> with an explicit file name).
+    /// </exception>
+    public static IniConfig Get()
+    {
+        lock (_lock)
+        {
+            return _registry.Count switch
+            {
+                0 => throw new InvalidOperationException(
+                    "No INI configuration has been registered. " +
+                    "Call IniConfigRegistry.ForFile(...).Build() during application startup."),
+                1 => _registry.Values.First(),
+                _ => throw new InvalidOperationException(
+                    $"More than one INI configuration is registered ({_registry.Count}). " +
+                    "Use Get(fileName) to specify which configuration to retrieve.")
+            };
+        }
     }
 
     /// <summary>
@@ -83,14 +129,26 @@ public static class IniConfigRegistry
         => Get(fileName).GetSection<T>();
 
     /// <summary>
+    /// Returns the section of type <typeparamref name="T"/> from the single registered configuration.
+    /// This convenience overload is useful when the application registers exactly one INI file.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when no configuration is registered, or when more than one configuration is registered
+    /// (in which case use <see cref="GetSection{T}(string)"/> with an explicit file name).
+    /// </exception>
+    public static T GetSection<T>() where T : IIniSection
+        => Get().GetSection<T>();
+
+    /// <summary>
     /// Attempts to return the <see cref="IniConfig"/> registered for <paramref name="fileName"/>.
     /// Returns <c>false</c> when not found.
     /// </summary>
     public static bool TryGet(string fileName, out IniConfig? config)
     {
+        var key = NormalizeBasename(fileName);
         lock (_lock)
         {
-            return _registry.TryGetValue(fileName, out config);
+            return _registry.TryGetValue(key, out config);
         }
     }
 
@@ -100,9 +158,10 @@ public static class IniConfigRegistry
     /// </summary>
     public static bool Unregister(string fileName)
     {
+        var key = NormalizeBasename(fileName);
         lock (_lock)
         {
-            return _registry.Remove(fileName);
+            return _registry.Remove(key);
         }
     }
 

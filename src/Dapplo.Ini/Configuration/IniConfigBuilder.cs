@@ -50,7 +50,13 @@ public sealed class IniConfigBuilder
 
     internal IniConfigBuilder(string fileName)
     {
-        _fileName = fileName;
+        // Extract just the filename component (in case a full path was passed), then strip
+        // the .ini extension so _fileName is always just the basename.
+        // The .ini extension is added back in CreateCore when constructing IniConfig.FileName.
+        var name = Path.GetFileName(fileName);
+        _fileName = string.Equals(Path.GetExtension(name), ".ini", StringComparison.OrdinalIgnoreCase)
+            ? Path.GetFileNameWithoutExtension(name)!
+            : name;
     }
 
     // ── location ─────────────────────────────────────────────────────────────
@@ -436,7 +442,8 @@ public sealed class IniConfigBuilder
                 $"{nameof(LockFile)} and {nameof(MonitorFile)} are mutually exclusive: " +
                 "a read-locked file cannot be modified by external processes, so monitoring for changes is meaningless.");
 
-        var config = new IniConfig(_fileName);
+        // _fileName is the basename (no extension); IniConfig.FileName needs the extension for file I/O.
+        var config = new IniConfig(_fileName + ".ini");
         config.Encoding = _encoding ?? Encoding.UTF8;
         config.WritablePath = _writablePath;
         config.ShouldLockFile = _lockFile;

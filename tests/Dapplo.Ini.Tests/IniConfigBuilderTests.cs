@@ -151,6 +151,48 @@ public sealed class IniConfigBuilderTests : IDisposable
         Assert.Equal("MyApp", retrieved.AppName); // default
     }
 
+    [Fact]
+    public void IniConfigRegistry_Get_NoArg_SingleRegistration_ReturnsConfig()
+    {
+        var section = new GeneralSettingsImpl();
+        IniConfigRegistry.ForFile("single.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        var config = IniConfigRegistry.Get();
+        Assert.NotNull(config);
+        Assert.Equal("single.ini", config.FileName);
+    }
+
+    [Fact]
+    public void IniConfigRegistry_Get_NoArg_NoRegistration_Throws()
+    {
+        Assert.Throws<InvalidOperationException>(() => IniConfigRegistry.Get());
+    }
+
+    [Fact]
+    public void IniConfigRegistry_Get_NoArg_MultipleRegistrations_Throws()
+    {
+        IniConfigRegistry.ForFile("multi1.ini").AddSearchPath(_tempDir).Build();
+        IniConfigRegistry.ForFile("multi2.ini").AddSearchPath(_tempDir).Build();
+
+        Assert.Throws<InvalidOperationException>(() => IniConfigRegistry.Get());
+    }
+
+    [Fact]
+    public void IniConfigRegistry_GetSection_NoArg_SingleRegistration_ReturnsSection()
+    {
+        var section = new GeneralSettingsImpl();
+        IniConfigRegistry.ForFile("singlesect.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        var retrieved = IniConfigRegistry.GetSection<IGeneralSettings>();
+        Assert.Same(section, retrieved);
+    }
+
     // ── Save tests ─────────────────────────────────────────────────────────────
 
     [Fact]

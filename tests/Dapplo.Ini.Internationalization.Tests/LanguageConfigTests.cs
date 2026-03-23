@@ -1,18 +1,30 @@
 // Copyright (c) Dapplo. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
+using Dapplo.Ini.Internationalization;
 using Dapplo.Ini.Internationalization.Configuration;
 
 namespace Dapplo.Ini.Internationalization.Tests;
 
 /// <summary>
-/// Tests for the <see cref="LanguageConfigBuilder"/> and <see cref="LanguageConfig"/> functionality.
+/// Tests for the <see cref="LanguageConfigBuilder"/>, <see cref="LanguageConfig"/>,
+/// and <see cref="LanguageConfigRegistry"/> functionality.
 /// </summary>
-public sealed class LanguageConfigTests
+public sealed class LanguageConfigTests : IDisposable
 {
     // Resolve the language file directory relative to the test assembly output location.
     private static readonly string LangDir =
         Path.Combine(AppContext.BaseDirectory, "Lang");
+
+    public LanguageConfigTests()
+    {
+        LanguageConfigRegistry.Clear();
+    }
+
+    public void Dispose()
+    {
+        LanguageConfigRegistry.Clear();
+    }
 
     // ── Load (base language) ──────────────────────────────────────────────────
 
@@ -583,5 +595,149 @@ public sealed class LanguageConfigTests
         {
             Directory.Delete(tempDir, recursive: true);
         }
+    }
+
+    // ── LanguageConfigRegistry ────────────────────────────────────────────────
+
+    [Fact]
+    public void LanguageConfigRegistry_ForFile_ReturnsBuilderAndRegisters()
+    {
+        var section = new MainLanguageImpl();
+        using var config = LanguageConfigRegistry.ForFile("testapp")
+            .AddSearchPath(LangDir)
+            .WithBaseLanguage("en-US")
+            .RegisterSection<IMainLanguage>(section)
+            .Build();
+
+        Assert.Equal("Welcome to the application!", section.WelcomeMessage);
+
+        // The config should be retrievable via the registry
+        var retrieved = LanguageConfigRegistry.Get("testapp");
+        Assert.Same(config, retrieved);
+    }
+
+    [Fact]
+    public void LanguageConfigRegistry_ForFile_WithExtension_NormalizesToBasename()
+    {
+        var section = new MainLanguageImpl();
+        // Pass "testapp2.ini" — the .ini extension should be stripped automatically
+        using var config = LanguageConfigRegistry.ForFile("testapp2.ini")
+            .AddSearchPath(LangDir)
+            .WithBaseLanguage("en-US")
+            .RegisterSection<IMainLanguage>(section)
+            .Build();
+
+        // Retrieve with and without extension — both should work
+        var byBasename = LanguageConfigRegistry.Get("testapp2");
+        var byFileName = LanguageConfigRegistry.Get("testapp2.ini");
+        Assert.Same(config, byBasename);
+        Assert.Same(config, byFileName);
+    }
+
+    [Fact]
+    public void LanguageConfigRegistry_GetSection_ReturnsSection()
+    {
+        var section = new MainLanguageImpl();
+        using var config = LanguageConfigRegistry.ForFile("regapp")
+            .AddSearchPath(LangDir)
+            .WithBaseLanguage("en-US")
+            .RegisterSection<IMainLanguage>(section)
+            .Build();
+
+        var retrieved = LanguageConfigRegistry.GetSection<IMainLanguage>("regapp");
+        Assert.Same(section, retrieved);
+    }
+
+    [Fact]
+    public void LanguageConfigRegistry_Get_ThrowsWhenNotRegistered()
+    {
+        Assert.Throws<KeyNotFoundException>(() => LanguageConfigRegistry.Get("nonexistent"));
+    }
+
+    [Fact]
+    public void LanguageConfigRegistry_TryGet_ReturnsFalseWhenMissing()
+    {
+        var found = LanguageConfigRegistry.TryGet("nope", out var config);
+        Assert.False(found);
+        Assert.Null(config);
+    }
+
+    [Fact]
+    public void LanguageConfigRegistry_Unregister_RemovesEntry()
+    {
+        var section = new MainLanguageImpl();
+        using var config = LanguageConfigRegistry.ForFile("unreg")
+            .AddSearchPath(LangDir)
+            .WithBaseLanguage("en-US")
+            .RegisterSection<IMainLanguage>(section)
+            .Build();
+
+        Assert.True(LanguageConfigRegistry.TryGet("unreg", out _));
+        LanguageConfigRegistry.Unregister("unreg");
+        Assert.False(LanguageConfigRegistry.TryGet("unreg", out _));
+    }
+
+    [Fact]
+    public void LanguageConfigBuilder_Build_RegistersInRegistry()
+    {
+        // Using ForBasename directly (not ForFile) should still register in the registry
+        var section = new MainLanguageImpl();
+        using var config = LanguageConfigBuilder.ForBasename("directbuild")
+            .AddSearchPath(LangDir)
+            .WithBaseLanguage("en-US")
+            .RegisterSection<IMainLanguage>(section)
+            .Build();
+
+        var retrieved = LanguageConfigRegistry.Get("directbuild");
+        Assert.Same(config, retrieved);
+    }
+
+    [Fact]
+    public void LanguageConfigRegistry_Get_NoArg_SingleRegistration_ReturnsConfig()
+    {
+        var section = new MainLanguageImpl();
+        using var config = LanguageConfigRegistry.ForFile("singleapp")
+            .AddSearchPath(LangDir)
+            .WithBaseLanguage("en-US")
+            .RegisterSection<IMainLanguage>(section)
+            .Build();
+
+        var retrieved = LanguageConfigRegistry.Get();
+        Assert.Same(config, retrieved);
+    }
+
+    [Fact]
+    public void LanguageConfigRegistry_Get_NoArg_NoRegistration_Throws()
+    {
+        Assert.Throws<InvalidOperationException>(() => LanguageConfigRegistry.Get());
+    }
+
+    [Fact]
+    public void LanguageConfigRegistry_Get_NoArg_MultipleRegistrations_Throws()
+    {
+        using var config1 = LanguageConfigBuilder.ForBasename("multi1lang")
+            .AddSearchPath(LangDir)
+            .WithBaseLanguage("en-US")
+            .Build();
+        using var config2 = LanguageConfigBuilder.ForBasename("multi2lang")
+            .AddSearchPath(LangDir)
+            .WithBaseLanguage("en-US")
+            .Build();
+
+        Assert.Throws<InvalidOperationException>(() => LanguageConfigRegistry.Get());
+    }
+
+    [Fact]
+    public void LanguageConfigRegistry_GetSection_NoArg_SingleRegistration_ReturnsSection()
+    {
+        var section = new MainLanguageImpl();
+        using var config = LanguageConfigRegistry.ForFile("singlesectapp")
+            .AddSearchPath(LangDir)
+            .WithBaseLanguage("en-US")
+            .RegisterSection<IMainLanguage>(section)
+            .Build();
+
+        var retrieved = LanguageConfigRegistry.GetSection<IMainLanguage>();
+        Assert.Same(section, retrieved);
     }
 }

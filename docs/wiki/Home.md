@@ -50,8 +50,11 @@ settings.AppName = "MyApp v2";
 config.Save();
 ```
 
-> **Tip:** You can also retrieve the config later without holding a reference:
+> **Tip:** You can also retrieve the config later without holding a reference.
+> When exactly one INI file is registered, the file name is optional:
 > ```csharp
+> var settings = IniConfigRegistry.GetSection<IAppSettings>();
+> // or, when multiple configs are registered:
 > var settings = IniConfigRegistry.GetSection<IAppSettings>("appsettings.ini");
 > ```
 
@@ -78,8 +81,8 @@ config.Save();
 | [[Transactional-Updates]] | `ITransactional`, `Begin()`, `Commit()`, `Rollback()` |
 | [[Property-Change-Notifications]] | `INotifyPropertyChanged` / `INotifyPropertyChanging` |
 | [[Value-Converters]] | Built-in converters, custom converters, encrypting sensitive values |
-| [[Registry-API]] | Complete `IniConfigRegistry`, `IniConfig`, and `IniConfigBuilder` API reference |
+| [[Registry-API]] | Complete `IniConfigRegistry`, `LanguageConfigRegistry`, `IniConfig`, and `IniConfigBuilder` API reference |
 | [[Migration]] | Unknown-key callbacks, `IUnknownKey<TSelf>`, `EnableMetadata`, and version-gated upgrades |
-| [[Internationalization]] | `.ini`-based language packs, `LanguageConfigBuilder`, progressive fallback, file monitoring |
+| [[Internationalization]] | `LanguageConfigRegistry`, `.ini`-based language packs, `LanguageConfigBuilder`, progressive fallback, file monitoring |
 | [[Gap-Analysis]] | Feature comparison with the older `Dapplo.Config.Ini` library |
 | [[Async-Await-Benefits]] | Background analysis of async/await trade-offs (pre-implementation reference) |

@@ -10,8 +10,8 @@ automatically.
 ## Quick start
 
 ```csharp
+using Dapplo.Ini.Internationalization;
 using Dapplo.Ini.Internationalization.Attributes;
-using Dapplo.Ini.Internationalization.Configuration;
 
 // 1. Define a language section interface
 [IniLanguageSection]
@@ -21,21 +21,26 @@ public interface IMainLanguage
     string CancelButton   { get; }
 }
 
-// 2. Load at application startup
-using var langConfig = LanguageConfigBuilder.ForBasename("myapp")
+// 2. Register at application startup via LanguageConfigRegistry (preferred entry point)
+using var langConfig = LanguageConfigRegistry.ForFile("myapp")   // ".ini" extension optional
     .AddSearchPath("/path/to/lang")
     .WithBaseLanguage("en-US")
     .WithCurrentLanguage("de-DE")
     .RegisterSection<IMainLanguage>(new MainLanguageImpl())   // generated class
     .Build();
 
-// 3. Use the translations
-var lang = langConfig.GetSection<IMainLanguage>();
+// 3. Use the translations — from anywhere in the app (no reference needed)
+var lang = LanguageConfigRegistry.GetSection<IMainLanguage>();
 Console.WriteLine(lang.WelcomeMessage);   // "Willkommen bei der Anwendung!"
 
 // 4. Switch language at runtime
 langConfig.SetLanguage("fr-FR");
 ```
+
+> **Tip:** When exactly one language configuration is registered (the common case),
+> `LanguageConfigRegistry.GetSection<T>()` and `LanguageConfigRegistry.Get()` work
+> without any argument. Use `GetSection<T>("myapp")` only when multiple language
+> configurations are registered.
 
 ---
 
@@ -152,13 +157,35 @@ strip the leading `I` (if present) and append `Impl`.
 
 ---
 
+## LanguageConfigRegistry
+
+`LanguageConfigRegistry` is the recommended entry point for language configurations.
+It is a thread-safe global registry that mirrors `IniConfigRegistry` — including the
+`.ini`-optional basename convention and no-arg convenience overloads.
+
+| Method | Description |
+|--------|-------------|
+| `ForFile(basename)` | **Preferred entry point.** Returns a fluent `LanguageConfigBuilder`. The `.ini` extension is stripped if present. |
+| `Get(basename)` | Returns the registered `LanguageConfig`; throws `KeyNotFoundException` if absent. |
+| `Get()` | Returns the single registered `LanguageConfig`. Throws `InvalidOperationException` when 0 or more than one config is registered. |
+| `TryGet(basename, out config)` | Returns `false` if not registered. |
+| `GetSection<T>(basename)` | Returns the section from the named config. |
+| `GetSection<T>()` | Returns the section from the single registered config (common case). |
+| `Unregister(basename)` | Removes a registration. Useful in tests. |
+| `Clear()` | Removes all registrations. Useful in tests. |
+
+Both `"myapp"` and `"myapp.ini"` resolve to the same registry entry.
+
+---
+
 ## LanguageConfigBuilder — fluent API
 
-`LanguageConfigBuilder.ForBasename(name)` is the single entry point. It names
-the file pattern `{basename}.{ietf}.ini`.
+`LanguageConfigRegistry.ForFile(name)` is the recommended entry point; it internally
+calls `LanguageConfigBuilder.ForBasename(name)`. Both methods name the file pattern
+`{basename}.{ietf}.ini`.
 
 ```csharp
-using var config = LanguageConfigBuilder.ForBasename("myapp")
+using var config = LanguageConfigRegistry.ForFile("myapp")   // preferred entry point
     .AddSearchPath("/path/to/lang")      // directory to search for language files
     .WithBaseLanguage("en-US")           // REQUIRED — the reference language
     .WithCurrentLanguage("de-DE")        // optional — defaults to base language
@@ -173,7 +200,8 @@ using var config = LanguageConfigBuilder.ForBasename("myapp")
 
 | Method | Description |
 |--------|-------------|
-| `ForBasename(name)` | **Static factory.** Names the `{basename}.{ietf}.ini` file pattern. |
+| `ForFile(name)` | **(on `LanguageConfigRegistry`) Preferred entry point.** Equivalent to `ForBasename(name)` with automatic registry wiring. |
+| `ForBasename(name)` | **Static factory on `LanguageConfigBuilder`.** Names the `{basename}.{ietf}.ini` file pattern. |
 | `AddSearchPath(path)` | Directory to search for language pack files. |
 | `WithBaseLanguage(ietf)` | **Required.** The reference language that is always loaded first. |
 | `WithCurrentLanguage(ietf)` | Language to activate on the first load. Defaults to the base language. |
@@ -272,8 +300,8 @@ register their own sections; the host triggers loading once:
 ```csharp
 // ── Host startup ──────────────────────────────────────────────────────────────
 
-// Phase 1 — create without loading
-var langConfig = LanguageConfigBuilder.ForBasename("myapp")
+// Phase 1 — create without loading (registry entry is created immediately)
+var langConfig = LanguageConfigRegistry.ForFile("myapp")
     .AddSearchPath(langDir)
     .WithBaseLanguage("en-US")
     .RegisterSection<IMainLanguage>(new MainLanguageImpl())
@@ -358,7 +386,7 @@ reload is debounced (200 ms) to handle editors that write files in multiple
 steps.
 
 ```csharp
-using var config = LanguageConfigBuilder.ForBasename("myapp")
+using var config = LanguageConfigRegistry.ForFile("myapp")
     .AddSearchPath(langDir)
     .WithBaseLanguage("en-US")
     .RegisterSection<IMainLanguage>(new MainLanguageImpl())
@@ -371,6 +399,19 @@ config.LanguageChanged += (_, _) => RefreshUi();
 ---
 
 ## Complete API reference
+
+### LanguageConfigRegistry
+
+| Method | Description |
+|--------|-------------|
+| `ForFile(basename)` | Preferred entry point. Returns a `LanguageConfigBuilder`. Strips `.ini` if present. |
+| `Get(basename)` | Returns the registered `LanguageConfig`; throws `KeyNotFoundException` if absent. |
+| `Get()` | Returns the single registered `LanguageConfig`; throws `InvalidOperationException` when zero or more than one registered. |
+| `TryGet(basename, out config)` | Returns `false` if not registered. |
+| `GetSection<T>(basename)` | Returns the section of type `T` from the named config. |
+| `GetSection<T>()` | Returns the section of type `T` from the single registered config. |
+| `Unregister(basename)` | Removes a registration. Useful in tests. |
+| `Clear()` | Removes all registrations. Useful in tests. |
 
 ### LanguageConfigBuilder
 
