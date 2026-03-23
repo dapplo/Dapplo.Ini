@@ -72,6 +72,10 @@ config.Save();
 
 Full documentation is available in the [project wiki](../../wiki):
 
+- [INI File Format](../../wiki/Ini-File-Format) — syntax, value formats, collections, and examples
+- [Getting Started](../../wiki/Getting-Started) — installation and first steps
+- [Defining Sections](../../wiki/Defining-Sections) — `[IniSection]` and `[IniValue]` reference
+
 ## License
 
 [MIT](LICENSE)

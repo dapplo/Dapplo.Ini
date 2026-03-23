@@ -66,6 +66,7 @@ config.Save();
 | Page | Description |
 |------|-------------|
 | [[Getting-Started]] | Installation, NuGet package, and first steps |
+| [[Ini-File-Format]] | INI file syntax, value formats, collections, comments, and a complete example |
 | [[Defining-Sections]] | `[IniSection]` and `[IniValue]` attribute reference, generated class naming |
 | [[Loading-Life-Cycle]] | Complete order in which values are resolved during `Build()` / `Reload()` |
 | [[Plugin-Registrations]] | Three-phase `Create()` / `AddSection` / `Load()` pattern for plugin-based apps |

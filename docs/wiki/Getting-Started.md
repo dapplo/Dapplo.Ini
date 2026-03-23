@@ -84,6 +84,7 @@ The rule is: strip a leading `I` (if present) and append `Impl`.
 
 ## Next steps
 
+- [[Ini-File-Format]] — full INI file syntax reference and examples
 - [[Defining-Sections]] — full attribute reference
 - [[Loading-Configuration]] — search paths, AppData, write target, constants files
 - [[Loading-Life-Cycle]] — understand the exact resolution order
