@@ -1035,17 +1035,37 @@ public sealed class IniConfig : IDisposable
             var iniSection = iniFile.GetSection(section.SectionName);
             if (iniSection == null) continue;
 
-            foreach (var entry in iniSection.Entries)
-            {
-                section.SetRawValue(entry.Key, entry.Value);
+            // Capture as IniSectionBase once for all uses within this iteration.
+            var sectionBase = section as IniSectionBase;
 
-                // Notify listeners when the key is not recognised by the section's interface.
-                if (section is IniSectionBase sectionBase && !sectionBase.IsKnownKey(entry.Key))
+            // Wire the conversion-failed callback so IniSectionBase can report to listeners.
+            if (sectionBase != null && Listeners.Count > 0)
+            {
+                sectionBase.ConversionFailedCallback = (sName, key, raw, ex) =>
+                    NotifyListeners(l => l.OnValueConversionFailed(sName, key, raw, ex));
+            }
+
+            try
+            {
+                foreach (var entry in iniSection.Entries)
                 {
-                    if (section is IUnknownKey unknownKeyHandler)
-                        unknownKeyHandler.OnUnknownKey(entry.Key, entry.Value);
-                    UnknownKeyHandler?.Invoke(section.SectionName, entry.Key, entry.Value);
+                    section.SetRawValue(entry.Key, entry.Value);
+
+                    // Notify when the key is not recognised by the section's interface.
+                    if (sectionBase != null && !sectionBase.IsKnownKey(entry.Key))
+                    {
+                        if (section is IUnknownKey unknownKeyHandler)
+                            unknownKeyHandler.OnUnknownKey(entry.Key, entry.Value);
+                        UnknownKeyHandler?.Invoke(section.SectionName, entry.Key, entry.Value);
+                        NotifyListeners(l => l.OnUnknownKey(section.SectionName, entry.Key, entry.Value));
+                    }
                 }
+            }
+            finally
+            {
+                // Always clear the callback so it doesn't hold references beyond this file apply.
+                if (sectionBase != null)
+                    sectionBase.ConversionFailedCallback = null;
             }
         }
     }

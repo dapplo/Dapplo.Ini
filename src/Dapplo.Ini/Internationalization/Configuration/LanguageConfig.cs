@@ -3,6 +3,7 @@
 
 using System.Globalization;
 using System.Text;
+using Dapplo.Ini.Interfaces;
 
 namespace Dapplo.Ini.Internationalization.Configuration;
 
@@ -63,6 +64,9 @@ public sealed class LanguageConfig : IDisposable
     private readonly Dictionary<string, FileSystemWatcher> _watchers = new(StringComparer.OrdinalIgnoreCase);
     private readonly bool _monitorFiles;
 
+    // Diagnostic listeners
+    private readonly List<IIniConfigListener> _listeners = new();
+
     // Debounce timer to coalesce rapid change events
     private System.Threading.Timer? _debounceTimer;
     private const int DebounceMs = 200;
@@ -84,7 +88,8 @@ public sealed class LanguageConfig : IDisposable
         string? fallbackLanguage,
         bool monitorFiles,
         string? defaultDirectory,
-        IEnumerable<(Type Type, LanguageSectionBase Section, string? Directory)> sections)
+        IEnumerable<(Type Type, LanguageSectionBase Section, string? Directory)> sections,
+        IEnumerable<IIniConfigListener>? listeners = null)
     {
         _basename = basename;
         _baseLanguage = baseLanguage;
@@ -95,6 +100,21 @@ public sealed class LanguageConfig : IDisposable
 
         foreach (var (type, section, dir) in sections)
             _sections[type] = (section, dir ?? defaultDirectory ?? string.Empty);
+
+        if (listeners != null)
+            _listeners.AddRange(listeners);
+    }
+
+    // ── Listener helpers ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Notifies all registered listeners (zero-overhead guard when none are registered).
+    /// </summary>
+    private void NotifyListeners(Action<IIniConfigListener> notify)
+    {
+        if (_listeners.Count == 0) return;
+        foreach (var listener in _listeners)
+            notify(listener);
     }
 
     // \u2500\u2500 Public API \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -158,8 +178,16 @@ public sealed class LanguageConfig : IDisposable
     /// </exception>
     public void Load()
     {
-        ValidateSectionDirectories();
-        LoadLanguage(_currentLanguage);
+        try
+        {
+            ValidateSectionDirectories();
+            LoadLanguage(_currentLanguage);
+        }
+        catch (Exception ex)
+        {
+            NotifyListeners(l => l.OnError("Load", ex));
+            throw;
+        }
 
         if (_monitorFiles)
             StartMonitoring();
@@ -173,8 +201,16 @@ public sealed class LanguageConfig : IDisposable
     /// <returns>This <see cref="LanguageConfig"/> instance (for fluent chaining).</returns>
     public async Task<LanguageConfig> LoadAsync(CancellationToken cancellationToken = default)
     {
-        ValidateSectionDirectories();
-        await LoadLanguageAsync(_currentLanguage, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ValidateSectionDirectories();
+            await LoadLanguageAsync(_currentLanguage, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            NotifyListeners(l => l.OnError("Load", ex));
+            throw;
+        }
 
         if (_monitorFiles)
             StartMonitoring();
@@ -193,8 +229,17 @@ public sealed class LanguageConfig : IDisposable
             throw new ArgumentException("Language tag must not be empty.", nameof(ietf));
 
         _currentLanguage = ietf;
-        LoadLanguage(ietf);
+        try
+        {
+            LoadLanguage(ietf);
+        }
+        catch (Exception ex)
+        {
+            NotifyListeners(l => l.OnError("SetLanguage", ex));
+            throw;
+        }
         LanguageChanged?.Invoke(this, EventArgs.Empty);
+        NotifyListeners(l => l.OnReloaded(ietf));
     }
 
     /// <summary>
@@ -208,8 +253,17 @@ public sealed class LanguageConfig : IDisposable
             throw new ArgumentException("Language tag must not be empty.", nameof(ietf));
 
         _currentLanguage = ietf;
-        await LoadLanguageAsync(ietf, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await LoadLanguageAsync(ietf, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            NotifyListeners(l => l.OnError("SetLanguage", ex));
+            throw;
+        }
         LanguageChanged?.Invoke(this, EventArgs.Empty);
+        NotifyListeners(l => l.OnReloaded(ietf));
     }
 
     /// <summary>
@@ -315,17 +369,32 @@ public sealed class LanguageConfig : IDisposable
     private void LoadIetfIntoSection(LanguageSectionBase section, string directory, string ietf)
     {
         var filePath = ResolveLanguageFilePath(directory, section.ModuleName, ietf);
-        if (filePath == null) return;
+        if (filePath == null)
+        {
+            var fileName = section.ModuleName != null
+                ? $"{_basename}.{section.ModuleName}.{ietf}.ini"
+                : $"{_basename}.{ietf}.ini";
+            NotifyListeners(l => l.OnFileNotFound(fileName));
+            return;
+        }
 
         var content = File.ReadAllText(filePath, Encoding.UTF8);
         ParseAndApply(section, content, section.SectionName);
+        NotifyListeners(l => l.OnFileLoaded(filePath));
     }
 
     private async Task LoadIetfIntoSectionAsync(
         LanguageSectionBase section, string directory, string ietf, CancellationToken cancellationToken)
     {
         var filePath = ResolveLanguageFilePath(directory, section.ModuleName, ietf);
-        if (filePath == null) return;
+        if (filePath == null)
+        {
+            var fileName = section.ModuleName != null
+                ? $"{_basename}.{section.ModuleName}.{ietf}.ini"
+                : $"{_basename}.{ietf}.ini";
+            NotifyListeners(l => l.OnFileNotFound(fileName));
+            return;
+        }
 
         string content;
 #if NET
@@ -335,6 +404,7 @@ public sealed class LanguageConfig : IDisposable
         content = await reader.ReadToEndAsync().ConfigureAwait(false);
 #endif
         ParseAndApply(section, content, section.SectionName);
+        NotifyListeners(l => l.OnFileLoaded(filePath));
     }
 
     /// <summary>
@@ -494,6 +564,7 @@ public sealed class LanguageConfig : IDisposable
     {
         LoadLanguage(_currentLanguage);
         LanguageChanged?.Invoke(this, EventArgs.Empty);
+        NotifyListeners(l => l.OnReloaded(_currentLanguage));
     }
 
     // \u2500\u2500 Line reader \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500

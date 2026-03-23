@@ -41,12 +41,18 @@ public sealed class ListenerTests : IDisposable
         public string? SavedPath { get; private set; }
         public string? ReloadedPath { get; private set; }
         public (string Operation, Exception Exception)? ErrorInfo { get; private set; }
+        public List<(string Section, string Key, string? Value)> UnknownKeys { get; } = new();
+        public List<(string Section, string Key, string? Raw, Exception Exception)> ConversionFailures { get; } = new();
 
         public void OnFileLoaded(string filePath)   => LoadedPath   = filePath;
         public void OnFileNotFound(string fileName) => NotFoundName = fileName;
         public void OnSaved(string filePath)        => SavedPath    = filePath;
         public void OnReloaded(string filePath)     => ReloadedPath = filePath;
         public void OnError(string operation, Exception exception) => ErrorInfo = (operation, exception);
+        public void OnUnknownKey(string sectionName, string key, string? rawValue)
+            => UnknownKeys.Add((sectionName, key, rawValue));
+        public void OnValueConversionFailed(string sectionName, string key, string? rawValue, Exception exception)
+            => ConversionFailures.Add((sectionName, key, rawValue, exception));
     }
 
     // ── OnFileLoaded ──────────────────────────────────────────────────────────
@@ -272,5 +278,56 @@ public sealed class ListenerTests : IDisposable
         Assert.ThrowsAny<Exception>(() => config.Save());
         Assert.NotNull(listener.ErrorInfo);
         Assert.Equal("Save", listener.ErrorInfo!.Value.Operation);
+    }
+
+    // ── OnUnknownKey ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Listener_OnUnknownKey_IsCalledForUnrecognisedKeys()
+    {
+        // "UnknownProp" has no matching property on IGeneralSettings
+        WriteIni("unk.ini", "[General]\nAppName = Test\nUnknownProp = something");
+
+        var listener = new RecordingListener();
+        var section = new GeneralSettingsImpl();
+
+        IniConfigRegistry.ForFile("unk.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .AddListener(listener)
+            .Build();
+
+        var hit = listener.UnknownKeys.SingleOrDefault(u => u.Key.Equals("UnknownProp", StringComparison.OrdinalIgnoreCase));
+        Assert.NotEqual(default, hit);
+        Assert.Equal("General", hit.Section, StringComparer.OrdinalIgnoreCase);
+        Assert.Equal("something", hit.Value);
+    }
+
+    // ── OnValueConversionFailed ───────────────────────────────────────────────
+
+    [Fact]
+    public void Listener_OnValueConversionFailed_IsCalledForBadIntValue()
+    {
+        // "MaxRetries" is an int — "not-a-number" will fail to convert
+        WriteIni("conv.ini", "[General]\nMaxRetries = not-a-number");
+
+        var listener = new RecordingListener();
+        var section = new GeneralSettingsImpl();
+
+        IniConfigRegistry.ForFile("conv.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .AddListener(listener)
+            .Build();
+
+        // Conversion fails so listener should have recorded it
+        Assert.NotEmpty(listener.ConversionFailures);
+        var failure = listener.ConversionFailures[0];
+        Assert.Equal("General", failure.Section, StringComparer.OrdinalIgnoreCase);
+        Assert.Equal("maxretries", failure.Key, StringComparer.OrdinalIgnoreCase);
+        Assert.Equal("not-a-number", failure.Raw);
+
+        // Section falls back to int's default (0) since the failed conversion returns default(int)
+        Assert.Equal(0, section.MaxRetries);
     }
 }

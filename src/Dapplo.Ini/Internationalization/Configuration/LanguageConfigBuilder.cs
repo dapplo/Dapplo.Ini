@@ -1,6 +1,7 @@
 // Copyright (c) Dapplo. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
+using Dapplo.Ini.Interfaces;
 using Dapplo.Ini.Internationalization;
 
 namespace Dapplo.Ini.Internationalization.Configuration;
@@ -64,6 +65,9 @@ public sealed class LanguageConfigBuilder
 
     // Registered sections: type → (instance, optional override directory)
     private readonly List<(Type Type, LanguageSectionBase Section, string? Directory)> _sections = new();
+
+    // Diagnostic listeners
+    private readonly List<IIniConfigListener> _listeners = new();
 
     private LanguageConfigBuilder(string basename)
     {
@@ -188,6 +192,21 @@ public sealed class LanguageConfigBuilder
         return this;
     }
 
+    // ── Diagnostic listeners ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Registers a listener that will be called for diagnostic events such as file loaded,
+    /// file not found, reloaded, and errors.  Multiple listeners may be registered;
+    /// they are invoked in registration order.
+    /// </summary>
+    /// <param name="listener">The listener to register; must not be <c>null</c>.</param>
+    public LanguageConfigBuilder AddListener(IIniConfigListener listener)
+    {
+        if (listener is null) throw new ArgumentNullException(nameof(listener));
+        _listeners.Add(listener);
+        return this;
+    }
+
     // ── Create / Build ────────────────────────────────────────────────────────
 
     /// <summary>
@@ -223,7 +242,8 @@ public sealed class LanguageConfigBuilder
             effectiveFallback,
             _monitorFiles,
             _defaultDirectory,
-            sections);
+            sections,
+            _listeners);
 
         LanguageConfigRegistry.Register(_basename, config);
         return config;

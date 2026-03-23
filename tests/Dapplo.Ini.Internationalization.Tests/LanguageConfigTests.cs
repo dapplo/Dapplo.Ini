@@ -740,4 +740,75 @@ public sealed class LanguageConfigTests : IDisposable
         var retrieved = LanguageConfigRegistry.GetSection<IMainLanguage>();
         Assert.Same(section, retrieved);
     }
+
+    // ── IIniConfigListener support ────────────────────────────────────────────
+
+    private sealed class RecordingListener : Dapplo.Ini.Interfaces.IIniConfigListener
+    {
+        public List<string> LoadedPaths { get; } = new();
+        public List<string> NotFoundNames { get; } = new();
+        public string? ReloadedValue { get; private set; }
+        public (string Operation, Exception Exception)? ErrorInfo { get; private set; }
+
+        public void OnFileLoaded(string filePath)   => LoadedPaths.Add(filePath);
+        public void OnFileNotFound(string fileName) => NotFoundNames.Add(fileName);
+        public void OnSaved(string filePath)        { /* language files are read-only */ }
+        public void OnReloaded(string filePath)     => ReloadedValue = filePath;
+        public void OnError(string operation, Exception exception) => ErrorInfo = (operation, exception);
+        public void OnUnknownKey(string sectionName, string key, string? rawValue) { }
+        public void OnValueConversionFailed(string sectionName, string key, string? rawValue, Exception exception) { }
+    }
+
+    [Fact]
+    public void Listener_OnFileLoaded_IsCalledWhenLanguageFileExists()
+    {
+        var listener = new RecordingListener();
+        var section = new MainLanguageImpl();
+
+        using var config = LanguageConfigBuilder.ForBasename("testapp")
+            .AddSearchPath(LangDir)
+            .WithBaseLanguage("en-US")
+            .RegisterSection<IMainLanguage>(section)
+            .AddListener(listener)
+            .Build();
+
+        Assert.NotEmpty(listener.LoadedPaths);
+        Assert.All(listener.LoadedPaths, p => Assert.EndsWith(".ini", p, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Listener_OnFileNotFound_IsCalledWhenLanguageFileIsMissing()
+    {
+        var listener = new RecordingListener();
+        var section = new MainLanguageImpl();
+
+        // "zz-ZZ" does not have a language file in LangDir
+        using var config = LanguageConfigBuilder.ForBasename("testapp")
+            .AddSearchPath(LangDir)
+            .WithBaseLanguage("en-US")
+            .WithCurrentLanguage("zz-ZZ")
+            .RegisterSection<IMainLanguage>(section)
+            .AddListener(listener)
+            .Build();
+
+        Assert.NotEmpty(listener.NotFoundNames);
+    }
+
+    [Fact]
+    public void Listener_OnReloaded_IsCalledWhenSetLanguageCalled()
+    {
+        var listener = new RecordingListener();
+        var section = new MainLanguageImpl();
+
+        using var config = LanguageConfigBuilder.ForBasename("testapp")
+            .AddSearchPath(LangDir)
+            .WithBaseLanguage("en-US")
+            .RegisterSection<IMainLanguage>(section)
+            .AddListener(listener)
+            .Build();
+
+        config.SetLanguage("de-DE");
+
+        Assert.Equal("de-DE", listener.ReloadedValue);
+    }
 }

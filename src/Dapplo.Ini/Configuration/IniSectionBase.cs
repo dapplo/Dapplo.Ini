@@ -22,6 +22,14 @@ public abstract class IniSectionBase : IIniSection
     // Dirty flag: set when a value is written via SetRawValue; cleared by IniConfig after Save/Reload.
     private bool _isDirty;
 
+    // Tracks the key currently being applied from an INI file (set/cleared by SetRawValue).
+    // When non-null, ConvertFromRaw knows a file-load is in progress and can report errors.
+    private string? _currentKey;
+
+    // Callback invoked by ConvertFromRaw when a value cannot be converted to the target type.
+    // Set by IniConfig.ApplyIniFile before loading file entries; null at all other times.
+    internal Action<string, string, string?, Exception>? ConversionFailedCallback;
+
     // ── IIniSection ───────────────────────────────────────────────────────────
 
     /// <inheritdoc/>
@@ -34,9 +42,17 @@ public abstract class IniSectionBase : IIniSection
     /// <inheritdoc/>
     public void SetRawValue(string key, string? value)
     {
-        _rawValues[key] = value;
-        _isDirty = true;
-        OnRawValueSet(key, value);
+        _currentKey = key;
+        try
+        {
+            _rawValues[key] = value;
+            _isDirty = true;
+            OnRawValueSet(key, value);
+        }
+        finally
+        {
+            _currentKey = null;
+        }
     }
 
     /// <inheritdoc/>
@@ -85,13 +101,16 @@ public abstract class IniSectionBase : IIniSection
 
     /// <summary>
     /// Converts a raw INI string to <typeparamref name="T"/> using the registered converter.
-    /// Falls back to <paramref name="defaultValue"/> when the raw value is absent or conversion fails.
+    /// Falls back to <paramref name="defaultValue"/> when the raw value is absent or conversion
+    /// fails.  When a <see cref="ConversionFailedCallback"/> is registered (i.e. the value is
+    /// being applied from an INI file) the callback is invoked with the failed key and exception
+    /// so that <see cref="IIniConfigListener.OnValueConversionFailed"/> can be raised.
     /// </summary>
 #if NET
     [RequiresDynamicCode("Enum types require dynamic code via EnumConverter. Register a typed converter for full AOT compatibility.")]
     [RequiresUnreferencedCode("Enum types require unreferenced-code access via EnumConverter. Register a typed converter for full trim compatibility.")]
 #endif
-    protected static T? ConvertFromRaw<T>(string? raw, T? defaultValue = default)
+    protected T? ConvertFromRaw<T>(string? raw, T? defaultValue = default)
     {
         var converter = ValueConverterRegistry.GetConverter(typeof(T));
         if (converter == null) return defaultValue;
@@ -100,8 +119,11 @@ public abstract class IniSectionBase : IIniSection
             var result = converter.ConvertFromString(raw);
             return result is T typed ? typed : defaultValue;
         }
-        catch
+        catch (Exception ex)
         {
+            // Only report if we are currently loading from a file (_currentKey is set).
+            if (_currentKey != null)
+                ConversionFailedCallback?.Invoke(SectionName, _currentKey, raw, ex);
             return defaultValue;
         }
     }
