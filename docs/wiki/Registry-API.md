@@ -100,6 +100,10 @@ All generated section classes implement `IIniSection`:
 |--------|-------------|
 | `HasChanges` | `true` when the section has been modified since the last load or save |
 | `SectionName` | The INI section name (`[SectionName]`) |
+| `IsConstant(key)` | `true` when the value for `key` was loaded from a constants file and is therefore protected against modification. Use in UI code to disable the corresponding input control. See [[Runtime-Only-and-Constants]]. |
+| `GetRawValue(key)` | Returns the raw string value stored for `key`, or `null` if absent |
+| `SetRawValue(key, value)` | Stores a raw string value; throws `AccessViolationException` when `key` is constant |
+| `ResetToDefaults()` | Resets all properties (including runtime-only properties) to their compiled defaults |
 
 ---
 
@@ -139,10 +143,6 @@ var lang = LanguageConfigRegistry.GetSection<IMainLanguage>("myapp");
 
 `LanguageConfigBuilder.Build()` / `BuildAsync()` register into `LanguageConfigRegistry`
 automatically, so `ForBasename()` and `ForFile()` produce registry entries in the same way.
-
----
-
-## IIniSection
 
 ---
 

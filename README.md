@@ -36,14 +36,14 @@ dotnet add package Dapplo.Ini.Generator
 ```
 
 ```csharp
-// 1. Define a section interface
-[IniSection("App", Description = "Application settings")]
+// 1. Define a section interface — [IniSection] is optional; use standard .NET attributes
+[Description("Application settings")]   // section comment — no [IniSection] needed
 public interface IAppSettings : IIniSection
 {
-    [IniValue(DefaultValue = "MyApp")]
+    [DefaultValue("MyApp")]
     string? AppName { get; set; }
 
-    [IniValue(DefaultValue = "8080")]
+    [DefaultValue(8080)]
     int Port { get; set; }
 }
 

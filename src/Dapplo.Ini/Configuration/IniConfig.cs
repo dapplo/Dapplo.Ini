@@ -364,7 +364,11 @@ public sealed class IniConfig : IDisposable
 
                 // 1. Reset to defaults
                 foreach (var section in Sections.Values)
+                {
                     section.ResetToDefaults();
+                    if (section is IniSectionBase sectionBase)
+                        sectionBase.ClearConstants();
+                }
 
                 // 2. Apply default files
                 foreach (var path in DefaultFilePaths)
@@ -381,7 +385,7 @@ public sealed class IniConfig : IDisposable
                 foreach (var path in ConstantFilePaths)
                 {
                     if (File.Exists(path))
-                        ApplyIniFile(IniFileParser.ParseFile(path, Encoding));
+                        ApplyIniFile(IniFileParser.ParseFile(path, Encoding), isConstant: true);
                 }
 
                 // 5. Apply external value sources
@@ -436,7 +440,11 @@ public sealed class IniConfig : IDisposable
 
                 // 1. Reset to defaults
                 foreach (var section in Sections.Values)
+                {
                     section.ResetToDefaults();
+                    if (section is IniSectionBase sectionBase)
+                        sectionBase.ClearConstants();
+                }
 
                 // 2. Apply default files
                 foreach (var path in DefaultFilePaths)
@@ -453,7 +461,7 @@ public sealed class IniConfig : IDisposable
                 foreach (var path in ConstantFilePaths)
                 {
                     if (File.Exists(path))
-                        ApplyIniFile(await IniFileParser.ParseFileAsync(path, Encoding, cancellationToken).ConfigureAwait(false));
+                        ApplyIniFile(await IniFileParser.ParseFileAsync(path, Encoding, cancellationToken).ConfigureAwait(false), isConstant: true);
                 }
 
                 // 5. Apply external value sources (sync and async)
@@ -737,7 +745,11 @@ public sealed class IniConfig : IDisposable
         {
             // 1. Reset all sections to compiled defaults
             foreach (var section in Sections.Values)
+            {
                 section.ResetToDefaults();
+                if (section is IniSectionBase sectionBase)
+                    sectionBase.ClearConstants();
+            }
 
             // 2. Apply default files
             foreach (var path in DefaultFilePaths)
@@ -775,7 +787,7 @@ public sealed class IniConfig : IDisposable
             foreach (var path in ConstantFilePaths)
             {
                 if (File.Exists(path))
-                    ApplyIniFile(IniFileParser.ParseFile(path, Encoding));
+                    ApplyIniFile(IniFileParser.ParseFile(path, Encoding), isConstant: true);
             }
 
             // 5. Apply external value sources
@@ -834,7 +846,11 @@ public sealed class IniConfig : IDisposable
         {
             // 1. Reset all sections to compiled defaults
             foreach (var section in Sections.Values)
+            {
                 section.ResetToDefaults();
+                if (section is IniSectionBase sectionBase)
+                    sectionBase.ClearConstants();
+            }
 
             // 2. Apply default files
             foreach (var path in DefaultFilePaths)
@@ -871,7 +887,7 @@ public sealed class IniConfig : IDisposable
             foreach (var path in ConstantFilePaths)
             {
                 if (File.Exists(path))
-                    ApplyIniFile(await IniFileParser.ParseFileAsync(path, Encoding, cancellationToken).ConfigureAwait(false));
+                    ApplyIniFile(await IniFileParser.ParseFileAsync(path, Encoding, cancellationToken).ConfigureAwait(false), isConstant: true);
             }
 
             // 5. Apply external value sources (sync + async)
@@ -998,7 +1014,7 @@ public sealed class IniConfig : IDisposable
         return iniFile;
     }
 
-    private void ApplyIniFile(IniFile iniFile)
+    private void ApplyIniFile(IniFile iniFile, bool isConstant = false)
     {
         // Read and store the metadata section when it exists in the file.
         var metaIniSection = iniFile.GetSection(MetadataSectionName);
@@ -1036,6 +1052,10 @@ public sealed class IniConfig : IDisposable
                 foreach (var entry in iniSection.Entries)
                 {
                     section.SetRawValue(entry.Key, entry.Value);
+
+                    // When applying a constants file, protect this key from further changes.
+                    if (isConstant && sectionBase != null)
+                        sectionBase.MarkKeyAsConstant(entry.Key);
 
                     // Notify when the key is not recognised by the section's interface.
                     if (sectionBase != null && !sectionBase.IsKnownKey(entry.Key))

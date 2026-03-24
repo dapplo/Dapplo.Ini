@@ -18,20 +18,24 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
 - ✅ **Migration support** — unknown-key callbacks, `IUnknownKey<TSelf>`, and an optional `[__metadata__]` section for version-gated upgrades
 - ✅ **Internationalization** — `.ini`-based language packs with source-generated type-safe interfaces, progressive fallback, plugin-friendly deferred loading, and optional file monitoring
 - ✅ **Listeners** — zero-overhead `IIniConfigListener` interface for logging and diagnostics; notified on load, save, reload, missing files, unknown keys, and type-conversion failures; reused for both INI and i18n subsystems
+- ✅ **Runtime-only properties** — in-memory values with defaults that are never loaded from or saved to disk (`[IniValue(RuntimeOnly = true)]`)
+- ✅ **Constants protection** — keys loaded from an admin constants file are write-protected; `IsConstant(key)` lets UI code disable the corresponding input control
 
 ---
 
 ## Quick start
 
 ```csharp
-// 1. Define a section interface
-[IniSection("App", Description = "Application settings")]
+// 1. Define a section interface — [IniSection] is optional; use standard .NET attributes
+using System.ComponentModel;
+
+[Description("Application settings")]   // section comment — no [IniSection] needed
 public interface IAppSettings : IIniSection
 {
-    [IniValue(DefaultValue = "MyApp")]
+    [DefaultValue("MyApp")]
     string? AppName { get; set; }
 
-    [IniValue(DefaultValue = "8080")]
+    [DefaultValue(8080)]
     int Port { get; set; }
 }
 
@@ -89,3 +93,4 @@ config.Save();
 | [[Listeners]] | `IIniConfigListener` — zero-overhead observer for load, save, reload, unknown keys, and conversion failures; works for both INI and i18n configs |
 | [[Gap-Analysis]] | Feature comparison with the older `Dapplo.Config.Ini` library |
 | [[Async-Await-Benefits]] | Background analysis of async/await trade-offs (pre-implementation reference) |
+| [[Runtime-Only-and-Constants]] | Runtime-only properties and constants-file protection |

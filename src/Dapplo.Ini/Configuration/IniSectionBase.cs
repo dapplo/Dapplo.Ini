@@ -19,6 +19,9 @@ public abstract class IniSectionBase : IIniSection
     private readonly Dictionary<string, string?> _rawValues =
         new(StringComparer.OrdinalIgnoreCase);
 
+    // Tracks keys that were loaded from a constants file and are protected against change.
+    private readonly HashSet<string> _constantKeys = new(StringComparer.OrdinalIgnoreCase);
+
     // Dirty flag: set when a value is written via SetRawValue; cleared by IniConfig after Save/Reload.
     private bool _isDirty;
 
@@ -42,6 +45,10 @@ public abstract class IniSectionBase : IIniSection
     /// <inheritdoc/>
     public void SetRawValue(string key, string? value)
     {
+        if (_constantKeys.Contains(key))
+            throw new AccessViolationException(
+                $"The configuration key '{key}' in section '{SectionName}' is protected by an administrator constants file and cannot be modified.");
+
         _currentKey = key;
         try
         {
@@ -60,6 +67,9 @@ public abstract class IniSectionBase : IIniSection
 
     /// <inheritdoc/>
     public bool HasChanges => _isDirty;
+
+    /// <inheritdoc/>
+    public bool IsConstant(string key) => _constantKeys.Contains(key);
 
     // ── Unknown key detection ─────────────────────────────────────────────────
 
@@ -83,6 +93,20 @@ public abstract class IniSectionBase : IIniSection
     /// <see cref="IniConfig.Save"/> or <see cref="IniConfig.Reload"/>.
     /// </summary>
     internal void ClearDirtyFlag() => _isDirty = false;
+
+    /// <summary>
+    /// Marks <paramref name="key"/> as a constant (loaded from an admin constants file).
+    /// After this call any attempt to change the key via <see cref="SetRawValue"/> will throw
+    /// <see cref="AccessViolationException"/>.
+    /// </summary>
+    internal void MarkKeyAsConstant(string key) => _constantKeys.Add(key);
+
+    /// <summary>
+    /// Clears all constant-key protections. Called by <see cref="IniConfig"/> at the start
+    /// of every load / reload cycle so that protections are re-established from the current
+    /// constants files.
+    /// </summary>
+    internal void ClearConstants() => _constantKeys.Clear();
 
     // ── Internal helpers for generated code ──────────────────────────────────
 

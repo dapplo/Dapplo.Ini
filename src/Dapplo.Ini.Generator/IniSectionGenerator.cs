@@ -11,14 +11,15 @@ using Microsoft.CodeAnalysis.Text;
 namespace Dapplo.Ini.Generator;
 
 /// <summary>
-/// Incremental source generator that creates a concrete class for every interface
-/// annotated with <c>[IniSection]</c>.
+/// Incremental source generator that creates a concrete class for every interface that
+/// either carries <c>[IniSection]</c> or directly extends <see cref="IIniSection"/>.
 /// </summary>
 [Generator]
 public sealed class IniSectionGenerator : IIncrementalGenerator
 {
-    private const string IniSectionAttributeFqn = "Dapplo.Ini.Attributes.IniSectionAttribute";
-    private const string IniValueAttributeFqn   = "Dapplo.Ini.Attributes.IniValueAttribute";
+    private const string IniSectionAttributeFqn  = "Dapplo.Ini.Attributes.IniSectionAttribute";
+    private const string IniValueAttributeFqn    = "Dapplo.Ini.Attributes.IniValueAttribute";
+    private const string IIniSectionFqn          = "Dapplo.Ini.Interfaces.IIniSection";
 
     // FQNs for standard .NET attributes whose semantics we honour in addition to our own
     private const string DefaultValueAttributeFqn    = "System.ComponentModel.DefaultValueAttribute";
@@ -49,11 +50,15 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
-        // Filter for interface declarations that carry [IniSection]
+        // Filter for interface declarations that either:
+        // (a) carry [IniSection], OR
+        // (b) extend at least one other interface (which may be IIniSection)
+        // The transform step narrows further to IIniSection-implementing interfaces only.
         var interfaces = context.SyntaxProvider
             .CreateSyntaxProvider(
                 predicate: static (node, _) => node is InterfaceDeclarationSyntax ids
-                                               && ids.AttributeLists.Count > 0,
+                                               && (ids.AttributeLists.Count > 0
+                                                   || ids.BaseList != null),
                 transform: static (ctx, _) => GetInterfaceModel(ctx))
             .Where(static m => m is not null)
             .Select(static (m, _) => m!);
@@ -85,6 +90,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         public string? DictionaryValueTypeFullName { get; set; }
         // True when [IgnoreDataMember] is present — property is excluded from INI read/write.
         public bool IsIgnored { get; set; }
+        // True when [IniValue(RuntimeOnly=true)] — property has a default and participates in
+        // ResetToDefaults but is never loaded from or saved to the INI file.
+        public bool IsRuntimeOnly { get; set; }
         // Validation attributes from System.ComponentModel.DataAnnotations
         public bool IsRequired { get; set; }
         public string? RequiredErrorMessage { get; set; }
@@ -134,10 +142,16 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         var symbol = ctx.SemanticModel.GetDeclaredSymbol(ids) as INamedTypeSymbol;
         if (symbol is null) return null;
 
-        // Must have [IniSection]
+        // Accept the interface when it carries [IniSection] OR when it directly or
+        // indirectly extends IIniSection (without requiring the attribute).
+        // IIniSection itself is excluded — we only generate for consumer interfaces.
         var iniSectionAttr = symbol.GetAttributes()
             .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == IniSectionAttributeFqn);
-        if (iniSectionAttr is null) return null;
+
+        bool implementsIIniSection = symbol.ToDisplayString() != IIniSectionFqn
+            && symbol.AllInterfaces.Any(i => i.ToDisplayString() == IIniSectionFqn);
+
+        if (iniSectionAttr is null && !implementsIIniSection) return null;
 
         var interfaceName = symbol.Name;
         var namespaceName = symbol.ContainingNamespace.IsGlobalNamespace
@@ -146,7 +160,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
 
         // Determine section name: [IniSection] arg → [DataContract] Name → strip leading 'I' → use interface name
         string sectionName;
-        if (iniSectionAttr.ConstructorArguments.Length > 0 &&
+        if (iniSectionAttr?.ConstructorArguments.Length > 0 &&
             iniSectionAttr.ConstructorArguments[0].Value is string sn && !string.IsNullOrEmpty(sn))
             sectionName = sn;
         else
@@ -172,11 +186,12 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         }
 
         string? description = null;
-        foreach (var na in iniSectionAttr.NamedArguments)
-        {
-            if (na.Key == "Description" && na.Value.Value is string d)
-                description = d;
-        }
+        if (iniSectionAttr != null)
+            foreach (var na in iniSectionAttr.NamedArguments)
+            {
+                if (na.Key == "Description" && na.Value.Value is string d)
+                    description = d;
+            }
 
         // Fall back to [Description("...")] on the interface if [IniSection] doesn't specify Description
         if (description == null)
@@ -260,6 +275,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                         case "Transactional":         prop.IsTransactional = na.Value.Value is true; break;
                         case "NotifyPropertyChanged": prop.NotifyPropertyChanged = na.Value.Value is true; break;
                         case "ReadOnly":              prop.IsReadOnly = na.Value.Value is true; break;
+                        case "RuntimeOnly":           prop.IsRuntimeOnly = na.Value.Value is true; break;
                     }
                 }
             }
@@ -572,9 +588,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 sb.AppendLine($"                PropertyChanging?.Invoke(this, new PropertyChangingEventArgs(nameof({p.Name})));");
             }
 
-            if (p.IsIgnored)
+            if (p.IsIgnored || p.IsRuntimeOnly)
             {
-                // [IgnoreDataMember] — only update the backing field; no INI interaction.
+                // [IgnoreDataMember] / RuntimeOnly — only update the backing field; no INI interaction.
                 sb.AppendLine($"                {fieldName} = value;");
             }
             else
@@ -657,8 +673,8 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         sb.AppendLine("            {");
         foreach (var p in m.Properties)
         {
-            // [IgnoreDataMember] properties are not loaded from INI.
-            if (p.IsIgnored) continue;
+            // [IgnoreDataMember] and RuntimeOnly properties are not loaded from INI.
+            if (p.IsIgnored || p.IsRuntimeOnly) continue;
 
             string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
             string fieldName = $"_{Camel(p.Name)}";
@@ -690,8 +706,8 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         sb.AppendLine("            {");
         foreach (var p in m.Properties)
         {
-            // [IgnoreDataMember] properties are not known INI keys.
-            if (p.IsIgnored) continue;
+            // [IgnoreDataMember] and RuntimeOnly properties are not known INI keys.
+            if (p.IsIgnored || p.IsRuntimeOnly) continue;
 
             string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
             if (p.IsSubKeyDictionary)
@@ -709,8 +725,8 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         sb.AppendLine("        {");
         foreach (var p in m.Properties)
         {
-            // [IgnoreDataMember] and read-only properties are not serialized to the INI file.
-            if (p.IsIgnored || p.IsReadOnly) continue;
+            // [IgnoreDataMember], read-only, and RuntimeOnly properties are not serialized to the INI file.
+            if (p.IsIgnored || p.IsReadOnly || p.IsRuntimeOnly) continue;
             string fieldName = $"_{Camel(p.Name)}";
             string keyName = p.KeyName ?? p.Name;
             if (p.IsSubKeyDictionary)

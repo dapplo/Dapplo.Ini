@@ -34,4 +34,18 @@ public interface IIniSection
     /// <see cref="IniConfig.Save"/> or <see cref="IniConfig.Reload"/>.
     /// </summary>
     bool HasChanges { get; }
+
+    /// <summary>
+    /// Returns <c>true</c> when the value for <paramref name="key"/> was loaded from a
+    /// constants file (registered via <c>IniConfigBuilder.AddConstantsFile</c>) and is
+    /// therefore protected against modification.
+    /// Attempting to change a constant key via its property setter or
+    /// <see cref="SetRawValue"/> throws <see cref="AccessViolationException"/>.
+    /// Use this method in UI code to disable the corresponding input control.
+    /// </summary>
+    /// <param name="key">
+    /// The key name as it appears in the INI file (case-insensitive).
+    /// Typically the property name, unless overridden via <c>[IniValue(KeyName="...")]</c>.
+    /// </param>
+    bool IsConstant(string key);
 }

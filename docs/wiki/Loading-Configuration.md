@@ -167,3 +167,4 @@ config.Load();
 - [[File-Locking]] — `LockFile()`
 - [[File-Change-Monitoring]] — `MonitorFile()`
 - [[Async-Support]] — `BuildAsync()` and other async APIs
+- [[Runtime-Only-and-Constants]] — constants-file protection and `IsConstant(key)`

@@ -319,8 +319,9 @@ public interface ILegacyMigrationSettings : IIniSection, IUnknownKey
 /// Section that uses standard .NET attributes for its properties.
 /// [DataMember(Name=...)] sets the key name, [DefaultValue] sets the default,
 /// [IgnoreDataMember] excludes the property from INI read/write.
-/// Note: [DataContract] cannot be applied to interface declarations in .NET;
-/// the [IniSection] attribute is used to name the section.
+/// Note: [DataContract] cannot be applied to interface declarations in .NET.
+/// [IniSection] is used here to give the section an explicit name; it can be
+/// omitted when the default name (interface name without leading 'I') is acceptable.
 /// </summary>
 [IniSection("StandardSection")]
 [Description("A section using standard .NET attributes")]
@@ -392,4 +393,60 @@ public interface ICombinedValidationSettings : IIniSection, IDataValidation<ICom
         if (propertyName == nameof(Host) && string.Equals(self.Host, "banned", StringComparison.OrdinalIgnoreCase))
             yield return "Host value 'banned' is not allowed.";
     }
+}
+
+// ── RuntimeOnly sample interface ──────────────────────────────────────────────
+
+/// <summary>
+/// Section that exercises <c>[IniValue(RuntimeOnly = true)]</c> properties.
+/// Runtime-only properties have a default, can be changed at runtime, but are never
+/// loaded from or saved to the INI file.
+/// </summary>
+[IniSection("RuntimeOnly")]
+public interface IRuntimeOnlySettings : IIniSection
+{
+    /// <summary>Regular read-write property — saved and loaded normally.</summary>
+    [IniValue(DefaultValue = "saved")]
+    string? Persisted { get; set; }
+
+    /// <summary>Runtime-only — has a default, never persisted.</summary>
+    [IniValue(DefaultValue = "runtime-default", RuntimeOnly = true)]
+    string? Session { get; set; }
+
+    /// <summary>Runtime-only integer with a default.</summary>
+    [IniValue(DefaultValue = "99", RuntimeOnly = true)]
+    int SessionCount { get; set; }
+}
+
+// ── Attribute-free sample interface (no [IniSection]) ────────────────────────
+
+/// <summary>
+/// Section declared without <c>[IniSection]</c> — the source generator detects it
+/// because it extends <see cref="IIniSection"/>.
+/// The section name defaults to "NoAttributeSettings" (leading 'I' stripped from
+/// the interface name), and the description comes from <c>[Description]</c>.
+/// </summary>
+[Description("A section defined without [IniSection]")]
+public interface INoAttributeSettings : IIniSection
+{
+    /// <summary>String with a default value supplied via [DefaultValue].</summary>
+    [DefaultValue("no-attr-default")]
+    string? Value { get; set; }
+
+    /// <summary>Integer with a default value.</summary>
+    [DefaultValue(42)]
+    int Count { get; set; }
+}
+
+/// <summary>
+/// Section used to test constants-file protection.
+/// </summary>
+[IniSection("ConstantsTest")]
+public interface IConstantsSettings : IIniSection
+{
+    [IniValue(DefaultValue = "user-default")]
+    string? UserValue { get; set; }
+
+    [IniValue(DefaultValue = "admin-default")]
+    string? AdminValue { get; set; }
 }
