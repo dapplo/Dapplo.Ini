@@ -319,8 +319,9 @@ public interface ILegacyMigrationSettings : IIniSection, IUnknownKey
 /// Section that uses standard .NET attributes for its properties.
 /// [DataMember(Name=...)] sets the key name, [DefaultValue] sets the default,
 /// [IgnoreDataMember] excludes the property from INI read/write.
-/// Note: [DataContract] cannot be applied to interface declarations in .NET;
-/// the [IniSection] attribute is used to name the section.
+/// Note: [DataContract] cannot be applied to interface declarations in .NET.
+/// [IniSection] is used here to give the section an explicit name; it can be
+/// omitted when the default name (interface name without leading 'I') is acceptable.
 /// </summary>
 [IniSection("StandardSection")]
 [Description("A section using standard .NET attributes")]
@@ -417,7 +418,25 @@ public interface IRuntimeOnlySettings : IIniSection
     int SessionCount { get; set; }
 }
 
-// ── Constants protection sample interface ────────────────────────────────────
+// ── Attribute-free sample interface (no [IniSection]) ────────────────────────
+
+/// <summary>
+/// Section declared without <c>[IniSection]</c> — the source generator detects it
+/// because it extends <see cref="IIniSection"/>.
+/// The section name defaults to "NoAttributeSettings" (leading 'I' stripped from
+/// the interface name), and the description comes from <c>[Description]</c>.
+/// </summary>
+[Description("A section defined without [IniSection]")]
+public interface INoAttributeSettings : IIniSection
+{
+    /// <summary>String with a default value supplied via [DefaultValue].</summary>
+    [DefaultValue("no-attr-default")]
+    string? Value { get; set; }
+
+    /// <summary>Integer with a default value.</summary>
+    [DefaultValue(42)]
+    int Count { get; set; }
+}
 
 /// <summary>
 /// Section used to test constants-file protection.

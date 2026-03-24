@@ -440,4 +440,62 @@ public sealed class StandardAttributeTests : IDisposable
         Assert.Empty(((INotifyDataErrorInfo)section)
             .GetErrors(nameof(IAnnotatedSettings.Code)).Cast<string>());
     }
+
+    // ── Interfaces without [IniSection] ──────────────────────────────────────
+
+    [Fact]
+    public void NoIniSection_SectionNameDerivedFromInterfaceName()
+    {
+        // Without [IniSection] the section name is derived from the interface name
+        // by stripping the leading 'I': INoAttributeSettings → "NoAttributeSettings"
+        var section = new NoAttributeSettingsImpl();
+        Assert.Equal("NoAttributeSettings", section.SectionName);
+    }
+
+    [Fact]
+    public void NoIniSection_DefaultsApplied()
+    {
+        var section = new NoAttributeSettingsImpl();
+        IniConfigRegistry.ForFile("no_attr_defaults.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<INoAttributeSettings>(section)
+            .Build();
+
+        Assert.Equal("no-attr-default", section.Value);
+        Assert.Equal(42, section.Count);
+    }
+
+    [Fact]
+    public void NoIniSection_LoadsFromFile()
+    {
+        WriteIni("no_attr.ini", "[NoAttributeSettings]\nValue = from-file\nCount = 7");
+
+        var section = new NoAttributeSettingsImpl();
+        IniConfigRegistry.ForFile("no_attr.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<INoAttributeSettings>(section)
+            .Build();
+
+        Assert.Equal("from-file", section.Value);
+        Assert.Equal(7, section.Count);
+    }
+
+    [Fact]
+    public void NoIniSection_SavesCorrectly()
+    {
+        var path = Path.Combine(_tempDir, "no_attr_save.ini");
+        var section = new NoAttributeSettingsImpl();
+        var config = IniConfigRegistry.ForFile("no_attr_save.ini")
+            .AddSearchPath(_tempDir)
+            .SetWritablePath(path)
+            .RegisterSection<INoAttributeSettings>(section)
+            .Build();
+
+        section.Value = "saved-value";
+        config.Save();
+
+        var content = File.ReadAllText(path);
+        Assert.Contains("[NoAttributeSettings]", content);
+        Assert.Contains("Value = saved-value", content);
+    }
 }

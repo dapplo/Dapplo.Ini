@@ -1,27 +1,47 @@
 # Defining Sections
 
-Every configuration section is a plain C# interface annotated with `[IniSection]`.
+Every configuration section is a plain C# interface that extends `IIniSection`.
 The source generator (`Dapplo.Ini.Generator`) creates a concrete `partial class`
 implementation automatically.
 
 ---
 
-## `[IniSection]` attribute
+## `[IniSection]` attribute — optional
+
+`[IniSection]` is **optional**.  The source generator processes any interface that
+extends `IIniSection`, with or without the attribute.
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `SectionName` (ctor) | `string?` | interface name minus leading `I` | Name of the `[Section]` in the INI file |
 | `Description` | `string?` | `null` | Written as a comment above the section header |
 
-```csharp
-// Section name derived from interface name → "UserProfile"
-[IniSection]
-public interface IUserProfile : IIniSection { /* … */ }
+When `[IniSection]` is omitted:
 
-// Explicit section name
-[IniSection("user")]
-public interface IUserProfile : IIniSection { /* … */ }
+- The section name defaults to the interface name with the leading `I` stripped
+  (e.g. `IAppSettings` → `[AppSettings]`).
+- Use `[Description("...")]` on the interface to set the section comment.
+
+```csharp
+// No [IniSection] needed — section name is "AppSettings", description from [Description]
+using System.ComponentModel;
+
+[Description("Application settings")]
+public interface IAppSettings : IIniSection
+{
+    [DefaultValue("MyApp")]
+    string? AppName { get; set; }
+}
+
+// Use [IniSection] only when you need a custom section name
+[IniSection("app")]
+public interface IAppSettings : IIniSection { /* … */ }
 ```
+
+> **Note:** There is no standard .NET attribute that can be applied to an interface
+> to set a serialisation name (`[DataMember]` targets fields/properties/methods;
+> `[DataContract]` targets classes/structs/enums).  `[IniSection("customName")]` is
+> therefore the only way to override the section name when the default is not suitable.
 
 ---
 
@@ -45,7 +65,7 @@ your interface definitions stay clean and interoperable.
 using System.ComponentModel;
 using System.Runtime.Serialization;
 
-[IniSection("UserProfile")]
+// No [IniSection] — section name = "UserProfileSettings"
 [Description("User profile settings")]          // sets the section comment
 public interface IUserProfileSettings : IIniSection
 {

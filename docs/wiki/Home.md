@@ -26,8 +26,10 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
 ## Quick start
 
 ```csharp
-// 1. Define a section interface — prefer standard .NET attributes
-[IniSection("App", Description = "Application settings")]
+// 1. Define a section interface — [IniSection] is optional; use standard .NET attributes
+using System.ComponentModel;
+
+[Description("Application settings")]   // section comment — no [IniSection] needed
 public interface IAppSettings : IIniSection
 {
     [DefaultValue("MyApp")]
