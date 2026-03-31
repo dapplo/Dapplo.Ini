@@ -8,7 +8,17 @@
     <AssemblyName>Dapplo.Ini.Generator</AssemblyName>
     <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
     <Description>Source generator for Dapplo.Ini – generates concrete INI section classes from annotated interfaces.</Description>
+    <!-- Source generators must live in analyzers/dotnet/cs/, not lib/, so that MSBuild
+         discovers them as Roslyn analyzers in all project types (including .NET Framework). -->
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <!-- NU5128: expected for analyzer-only packages that have no lib/ output. -->
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Place the generator DLL in the correct NuGet analyzer folder. -->
+    <None Include="$(OutputPath)\$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.12.0" PrivateAssets="all" />
