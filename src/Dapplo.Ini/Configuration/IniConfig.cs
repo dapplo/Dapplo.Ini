@@ -754,8 +754,9 @@ public sealed class IniConfig : IDisposable
             // 2. Apply default files
             foreach (var path in DefaultFilePaths)
             {
-                if (File.Exists(path))
-                    ApplyIniFile(IniFileParser.ParseFile(path, Encoding));
+                var resolvedDefault = ResolveAuxiliaryFilePath(path);
+                if (resolvedDefault != null)
+                    ApplyIniFile(IniFileParser.ParseFile(resolvedDefault, Encoding));
             }
 
             // 3. Resolve and apply user file
@@ -786,8 +787,9 @@ public sealed class IniConfig : IDisposable
             // 4. Apply constant files
             foreach (var path in ConstantFilePaths)
             {
-                if (File.Exists(path))
-                    ApplyIniFile(IniFileParser.ParseFile(path, Encoding), isConstant: true);
+                var resolvedConstant = ResolveAuxiliaryFilePath(path);
+                if (resolvedConstant != null)
+                    ApplyIniFile(IniFileParser.ParseFile(resolvedConstant, Encoding), isConstant: true);
             }
 
             // 5. Apply external value sources
@@ -855,8 +857,9 @@ public sealed class IniConfig : IDisposable
             // 2. Apply default files
             foreach (var path in DefaultFilePaths)
             {
-                if (File.Exists(path))
-                    ApplyIniFile(await IniFileParser.ParseFileAsync(path, Encoding, cancellationToken).ConfigureAwait(false));
+                var resolvedDefault = ResolveAuxiliaryFilePath(path);
+                if (resolvedDefault != null)
+                    ApplyIniFile(await IniFileParser.ParseFileAsync(resolvedDefault, Encoding, cancellationToken).ConfigureAwait(false));
             }
 
             // 3. Resolve and apply user file
@@ -886,8 +889,9 @@ public sealed class IniConfig : IDisposable
             // 4. Apply constant files
             foreach (var path in ConstantFilePaths)
             {
-                if (File.Exists(path))
-                    ApplyIniFile(await IniFileParser.ParseFileAsync(path, Encoding, cancellationToken).ConfigureAwait(false), isConstant: true);
+                var resolvedConstant = ResolveAuxiliaryFilePath(path);
+                if (resolvedConstant != null)
+                    ApplyIniFile(await IniFileParser.ParseFileAsync(resolvedConstant, Encoding, cancellationToken).ConfigureAwait(false), isConstant: true);
             }
 
             // 5. Apply external value sources (sync + async)
@@ -1082,6 +1086,36 @@ public sealed class IniConfig : IDisposable
         foreach (var dir in SearchPaths)
         {
             var candidate = Path.Combine(dir, FileName);
+            if (File.Exists(candidate))
+                return candidate;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Resolves an auxiliary file path (used for default and constant files).
+    /// </summary>
+    /// <remarks>
+    /// When <paramref name="filePath"/> contains a directory component it is used as-is
+    /// (absolute or relative paths are honoured directly).  When it is a bare filename
+    /// with no directory part, every directory in <see cref="SearchPaths"/> is tried in
+    /// order — the first match wins.
+    /// </remarks>
+    /// <param name="filePath">
+    /// A full path, a path relative to the working directory, or a bare filename to be
+    /// resolved through <see cref="SearchPaths"/>.
+    /// </param>
+    /// <returns>The resolved absolute path, or <c>null</c> if the file cannot be found.</returns>
+    private string? ResolveAuxiliaryFilePath(string filePath)
+    {
+        // Path has a directory component — honour it directly.
+        if (!string.IsNullOrEmpty(Path.GetDirectoryName(filePath)))
+            return File.Exists(filePath) ? filePath : null;
+
+        // Bare filename — search through configured search paths.
+        foreach (var dir in SearchPaths)
+        {
+            var candidate = Path.Combine(dir, filePath);
             if (File.Exists(candidate))
                 return candidate;
         }

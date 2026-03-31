@@ -107,7 +107,81 @@ public sealed class IniConfigBuilderTests : IDisposable
         Assert.Equal("AdminApp", section.AppName);
     }
 
-    // ── Registry tests ─────────────────────────────────────────────────────────
+    [Fact]
+    public void Build_WithBareFilenameDefaultsFile_SearchesThroughSearchPaths()
+    {
+        WriteIni("defaults.ini", "[General]\nAppName = DefaultApp\nMaxRetries = 1");
+        WriteIni("app.ini",      "[General]\nMaxRetries = 99");
+
+        var section = new GeneralSettingsImpl();
+        IniConfigRegistry.ForFile("app.ini")
+            .AddSearchPath(_tempDir)
+            .AddDefaultsFile("defaults.ini")   // bare filename — resolved via search paths
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        Assert.Equal(99, section.MaxRetries);
+        Assert.Equal("DefaultApp", section.AppName);
+    }
+
+    [Fact]
+    public void Build_WithBareFilenameConstantsFile_SearchesThroughSearchPaths()
+    {
+        WriteIni("app.ini",       "[General]\nAppName = UserApp");
+        WriteIni("constants.ini", "[General]\nAppName = AdminApp");
+
+        var section = new GeneralSettingsImpl();
+        IniConfigRegistry.ForFile("app.ini")
+            .AddSearchPath(_tempDir)
+            .AddConstantsFile("constants.ini")  // bare filename — resolved via search paths
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        Assert.Equal("AdminApp", section.AppName);
+    }
+
+    [Fact]
+    public void Build_WithBareFilenameDefaultsFile_MissingFile_DoesNotThrow()
+    {
+        WriteIni("app.ini", "[General]\nAppName = UserApp");
+
+        var section = new GeneralSettingsImpl();
+        IniConfigRegistry.ForFile("app.ini")
+            .AddSearchPath(_tempDir)
+            .AddDefaultsFile("nonexistent-defaults.ini")
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        // Falls back to compiled default when defaults file is absent
+        Assert.Equal("UserApp", section.AppName);
+    }
+
+    [Fact]
+    public void Build_WithBareFilenameDefaultsFile_MultipleSearchPaths_FindsInSecondPath()
+    {
+        var secondDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(secondDir);
+        try
+        {
+            // defaults file only exists in the second search path
+            File.WriteAllText(Path.Combine(secondDir, "defaults.ini"), "[General]\nAppName = SecondPathApp");
+            WriteIni("app.ini", "[General]\nMaxRetries = 5");
+
+            var section = new GeneralSettingsImpl();
+            IniConfigRegistry.ForFile("app.ini")
+                .AddSearchPath(_tempDir)    // first path — no defaults.ini here
+                .AddSearchPath(secondDir)   // second path — defaults.ini lives here
+                .AddDefaultsFile("defaults.ini")
+                .RegisterSection<IGeneralSettings>(section)
+                .Build();
+
+            Assert.Equal("SecondPathApp", section.AppName);
+        }
+        finally
+        {
+            Directory.Delete(secondDir, recursive: true);
+        }
+    }
 
     [Fact]
     public void IniConfigRegistry_Get_ReturnsRegisteredConfig()
