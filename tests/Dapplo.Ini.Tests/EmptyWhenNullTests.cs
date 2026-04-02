@@ -4,9 +4,11 @@
 namespace Dapplo.Ini.Tests;
 
 /// <summary>
-/// Integration tests for <c>[IniValue(EmptyWhenNull = true)]</c>.
+/// Integration tests for <c>[IniValue(EmptyWhenNull = true)]</c>,
+/// <c>[IniSection(EmptyWhenNull = true)]</c>, and
+/// <c>IniConfigBuilder.EmptyWhenNull()</c>.
 /// Verifies that absent/null INI values produce empty strings, lists, and arrays
-/// rather than <c>null</c> when the flag is set.
+/// rather than <c>null</c> when the flag is set at any of the three levels.
 /// </summary>
 [Collection("IniConfigRegistry")]
 public sealed class EmptyWhenNullTests : IDisposable
@@ -34,7 +36,7 @@ public sealed class EmptyWhenNullTests : IDisposable
         return path;
     }
 
-    // ── No file present (ResetToDefaults behaviour) ───────────────────────────
+    // ── Property-level [IniValue(EmptyWhenNull=true)] ─────────────────────────
 
     [Fact]
     public void Build_WithNoFile_StringProperty_EmptyWhenNull_ReturnsEmptyString()
@@ -113,7 +115,6 @@ public sealed class EmptyWhenNullTests : IDisposable
         Assert.Null(section.NullableString);
     }
 
-    // ── INI file with empty/absent keys ──────────────────────────────────────
 
     [Fact]
     public void Build_WithFile_EmptyKeyValue_StringProperty_EmptyWhenNull_ReturnsEmptyString()
@@ -159,7 +160,6 @@ public sealed class EmptyWhenNullTests : IDisposable
         Assert.Equal(string.Empty, section.Description);
     }
 
-    // ── INI file with actual values ───────────────────────────────────────────
 
     [Fact]
     public void Build_WithFile_StringProperty_EmptyWhenNull_LoadsValueNormally()
@@ -189,7 +189,6 @@ public sealed class EmptyWhenNullTests : IDisposable
         Assert.Equal(new List<string> { "alpha", "beta", "gamma" }, section.Tags);
     }
 
-    // ── ResetToDefaults ────────────────────────────────────────────────────────
 
     [Fact]
     public void ResetToDefaults_StringProperty_EmptyWhenNull_RestoresEmptyString()
@@ -222,5 +221,177 @@ public sealed class EmptyWhenNullTests : IDisposable
         section.ResetToDefaults();
         Assert.NotNull(section.Tags);
         Assert.Empty(section.Tags!);
+    }
+
+    // ── Section-level [IniSection(EmptyWhenNull=true)] ────────────────────────
+
+    [Fact]
+    public void SectionLevel_WithNoFile_StringProperty_ReturnsEmptyString()
+    {
+        var section = new SectionEmptyWhenNullSettingsImpl();
+        IniConfigRegistry.ForFile("sewn_nofile.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<ISectionEmptyWhenNullSettings>(section)
+            .Build();
+
+        Assert.Equal(string.Empty, section.Label);
+    }
+
+    [Fact]
+    public void SectionLevel_WithNoFile_ListProperty_ReturnsEmptyList()
+    {
+        var section = new SectionEmptyWhenNullSettingsImpl();
+        IniConfigRegistry.ForFile("sewn_list.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<ISectionEmptyWhenNullSettings>(section)
+            .Build();
+
+        Assert.NotNull(section.Items);
+        Assert.Empty(section.Items!);
+    }
+
+    [Fact]
+    public void SectionLevel_WithNoFile_PropertyWithDefault_ReturnsDefault()
+    {
+        var section = new SectionEmptyWhenNullSettingsImpl();
+        IniConfigRegistry.ForFile("sewn_default.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<ISectionEmptyWhenNullSettings>(section)
+            .Build();
+
+        // DefaultValue wins over EmptyWhenNull in ResetToDefaults
+        Assert.Equal("hello", section.WithDefault);
+    }
+
+    [Fact]
+    public void SectionLevel_WithNoFile_ValueTypeProperty_ReturnsDefault()
+    {
+        var section = new SectionEmptyWhenNullSettingsImpl();
+        IniConfigRegistry.ForFile("sewn_valuetype.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<ISectionEmptyWhenNullSettings>(section)
+            .Build();
+
+        // Value types are not affected by EmptyWhenNull
+        Assert.Equal(0, section.Counter);
+    }
+
+    [Fact]
+    public void SectionLevel_WithFile_EmptyKeyValue_StringProperty_ReturnsEmptyString()
+    {
+        WriteIni("sewn_emptykey.ini", "[SectionEmptyWhenNull]\nLabel =\n");
+
+        var section = new SectionEmptyWhenNullSettingsImpl();
+        IniConfigRegistry.ForFile("sewn_emptykey.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<ISectionEmptyWhenNullSettings>(section)
+            .Build();
+
+        Assert.Equal(string.Empty, section.Label);
+    }
+
+    [Fact]
+    public void SectionLevel_ResetToDefaults_StringProperty_RestoresEmptyString()
+    {
+        var section = new SectionEmptyWhenNullSettingsImpl();
+        IniConfigRegistry.ForFile("sewn_reset.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<ISectionEmptyWhenNullSettings>(section)
+            .Build();
+
+        section.Label = "changed";
+        section.ResetToDefaults();
+        Assert.Equal(string.Empty, section.Label);
+    }
+
+    // ── IniConfig-level IniConfigBuilder.EmptyWhenNull() ─────────────────────
+
+    [Fact]
+    public void ConfigLevel_WithNoFile_PropertyWithDefault_DefaultWins()
+    {
+        var section = new GeneralSettingsImpl();
+        IniConfigRegistry.ForFile("cewn_nofile.ini")
+            .AddSearchPath(_tempDir)
+            .EmptyWhenNull()
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        // IGeneralSettings.AppName has [IniValue(DefaultValue = "MyApp")] — default wins
+        Assert.Equal("MyApp", section.AppName);
+    }
+
+    [Fact]
+    public void ConfigLevel_WithNoFile_StringPropertyNoDefault_ReturnsEmptyString()
+    {
+        // NullableString in IEmptyWhenNullSettings has no default and no property-level EmptyWhenNull
+        var section = new EmptyWhenNullSettingsImpl();
+        IniConfigRegistry.ForFile("cewn_str.ini")
+            .AddSearchPath(_tempDir)
+            .EmptyWhenNull()
+            .RegisterSection<IEmptyWhenNullSettings>(section)
+            .Build();
+
+        // Config-level flag causes NullableString to return empty instead of null
+        Assert.Equal(string.Empty, section.NullableString);
+    }
+
+    [Fact]
+    public void ConfigLevel_WithFile_EmptyKeyValue_StringPropertyNoDefault_ReturnsEmptyString()
+    {
+        WriteIni("cewn_emptykey.ini", "[EmptyWhenNull]\nNullableString =\n");
+
+        var section = new EmptyWhenNullSettingsImpl();
+        IniConfigRegistry.ForFile("cewn_emptykey.ini")
+            .AddSearchPath(_tempDir)
+            .EmptyWhenNull()
+            .RegisterSection<IEmptyWhenNullSettings>(section)
+            .Build();
+
+        Assert.Equal(string.Empty, section.NullableString);
+    }
+
+    [Fact]
+    public void ConfigLevel_WithFile_RealValue_StringProperty_LoadsValueNormally()
+    {
+        WriteIni("cewn_value.ini", "[EmptyWhenNull]\nNullableString = actual value\n");
+
+        var section = new EmptyWhenNullSettingsImpl();
+        IniConfigRegistry.ForFile("cewn_value.ini")
+            .AddSearchPath(_tempDir)
+            .EmptyWhenNull()
+            .RegisterSection<IEmptyWhenNullSettings>(section)
+            .Build();
+
+        Assert.Equal("actual value", section.NullableString);
+    }
+
+    [Fact]
+    public void ConfigLevel_WithoutEmptyWhenNull_StringPropertyNoDefault_ReturnsNull()
+    {
+        var section = new EmptyWhenNullSettingsImpl();
+        IniConfigRegistry.ForFile("cewn_noset.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IEmptyWhenNullSettings>(section)
+            .Build();
+
+        // GlobalEmptyWhenNull is false by default — NullableString stays null
+        Assert.Null(section.NullableString);
+    }
+
+    [Fact]
+    public void ConfigLevel_ResetToDefaults_StringPropertyNoDefault_RestoresEmptyString()
+    {
+        var section = new EmptyWhenNullSettingsImpl();
+        IniConfigRegistry.ForFile("cewn_reset.ini")
+            .AddSearchPath(_tempDir)
+            .EmptyWhenNull()
+            .RegisterSection<IEmptyWhenNullSettings>(section)
+            .Build();
+
+        section.NullableString = "something";
+        Assert.Equal("something", section.NullableString);
+
+        section.ResetToDefaults();
+        Assert.Equal(string.Empty, section.NullableString);
     }
 }

@@ -489,3 +489,27 @@ public interface IEmptyWhenNullSettings : IIniSection
     /// <summary>Regular nullable string property (no EmptyWhenNull) — baseline comparison.</summary>
     string? NullableString { get; set; }
 }
+
+// ── Section-level EmptyWhenNull sample interface ──────────────────────────────
+
+/// <summary>
+/// Section that exercises <c>[IniSection(EmptyWhenNull = true)]</c>.
+/// The section-level attribute propagates to every non-value-type property, equivalent
+/// to putting <c>[IniValue(EmptyWhenNull = true)]</c> on each one.
+/// </summary>
+[IniSection("SectionEmptyWhenNull", EmptyWhenNull = true)]
+public interface ISectionEmptyWhenNullSettings : IIniSection
+{
+    /// <summary>String — gets string.Empty instead of null when not set.</summary>
+    string? Label { get; set; }
+
+    /// <summary>List — gets empty list instead of null when not set.</summary>
+    List<string>? Items { get; set; }
+
+    /// <summary>String with an explicit DefaultValue — the default wins over EmptyWhenNull for ResetToDefaults.</summary>
+    [IniValue(DefaultValue = "hello")]
+    string? WithDefault { get; set; }
+
+    /// <summary>Value-type property — section-level EmptyWhenNull does NOT affect value types.</summary>
+    int Counter { get; set; }
+}

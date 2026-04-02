@@ -51,6 +51,9 @@ public sealed class IniConfigBuilder
     // Diagnostic listeners
     private readonly List<IIniConfigListener> _listeners = new();
 
+    // Global EmptyWhenNull flag — applied to all sections/properties at runtime
+    private bool _globalEmptyWhenNull;
+
     internal IniConfigBuilder(string fileName)
     {
         // Extract just the filename component (in case a full path was passed), then strip
@@ -308,6 +311,45 @@ public sealed class IniConfigBuilder
         return this;
     }
 
+    // ── empty-when-null ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Instructs every reference-type property (string, list, array, dictionary) across
+    /// <em>all</em> registered sections to return an empty value instead of <c>null</c>
+    /// when no INI key is present and the property has no explicit
+    /// <see cref="Attributes.IniValueAttribute.DefaultValue"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the config-wide equivalent of applying
+    /// <c>[IniValue(EmptyWhenNull = true)]</c> to every reference-type property in every
+    /// registered section.  It is useful when you want empty-over-null semantics throughout
+    /// the application without annotating each property individually.
+    /// </para>
+    /// <para>
+    /// The empty representation by type:
+    /// </para>
+    /// <list type="table">
+    ///   <listheader><term>Property type</term><description>Empty representation</description></listheader>
+    ///   <item><term><c>string</c></term><description><see cref="string.Empty"/></description></item>
+    ///   <item><term><c>List&lt;T&gt;</c> / <c>IList&lt;T&gt;</c> / collection interfaces</term><description>Empty <see cref="System.Collections.Generic.List{T}"/></description></item>
+    ///   <item><term><c>T[]</c></term><description>Empty array</description></item>
+    ///   <item><term><c>Dictionary&lt;K,V&gt;</c> / <c>IDictionary&lt;K,V&gt;</c></term><description>Empty <see cref="System.Collections.Generic.Dictionary{TKey,TValue}"/></description></item>
+    /// </list>
+    /// <para>
+    /// Value-type properties (e.g. <c>int</c>, <c>bool</c>, <c>double</c>) are never affected.
+    /// </para>
+    /// <para>
+    /// To scope this behaviour to a single section use <c>[IniSection(EmptyWhenNull = true)]</c>.
+    /// To scope it to a single property use <c>[IniValue(EmptyWhenNull = true)]</c>.
+    /// </para>
+    /// </remarks>
+    public IniConfigBuilder EmptyWhenNull()
+    {
+        _globalEmptyWhenNull = true;
+        return this;
+    }
+
     /// <summary>
     /// Registers an <see cref="IIniSection"/> instance under the explicit interface type
     /// <typeparamref name="T"/>. The generated concrete class must be passed; it will be
@@ -448,6 +490,7 @@ public sealed class IniConfigBuilder
         config.ConfiguredAutoSaveInterval = _autoSaveInterval;
         config.UnknownKeyHandler = _unknownKeyCallback;
         config.MetadataConfig = _metadataConfig;
+        config.GlobalEmptyWhenNull = _globalEmptyWhenNull;
 
         config.SearchPaths.AddRange(_searchPaths);
         config.DefaultFilePaths.AddRange(_defaultFilePaths);
