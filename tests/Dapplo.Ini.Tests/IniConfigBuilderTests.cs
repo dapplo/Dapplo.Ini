@@ -294,6 +294,29 @@ public sealed class IniConfigBuilderTests : IDisposable
         Assert.Equal("Modified", section2.AppName);
     }
 
+    [Fact]
+    public void Save_WritesDescriptionAsComments_InIniFile()
+    {
+        // IGeneralSettings has:
+        //   [IniSection("General", Description = "General application settings")]
+        //   [IniValue(DefaultValue = "MyApp", Description = "Application name", ...)]
+        var section = new GeneralSettingsImpl();
+        var config = IniConfigRegistry.ForFile("comments.ini")
+            .AddSearchPath(_tempDir)
+            .SetWritablePath(Path.Combine(_tempDir, "comments.ini"))
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        config.Save();
+
+        var written = File.ReadAllText(Path.Combine(_tempDir, "comments.ini"));
+
+        // Section description should appear as a comment above [General]
+        Assert.Contains("; General application settings", written);
+        // Property description should appear as a comment above AppName
+        Assert.Contains("; Application name", written);
+    }
+
     // ── AddAppDataPath tests ───────────────────────────────────────────────────
 
     [Fact]

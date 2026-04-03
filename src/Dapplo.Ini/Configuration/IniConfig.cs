@@ -1066,11 +1066,27 @@ public sealed class IniConfig : IDisposable
         foreach (var kvp in Sections)
         {
             var section = kvp.Value;
-            var iniSection = iniFile.GetOrAddSection(section.SectionName);
             if (section is IniSectionBase sectionBase)
             {
+                var sectionDesc = sectionBase.GetSectionDescription();
+                var sectionComments = sectionDesc != null
+                    ? (IReadOnlyList<string>)new[] { sectionDesc }
+                    : Array.Empty<string>();
+                var iniSection = new Parsing.IniSection(section.SectionName, sectionComments);
+                iniFile.AddSection(iniSection);
+
                 foreach (var rawKvp in sectionBase.GetAllRawValues())
-                    iniSection.SetValue(rawKvp.Key, rawKvp.Value);
+                {
+                    var propDesc = sectionBase.GetPropertyDescription(rawKvp.Key);
+                    var propComments = propDesc != null
+                        ? (IReadOnlyList<string>)new[] { propDesc }
+                        : Array.Empty<string>();
+                    iniSection.SetEntry(new Parsing.IniEntry(rawKvp.Key, rawKvp.Value, propComments));
+                }
+            }
+            else
+            {
+                iniFile.GetOrAddSection(section.SectionName);
             }
         }
 
