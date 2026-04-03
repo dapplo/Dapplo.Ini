@@ -61,6 +61,39 @@ public sealed class IniSectionAttribute : Attribute
     public string? Description { get; set; }
 
     /// <summary>
+    /// When <c>true</c>, every reference-type property in this section (strings, lists, arrays,
+    /// dictionaries) returns an empty value instead of <c>null</c> when no INI key is present
+    /// and the property has no explicit <see cref="IniValueAttribute.DefaultValue"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is a convenient shorthand for applying
+    /// <c>[IniValue(EmptyWhenNull = true)]</c> to every qualifying property in the section.
+    /// It saves you from having to annotate each property individually when the entire section
+    /// should prefer empty-over-null semantics.
+    /// </para>
+    /// <para>
+    /// The empty representation depends on the property type:
+    /// </para>
+    /// <list type="table">
+    ///   <listheader><term>Property type</term><description>Empty representation</description></listheader>
+    ///   <item><term><c>string</c></term><description><see cref="string.Empty"/></description></item>
+    ///   <item><term><c>List&lt;T&gt;</c> / <c>IList&lt;T&gt;</c> / collection interfaces</term><description>Empty <see cref="System.Collections.Generic.List{T}"/></description></item>
+    ///   <item><term><c>T[]</c></term><description>Empty array</description></item>
+    ///   <item><term><c>Dictionary&lt;K,V&gt;</c> / <c>IDictionary&lt;K,V&gt;</c></term><description>Empty <see cref="System.Collections.Generic.Dictionary{TKey,TValue}"/></description></item>
+    /// </list>
+    /// <para>
+    /// Value-type properties (e.g. <c>int</c>, <c>bool</c>, <c>double</c>) are never affected —
+    /// they always use <c>default(T)</c> or their <see cref="IniValueAttribute.DefaultValue"/> as usual.
+    /// </para>
+    /// <para>
+    /// To apply empty-over-null behaviour to <em>all</em> sections, use
+    /// <see cref="IniConfigBuilder.EmptyWhenNull"/> on the builder instead.
+    /// </para>
+    /// </remarks>
+    public bool EmptyWhenNull { get; set; }
+
+    /// <summary>
     /// Initialises a new instance of <see cref="IniSectionAttribute"/>.
     /// </summary>
     /// <param name="sectionName">The INI section name. Defaults to the interface name without the leading 'I'.</param>

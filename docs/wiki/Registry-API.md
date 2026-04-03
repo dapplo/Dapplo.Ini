@@ -84,6 +84,7 @@ If more than one INI file is registered, `Get()` / `GetSection<T>()` throw
 | `SaveOnExit()` | Hooks `AppDomain.CurrentDomain.ProcessExit` to save on process termination |
 | `OnUnknownKey(callback)` | Registers a global `UnknownKeyCallback` invoked for keys that have no matching section property. Used for migration scenarios. See [[Migration]]. |
 | `EnableMetadata(version?, applicationName?)` | Opts in to writing a `[__metadata__]` section as the first section in the file on every save. Exposes `IniConfig.Metadata` to `IAfterLoad` hooks for version-gated migrations. See [[Migration]]. |
+| `EmptyWhenNull()` | Makes every reference-type property (string, list, array, dictionary) across all registered sections return an empty value instead of `null` when absent and no `[DefaultValue]` is set. See [[Empty-When-Null]]. |
 | `RegisterSection<T>(impl)` | Registers a section with its generated implementation |
 | `AddListener(listener)` | Registers an `IIniConfigListener` for diagnostic events (file loaded/not found/saved/reloaded, unknown keys, conversion failures, errors). Zero overhead when no listener is registered. See [[Listeners]]. |
 | `Create()` | Creates and registers the `IniConfig` without loading any files. Enables plugin sections to be added via `AddSection<T>()` before the first `Load()`. See [[Plugin-Registrations]]. |
@@ -156,3 +157,4 @@ automatically, so `ForBasename()` and `ForFile()` produce registry entries in th
 - [[Singleton-and-DI]] — `GetSection<T>()` and the singleton guarantee
 - [[Async-Support]] — full async API guide
 - [[Internationalization]] — `LanguageConfigRegistry`, language packs, and i18n builder API
+- [[Empty-When-Null]] — `EmptyWhenNull()` builder method and property/section-level equivalents

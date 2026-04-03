@@ -60,6 +60,14 @@ public sealed class IniConfig : IDisposable
     internal string? WritablePath;
 
     /// <summary>
+    /// When <c>true</c>, every reference-type property (string, list, array, dictionary) across
+    /// all registered sections returns an empty value instead of <c>null</c> when no INI key is
+    /// present and the property has no explicit default value.
+    /// Set via <see cref="IniConfigBuilder.EmptyWhenNull"/>.
+    /// </summary>
+    internal bool GlobalEmptyWhenNull;
+
+    /// <summary>
     /// The metadata that was read from the <c>[__metadata__]</c> section of the INI file
     /// on the last load / reload.
     /// <c>null</c> when the section did not exist in the file (e.g. first-run or no metadata enabled).
@@ -362,12 +370,22 @@ public sealed class IniConfig : IDisposable
             {
                 _postponedReloadPending = false;
 
-                // 1. Reset to defaults
+                // 1. Reset all sections to compiled defaults
                 foreach (var section in Sections.Values)
                 {
-                    section.ResetToDefaults();
                     if (section is IniSectionBase sectionBase)
+                    {
+                        // GlobalEmptyWhenNull must be set BEFORE ResetToDefaults() is called
+                        // because the generated ResetToDefaults() reads it to decide whether
+                        // reference-type properties without a DefaultValue should receive an
+                        // empty value (string.Empty / empty list / empty array) or null.
+                        // ClearConstants() before ResetToDefaults() is also safe because
+                        // ResetToDefaults() assigns backing fields directly; it never calls
+                        // SetRawValue(), so constant-key protection is irrelevant here.
+                        sectionBase.GlobalEmptyWhenNull = GlobalEmptyWhenNull;
                         sectionBase.ClearConstants();
+                    }
+                    section.ResetToDefaults();
                 }
 
                 // 2. Apply default files
@@ -438,12 +456,22 @@ public sealed class IniConfig : IDisposable
             {
                 _postponedReloadPending = false;
 
-                // 1. Reset to defaults
+                // 1. Reset all sections to compiled defaults
                 foreach (var section in Sections.Values)
                 {
-                    section.ResetToDefaults();
                     if (section is IniSectionBase sectionBase)
+                    {
+                        // GlobalEmptyWhenNull must be set BEFORE ResetToDefaults() is called
+                        // because the generated ResetToDefaults() reads it to decide whether
+                        // reference-type properties without a DefaultValue should receive an
+                        // empty value (string.Empty / empty list / empty array) or null.
+                        // ClearConstants() before ResetToDefaults() is also safe because
+                        // ResetToDefaults() assigns backing fields directly; it never calls
+                        // SetRawValue(), so constant-key protection is irrelevant here.
+                        sectionBase.GlobalEmptyWhenNull = GlobalEmptyWhenNull;
                         sectionBase.ClearConstants();
+                    }
+                    section.ResetToDefaults();
                 }
 
                 // 2. Apply default files
@@ -746,9 +774,19 @@ public sealed class IniConfig : IDisposable
             // 1. Reset all sections to compiled defaults
             foreach (var section in Sections.Values)
             {
-                section.ResetToDefaults();
                 if (section is IniSectionBase sectionBase)
+                {
+                    // GlobalEmptyWhenNull must be set BEFORE ResetToDefaults() is called
+                    // because the generated ResetToDefaults() reads it to decide whether
+                    // reference-type properties without a DefaultValue should receive an
+                    // empty value (string.Empty / empty list / empty array) or null.
+                    // ClearConstants() before ResetToDefaults() is also safe because
+                    // ResetToDefaults() assigns backing fields directly; it never calls
+                    // SetRawValue(), so constant-key protection is irrelevant here.
+                    sectionBase.GlobalEmptyWhenNull = GlobalEmptyWhenNull;
                     sectionBase.ClearConstants();
+                }
+                section.ResetToDefaults();
             }
 
             // 2. Apply default files
@@ -849,9 +887,19 @@ public sealed class IniConfig : IDisposable
             // 1. Reset all sections to compiled defaults
             foreach (var section in Sections.Values)
             {
-                section.ResetToDefaults();
                 if (section is IniSectionBase sectionBase)
+                {
+                    // GlobalEmptyWhenNull must be set BEFORE ResetToDefaults() is called
+                    // because the generated ResetToDefaults() reads it to decide whether
+                    // reference-type properties without a DefaultValue should receive an
+                    // empty value (string.Empty / empty list / empty array) or null.
+                    // ClearConstants() before ResetToDefaults() is also safe because
+                    // ResetToDefaults() assigns backing fields directly; it never calls
+                    // SetRawValue(), so constant-key protection is irrelevant here.
+                    sectionBase.GlobalEmptyWhenNull = GlobalEmptyWhenNull;
                     sectionBase.ClearConstants();
+                }
+                section.ResetToDefaults();
             }
 
             // 2. Apply default files

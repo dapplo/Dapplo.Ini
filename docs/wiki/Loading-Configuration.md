@@ -130,6 +130,27 @@ using var config = IniConfigRegistry.ForFile("app.ini")
 
 ---
 
+## Empty-over-null semantics
+
+Call `EmptyWhenNull()` to make every reference-type property across all registered sections
+return an empty value (e.g. `string.Empty`, empty list, empty array) instead of `null` when no
+value is present in the INI file and no explicit `[DefaultValue]` is set:
+
+```csharp
+using var config = IniConfigRegistry.ForFile("app.ini")
+    .AddSearchPath(AppContext.BaseDirectory)
+    .EmptyWhenNull()                                    // applies to all sections
+    .RegisterSection<IAppSettings>(new AppSettingsImpl())
+    .RegisterSection<IDbSettings>(new DbSettingsImpl())
+    .Build();
+```
+
+To scope the behaviour to a single section use `[IniSection(EmptyWhenNull = true)]`, or to
+a single property use `[IniValue(EmptyWhenNull = true)]`.  See [[Empty-When-Null]] for the
+complete guide and precedence rules.
+
+---
+
 ## Deferred loading for plugin scenarios
 
 When plugins need to register their own INI sections before the file is read, use
@@ -168,3 +189,4 @@ config.Load();
 - [[File-Change-Monitoring]] — `MonitorFile()`
 - [[Async-Support]] — `BuildAsync()` and other async APIs
 - [[Runtime-Only-and-Constants]] — constants-file protection and `IsConstant(key)`
+- [[Empty-When-Null]] — `EmptyWhenNull()` builder method and property/section-level equivalents

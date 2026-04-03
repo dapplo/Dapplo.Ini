@@ -15,6 +15,7 @@ extends `IIniSection`, with or without the attribute.
 |----------|------|---------|-------------|
 | `SectionName` (ctor) | `string?` | interface name minus leading `I` | Name of the `[Section]` in the INI file |
 | `Description` | `string?` | `null` | Written as a comment above the section header |
+| `EmptyWhenNull` | `bool` | `false` | When `true`, every non-value-type property in the section returns an empty value (e.g. `string.Empty`, empty list, empty array) instead of `null` when absent. Equivalent to placing `[IniValue(EmptyWhenNull = true)]` on each property individually. See [[Empty-When-Null]]. |
 
 When `[IniSection]` is omitted:
 
@@ -97,6 +98,7 @@ For the following three capabilities there is no standard .NET attribute; use
 | `NotifyPropertyChanged = true` | Raises `INotifyPropertyChanged` / `INotifyPropertyChanging` on every assignment |
 | `Transactional = true` | Property participates in `Begin` / `Commit` / `Rollback` — requires `ITransactional` |
 | `RuntimeOnly = true` | Property is never loaded from or saved to the INI file but its default **is** restored by `ResetToDefaults` on every reload |
+| `EmptyWhenNull = true` | When absent from the file, returns `string.Empty`, an empty list, an empty array, or an empty dictionary instead of `null`. See [[Empty-When-Null]]. |
 
 ```csharp
 [IniSection("AppState")]
@@ -128,6 +130,49 @@ has a preferred standard-attribute alternative:
 | `DefaultValue` | `[DefaultValue(...)]` | When both are present, `[IniValue]` wins |
 | `Description` | `[Description("...")]` | When both are present, `[IniValue]` wins |
 | `ReadOnly = true` | Getter-only `{ get; }` | Use `[IniValue(ReadOnly = true)]` only when you need the setter on the interface |
+
+---
+
+## Empty-over-null semantics
+
+By default, reference-type properties (`string?`, `List<T>?`, `T[]?`, `Dictionary<K,V>?`) return
+`null` when absent from the INI file.  Set `EmptyWhenNull = true` at any of three scopes to
+return an empty value instead:
+
+| Scope | How |
+|---|---|
+| Single property | `[IniValue(EmptyWhenNull = true)]` on the property |
+| Entire section | `[IniSection(EmptyWhenNull = true)]` on the interface |
+| All sections | `IniConfigBuilder.EmptyWhenNull()` on the builder |
+
+```csharp
+// Property level — single property
+[IniSection("App")]
+public interface IAppSettings : IIniSection
+{
+    [IniValue(EmptyWhenNull = true)]
+    string? Description { get; set; }    // → "" when absent
+
+    [IniValue(EmptyWhenNull = true)]
+    List<string>? Tags { get; set; }     // → [] when absent
+
+    string? OptionalNote { get; set; }   // → null when absent (unchanged)
+}
+
+// Section level — applies to all non-value-type properties in the section
+[IniSection("App", EmptyWhenNull = true)]
+public interface IAppSettings : IIniSection
+{
+    string? Description { get; set; }    // → "" when absent
+    List<string>? Tags { get; set; }     // → [] when absent
+    int Counter { get; set; }            // value type — unaffected
+}
+```
+
+> `[DefaultValue]` always wins over `EmptyWhenNull`: when an explicit default is set, that
+> default is applied by `ResetToDefaults()` and the empty-when-null behaviour has no effect.
+
+See [[Empty-When-Null]] for the complete guide, precedence rules, and config-level usage.
 
 ---
 
@@ -296,6 +341,7 @@ code in a separate file — see [[Lifecycle-Hooks#legacy-partial-class-pattern]]
 
 ## See also
 
+- [[Empty-When-Null]] — `EmptyWhenNull` at property, section, and config levels
 - [[Runtime-Only-and-Constants]] — `RuntimeOnly` properties and constants-file protection
 - [[Lifecycle-Hooks]] — `IAfterLoad`, `IBeforeSave`, `IAfterSave`
 - [[Validation]] — `IDataValidation<TSelf>`, DataAnnotations attributes, and `INotifyDataErrorInfo`

@@ -450,3 +450,66 @@ public interface IConstantsSettings : IIniSection
     [IniValue(DefaultValue = "admin-default")]
     string? AdminValue { get; set; }
 }
+
+// ── EmptyWhenNull sample interface ────────────────────────────────────────────
+
+/// <summary>
+/// Section that exercises <c>[IniValue(EmptyWhenNull = true)]</c>.
+/// When a property's key is absent from the INI file (or has a null raw value),
+/// the property receives an "empty" representation instead of <c>null</c>:
+/// <list type="bullet">
+///   <item><c>string</c> → <see cref="string.Empty"/></item>
+///   <item><c>List&lt;T&gt;</c> / <c>IList&lt;T&gt;</c> → empty list</item>
+///   <item><c>T[]</c> → empty array</item>
+/// </list>
+/// </summary>
+[IniSection("EmptyWhenNull")]
+public interface IEmptyWhenNullSettings : IIniSection
+{
+    /// <summary>String that returns string.Empty rather than null when not set.</summary>
+    [IniValue(EmptyWhenNull = true)]
+    string? Description { get; set; }
+
+    /// <summary>String with both a default value and EmptyWhenNull (default takes precedence for reset).</summary>
+    [IniValue(DefaultValue = "hello", EmptyWhenNull = true)]
+    string? Greeting { get; set; }
+
+    /// <summary>List that returns an empty list rather than null when not set.</summary>
+    [IniValue(EmptyWhenNull = true)]
+    List<string>? Tags { get; set; }
+
+    /// <summary>IList that returns an empty list rather than null when not set.</summary>
+    [IniValue(EmptyWhenNull = true)]
+    IList<int>? Numbers { get; set; }
+
+    /// <summary>Array that returns an empty array rather than null when not set.</summary>
+    [IniValue(EmptyWhenNull = true)]
+    string[]? Codes { get; set; }
+
+    /// <summary>Regular nullable string property (no EmptyWhenNull) — baseline comparison.</summary>
+    string? NullableString { get; set; }
+}
+
+// ── Section-level EmptyWhenNull sample interface ──────────────────────────────
+
+/// <summary>
+/// Section that exercises <c>[IniSection(EmptyWhenNull = true)]</c>.
+/// The section-level attribute propagates to every non-value-type property, equivalent
+/// to putting <c>[IniValue(EmptyWhenNull = true)]</c> on each one.
+/// </summary>
+[IniSection("SectionEmptyWhenNull", EmptyWhenNull = true)]
+public interface ISectionEmptyWhenNullSettings : IIniSection
+{
+    /// <summary>String — gets string.Empty instead of null when not set.</summary>
+    string? Label { get; set; }
+
+    /// <summary>List — gets empty list instead of null when not set.</summary>
+    List<string>? Items { get; set; }
+
+    /// <summary>String with an explicit DefaultValue — the default wins over EmptyWhenNull for ResetToDefaults.</summary>
+    [IniValue(DefaultValue = "hello")]
+    string? WithDefault { get; set; }
+
+    /// <summary>Value-type property — section-level EmptyWhenNull does NOT affect value types.</summary>
+    int Counter { get; set; }
+}

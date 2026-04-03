@@ -113,4 +113,31 @@ public sealed class IniValueAttribute : Attribute
     /// </para>
     /// </remarks>
     public bool RuntimeOnly { get; set; }
+
+    /// <summary>
+    /// When <c>true</c>, an absent or <c>null</c> INI value is represented as an empty value
+    /// rather than <c>null</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The exact "empty" representation depends on the property type:
+    /// </para>
+    /// <list type="table">
+    ///   <listheader><term>Property type</term><description>Empty representation</description></listheader>
+    ///   <item><term><c>string</c></term><description><see cref="string.Empty"/> (<c>""</c>)</description></item>
+    ///   <item><term><c>List&lt;T&gt;</c> / <c>IList&lt;T&gt;</c> / <c>ICollection&lt;T&gt;</c> / <c>IEnumerable&lt;T&gt;</c></term><description>An empty <see cref="System.Collections.Generic.List{T}"/></description></item>
+    ///   <item><term><c>T[]</c></term><description>An empty array (<c>new T[0]</c>)</description></item>
+    ///   <item><term><c>Dictionary&lt;TKey,TValue&gt;</c> / <c>IDictionary&lt;TKey,TValue&gt;</c></term><description>An empty <see cref="System.Collections.Generic.Dictionary{TKey,TValue}"/></description></item>
+    /// </list>
+    /// <para>
+    /// When <see cref="DefaultValue"/> is also specified, that default takes precedence over
+    /// <see cref="EmptyWhenNull"/> for the initial value; <see cref="EmptyWhenNull"/> still
+    /// applies when the property key is present in the INI file but has an empty value.
+    /// </para>
+    /// <para>
+    /// This is particularly useful for collection properties where you prefer to receive an
+    /// empty collection (and avoid null checks) rather than <c>null</c> when no data is stored.
+    /// </para>
+    /// </remarks>
+    public bool EmptyWhenNull { get; set; }
 }

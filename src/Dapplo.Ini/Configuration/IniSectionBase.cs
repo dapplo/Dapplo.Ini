@@ -33,6 +33,17 @@ public abstract class IniSectionBase : IIniSection
     // Set by IniConfig.ApplyIniFile before loading file entries; null at all other times.
     internal Action<string, string, string?, Exception>? ConversionFailedCallback;
 
+    /// <summary>
+    /// When <c>true</c>, reference-type properties return an empty value (e.g.
+    /// <see cref="string.Empty"/>, an empty list, or an empty array) instead of <c>null</c>
+    /// when no INI key is present and the property has no explicit default value.
+    /// <para>
+    /// Set by <see cref="IniConfig"/> on every load/reload cycle based on the
+    /// <see cref="IniConfigBuilder.EmptyWhenNull"/> builder setting.
+    /// </para>
+    /// </summary>
+    protected internal bool GlobalEmptyWhenNull;
+
     // ── IIniSection ───────────────────────────────────────────────────────────
 
     /// <inheritdoc/>

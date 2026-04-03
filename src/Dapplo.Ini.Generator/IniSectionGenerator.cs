@@ -93,6 +93,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         // True when [IniValue(RuntimeOnly=true)] — property has a default and participates in
         // ResetToDefaults but is never loaded from or saved to the INI file.
         public bool IsRuntimeOnly { get; set; }
+        // True when [IniValue(EmptyWhenNull=true)] — a null/absent raw value produces an empty
+        // result (string.Empty, empty list, empty array, empty dictionary) instead of null.
+        public bool EmptyWhenNull { get; set; }
         // Validation attributes from System.ComponentModel.DataAnnotations
         public bool IsRequired { get; set; }
         public string? RequiredErrorMessage { get; set; }
@@ -131,6 +134,8 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         public bool ImplementsUnknownKey { get; set; }
         // True when any property carries DataAnnotations validation attributes
         public bool HasAttributeBasedValidation { get; set; }
+        // True when [IniSection(EmptyWhenNull=true)] — propagates to all non-value-type properties
+        public bool SectionEmptyWhenNull { get; set; }
         public List<PropertyModel> Properties { get; set; } = new();
     }
 
@@ -186,11 +191,14 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         }
 
         string? description = null;
+        bool sectionEmptyWhenNull = false;
         if (iniSectionAttr != null)
             foreach (var na in iniSectionAttr.NamedArguments)
             {
                 if (na.Key == "Description" && na.Value.Value is string d)
                     description = d;
+                if (na.Key == "EmptyWhenNull" && na.Value.Value is true)
+                    sectionEmptyWhenNull = true;
             }
 
         // Fall back to [Description("...")] on the interface if [IniSection] doesn't specify Description
@@ -276,6 +284,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                         case "NotifyPropertyChanged": prop.NotifyPropertyChanged = na.Value.Value is true; break;
                         case "ReadOnly":              prop.IsReadOnly = na.Value.Value is true; break;
                         case "RuntimeOnly":           prop.IsRuntimeOnly = na.Value.Value is true; break;
+                        case "EmptyWhenNull":         prop.EmptyWhenNull = na.Value.Value is true; break;
                     }
                 }
             }
@@ -367,6 +376,16 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             properties.Add(prop);
         }
 
+        // Propagate section-level EmptyWhenNull to all non-value-type properties.
+        // This is the compile-time equivalent of applying [IniValue(EmptyWhenNull=true)]
+        // to every qualifying property.
+        if (sectionEmptyWhenNull)
+        {
+            foreach (var prop in properties)
+                if (!prop.IsValueType)
+                    prop.EmptyWhenNull = true;
+        }
+
         bool hasAttributeBasedValidation = properties.Any(p => p.HasValidationAttributes);
 
         return new SectionModel
@@ -388,6 +407,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             ImplementsUnknownKeyGeneric = implementsUnknownKeyGeneric,
             ImplementsUnknownKey        = implementsUnknownKey,
             HasAttributeBasedValidation = hasAttributeBasedValidation,
+            SectionEmptyWhenNull        = sectionEmptyWhenNull,
             // All properties are included so the generated class satisfies the interface contract.
             // Properties with IsIgnored=true are excluded only from INI read/write operations.
             Properties                 = properties
@@ -659,6 +679,18 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 // default string is fine — only the INI file storage uses sub-key notation).
                 sb.AppendLine($"            {fieldName} = ConvertFromRaw<{p.TypeFullName}>(\"{EscapeString(p.DefaultValue)}\");");
             }
+            else if (p.EmptyWhenNull)
+            {
+                // EmptyWhenNull with no DefaultValue: produce an empty instance (e.g. string.Empty,
+                // empty List<T>, empty T[], empty Dictionary<K,V>) rather than null/default.
+                sb.AppendLine($"            {fieldName} = ConvertFromRaw<{p.TypeFullName}>(\"\");");
+            }
+            else if (!p.IsValueType)
+            {
+                // Reference-type property without compile-time EmptyWhenNull: honour the runtime
+                // GlobalEmptyWhenNull flag set by IniConfig (from IniConfigBuilder.EmptyWhenNull()).
+                sb.AppendLine($"            {fieldName} = ConvertFromRaw<{p.TypeFullName}>(GlobalEmptyWhenNull ? \"\" : null);");
+            }
             else
             {
                 sb.AppendLine($"            {fieldName} = default;");
@@ -692,7 +724,16 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             else
             {
                 sb.AppendLine($"                case \"{EscapeString(keyName)}\":");
-                sb.AppendLine($"                    {fieldName} = ConvertFromRaw<{p.TypeFullName}>(rawValue);");
+                string rawArg;
+                if (p.EmptyWhenNull)
+                    rawArg = "rawValue ?? \"\"";
+                else if (!p.IsValueType)
+                    // Honour the runtime GlobalEmptyWhenNull flag for reference-type properties
+                    // that don't have compile-time EmptyWhenNull.
+                    rawArg = "GlobalEmptyWhenNull ? rawValue ?? \"\" : rawValue";
+                else
+                    rawArg = "rawValue";
+                sb.AppendLine($"                    {fieldName} = ConvertFromRaw<{p.TypeFullName}>({rawArg});");
                 sb.AppendLine("                    break;");
             }
         }
