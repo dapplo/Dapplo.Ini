@@ -1086,7 +1086,8 @@ public sealed class IniConfig : IDisposable
             }
             else
             {
-                iniFile.GetOrAddSection(section.SectionName);
+                // Non-generated sections: add an empty section placeholder to the file.
+                iniFile.AddSection(new Parsing.IniSection(section.SectionName, Array.Empty<string>()));
             }
         }
 
