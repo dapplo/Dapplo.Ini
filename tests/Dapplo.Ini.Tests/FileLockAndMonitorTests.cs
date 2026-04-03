@@ -162,6 +162,71 @@ public sealed class FileLockAndMonitorTests : IDisposable
         Assert.Equal("postponed", section.Value);
     }
 
+    [Fact]
+    public void LockFile_And_Save_WorkTogether()
+    {
+        WriteIni("locked-save.ini", "[ReloadSection]\nValue = original");
+
+        var section = new ReloadSettingsImpl();
+        using var config = IniConfigRegistry.ForFile("locked-save.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IReloadSettings>(section)
+            .LockFile()
+            .Build();
+
+        // Verify the file is locked (another process cannot write to it)
+        var filePath = config.LoadedFromPath!;
+        Assert.Throws<IOException>(() =>
+        {
+            using var writer = new FileStream(filePath, FileMode.Open, FileAccess.Write, FileShare.None);
+        });
+
+        // Save should succeed even while the lock is held
+        section.Value = "saved";
+        var ex = Record.Exception(() => config.Save());
+        Assert.Null(ex);
+
+        // Verify the value was actually written to disk
+        var written = File.ReadAllText(filePath);
+        Assert.Contains("saved", written);
+
+        // Verify the lock is still held after save (another process still cannot write)
+        Assert.Throws<IOException>(() =>
+        {
+            using var writer = new FileStream(filePath, FileMode.Open, FileAccess.Write, FileShare.None);
+        });
+    }
+
+    [Fact]
+    public async Task LockFile_And_AutoSave_WorkTogether()
+    {
+        WriteIni("locked-autosave.ini", "[ReloadSection]\nValue = original");
+
+        var section = new ReloadSettingsImpl();
+        using var config = IniConfigRegistry.ForFile("locked-autosave.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IReloadSettings>(section)
+            .LockFile()
+            .AutoSaveInterval(TimeSpan.FromMilliseconds(200))
+            .Build();
+
+        // Modify the value — auto-save should pick it up shortly
+        section.Value = "autosaved";
+
+        // Wait for the auto-save timer to fire (up to 3 seconds)
+        var filePath = config.LoadedFromPath!;
+        string written = string.Empty;
+        for (int i = 0; i < 30; i++)
+        {
+            await Task.Delay(100);
+            written = File.ReadAllText(filePath);
+            if (written.Contains("autosaved"))
+                break;
+        }
+
+        Assert.Contains("autosaved", written);
+    }
+
     // ── Mutual exclusivity tests ──────────────────────────────────────────────
 
     [Fact]
