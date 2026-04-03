@@ -235,7 +235,18 @@ public sealed class IniConfig : IDisposable
                 if (_watcher != null) _watcher.EnableRaisingEvents = false;
                 try
                 {
-                    IniFileWriter.WriteFile(LoadedFromPath!, iniFile, Encoding);
+                    // Temporarily release the file lock (if any) so that this process can open
+                    // the file for writing.  The lock is re-acquired in the finally block to
+                    // restore protection against external writes as soon as possible.
+                    if (ShouldLockFile) ReleaseFileLock();
+                    try
+                    {
+                        IniFileWriter.WriteFile(LoadedFromPath!, iniFile, Encoding);
+                    }
+                    finally
+                    {
+                        if (ShouldLockFile) AcquireFileLock();
+                    }
                 }
                 finally
                 {
@@ -309,7 +320,18 @@ public sealed class IniConfig : IDisposable
                 if (_watcher != null) _watcher.EnableRaisingEvents = false;
                 try
                 {
-                    await IniFileWriter.WriteFileAsync(LoadedFromPath!, iniFile, Encoding, cancellationToken).ConfigureAwait(false);
+                    // Temporarily release the file lock (if any) so that this process can open
+                    // the file for writing.  The lock is re-acquired in the finally block to
+                    // restore protection against external writes as soon as possible.
+                    if (ShouldLockFile) ReleaseFileLock();
+                    try
+                    {
+                        await IniFileWriter.WriteFileAsync(LoadedFromPath!, iniFile, Encoding, cancellationToken).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        if (ShouldLockFile) AcquireFileLock();
+                    }
                 }
                 finally
                 {
