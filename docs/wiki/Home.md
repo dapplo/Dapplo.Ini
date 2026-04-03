@@ -20,6 +20,7 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
 - ✅ **Listeners** — zero-overhead `IIniConfigListener` interface for logging and diagnostics; notified on load, save, reload, missing files, unknown keys, and type-conversion failures; reused for both INI and i18n subsystems
 - ✅ **Runtime-only properties** — in-memory values with defaults that are never loaded from or saved to disk (`[IniValue(RuntimeOnly = true)]`)
 - ✅ **Constants protection** — keys loaded from an admin constants file are write-protected; `IsConstant(key)` lets UI code disable the corresponding input control
+- ✅ **Empty-over-null semantics** — opt reference-type properties into returning empty values instead of `null` via `[IniValue(EmptyWhenNull = true)]`, `[IniSection(EmptyWhenNull = true)]`, or `IniConfigBuilder.EmptyWhenNull()`
 
 ---
 
@@ -94,3 +95,4 @@ config.Save();
 | [[Gap-Analysis]] | Feature comparison with the older `Dapplo.Config.Ini` library |
 | [[Async-Await-Benefits]] | Background analysis of async/await trade-offs (pre-implementation reference) |
 | [[Runtime-Only-and-Constants]] | Runtime-only properties and constants-file protection |
+| [[Empty-When-Null]] | `EmptyWhenNull` at property, section, and config levels — return empty instead of `null` for absent reference-type values |
