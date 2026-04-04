@@ -1099,6 +1099,8 @@ public sealed class IniConfig : IDisposable
             metaSection.SetValue("Version", MetadataConfig.Version);
             metaSection.SetValue("CreatedBy", MetadataConfig.ApplicationName);
             metaSection.SetValue("SavedOn", DateTime.Now.ToString());
+            if (!string.IsNullOrEmpty(MetadataConfig.CommitHash))
+                metaSection.SetValue("CommitHash", MetadataConfig.CommitHash);
             iniFile.PrependSection(metaSection);
         }
 
@@ -1116,6 +1118,7 @@ public sealed class IniConfig : IDisposable
                 Version         = metaIniSection.GetValue("Version"),
                 ApplicationName = metaIniSection.GetValue("CreatedBy"),
                 SavedOn         = metaIniSection.GetValue("SavedOn"),
+                CommitHash      = metaIniSection.GetValue("CommitHash"),
             };
         }
         else

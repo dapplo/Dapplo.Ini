@@ -32,6 +32,10 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
     private const string MaxLengthAttributeFqn       = "System.ComponentModel.DataAnnotations.MaxLengthAttribute";
     private const string RegularExpressionAttributeFqn = "System.ComponentModel.DataAnnotations.RegularExpressionAttribute";
 
+    // FQNs for property-change notification interfaces
+    private const string INotifyPropertyChangedFqn  = "System.ComponentModel.INotifyPropertyChanged";
+    private const string INotifyPropertyChangingFqn = "System.ComponentModel.INotifyPropertyChanging";
+
     // FQNs used for non-generic (dispatch) lifecycle interfaces
     private const string IAfterLoadFqn        = "Dapplo.Ini.Interfaces.IAfterLoad";
     private const string IBeforeSaveFqn       = "Dapplo.Ini.Interfaces.IBeforeSave";
@@ -78,7 +82,10 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         public string? DefaultValue { get; set; }
         public string? Description { get; set; }
         public bool IsTransactional { get; set; }
-        public bool NotifyPropertyChanged { get; set; }
+        /// <summary>When true, suppresses <c>PropertyChanged</c> for this property even when the section interface extends <c>INotifyPropertyChanged</c>.</summary>
+        public bool SuppressPropertyChanged { get; set; }
+        /// <summary>When true, suppresses <c>PropertyChanging</c> for this property even when the section interface extends <c>INotifyPropertyChanging</c>.</summary>
+        public bool SuppressPropertyChanging { get; set; }
         public bool IsReadOnly { get; set; }
         // True when property type is a value type (needs different nullability handling)
         public bool IsValueType { get; set; }
@@ -136,6 +143,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         public bool HasAttributeBasedValidation { get; set; }
         // True when [IniSection(EmptyWhenNull=true)] — propagates to all non-value-type properties
         public bool SectionEmptyWhenNull { get; set; }
+        // True when the section interface extends INotifyPropertyChanged / INotifyPropertyChanging
+        public bool ImplementsINotifyPropertyChanged { get; set; }
+        public bool ImplementsINotifyPropertyChanging { get; set; }
         public List<PropertyModel> Properties { get; set; } = new();
     }
 
@@ -231,6 +241,12 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         bool implementsUnknownKeyGeneric = ImplementsGenericInterface(symbol, LifecycleInterfacesNamespace, IUnknownKeyGenericName);
         bool implementsUnknownKey        = !implementsUnknownKeyGeneric && ImplementsInterface(symbol, IUnknownKeyFqn);
 
+        // Property-change notification: interface-level opt-in.
+        // Events are generated for all properties when the section interface extends the corresponding
+        // BCL interface.  Individual properties may suppress events via [IniValue(SuppressPropertyChanged/Changing=true)].
+        bool implementsINotifyPropertyChanged  = ImplementsInterface(symbol, INotifyPropertyChangedFqn);
+        bool implementsINotifyPropertyChanging = ImplementsInterface(symbol, INotifyPropertyChangingFqn);
+
         var properties = new List<PropertyModel>();
         foreach (var member in symbol.GetMembers().OfType<IPropertySymbol>())
         {
@@ -277,14 +293,15 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 {
                     switch (na.Key)
                     {
-                        case "KeyName":               prop.KeyName = na.Value.Value as string; break;
-                        case "DefaultValue":          prop.DefaultValue = na.Value.Value as string; break;
-                        case "Description":           prop.Description = na.Value.Value as string; break;
-                        case "Transactional":         prop.IsTransactional = na.Value.Value is true; break;
-                        case "NotifyPropertyChanged": prop.NotifyPropertyChanged = na.Value.Value is true; break;
-                        case "ReadOnly":              prop.IsReadOnly = na.Value.Value is true; break;
-                        case "RuntimeOnly":           prop.IsRuntimeOnly = na.Value.Value is true; break;
-                        case "EmptyWhenNull":         prop.EmptyWhenNull = na.Value.Value is true; break;
+                        case "KeyName":                 prop.KeyName = na.Value.Value as string; break;
+                        case "DefaultValue":            prop.DefaultValue = na.Value.Value as string; break;
+                        case "Description":             prop.Description = na.Value.Value as string; break;
+                        case "Transactional":           prop.IsTransactional = na.Value.Value is true; break;
+                        case "SuppressPropertyChanged": prop.SuppressPropertyChanged = na.Value.Value is true; break;
+                        case "SuppressPropertyChanging": prop.SuppressPropertyChanging = na.Value.Value is true; break;
+                        case "ReadOnly":                prop.IsReadOnly = na.Value.Value is true; break;
+                        case "RuntimeOnly":             prop.IsRuntimeOnly = na.Value.Value is true; break;
+                        case "EmptyWhenNull":           prop.EmptyWhenNull = na.Value.Value is true; break;
                     }
                 }
             }
@@ -408,6 +425,8 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             ImplementsUnknownKey        = implementsUnknownKey,
             HasAttributeBasedValidation = hasAttributeBasedValidation,
             SectionEmptyWhenNull        = sectionEmptyWhenNull,
+            ImplementsINotifyPropertyChanged  = implementsINotifyPropertyChanged,
+            ImplementsINotifyPropertyChanging = implementsINotifyPropertyChanging,
             // All properties are included so the generated class satisfies the interface contract.
             // Properties with IsIgnored=true are excluded only from INI read/write operations.
             Properties                 = properties
@@ -466,19 +485,16 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             sb.AppendLine("{");
         }
 
-        bool needsNpc = m.Properties.Any(p => p.NotifyPropertyChanged);
+        bool needsNpc = m.ImplementsINotifyPropertyChanged || m.ImplementsINotifyPropertyChanging;
         bool needsValidation = m.ImplementsDataValidationGeneric || m.ImplementsDataValidation
             || m.HasAttributeBasedValidation;
 
         // Build base class list.
         // When generic lifecycle interfaces are used, the generator also adds the non-generic
         // dispatch interfaces and emits explicit bridge implementations below.
+        // Note: INotifyPropertyChanged / INotifyPropertyChanging come from the section interface
+        // itself (which is already in the base list), so we do NOT add them to extraBases.
         var extraBases = new System.Collections.Generic.List<string>();
-        if (needsNpc)
-        {
-            extraBases.Add("INotifyPropertyChanging");
-            extraBases.Add("INotifyPropertyChanged");
-        }
         if (needsValidation)
         {
             extraBases.Add("System.ComponentModel.INotifyDataErrorInfo");
@@ -517,8 +533,10 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         // ── NPC events ────────────────────────────────────────────────────────
         if (needsNpc)
         {
-            sb.AppendLine("        public event PropertyChangingEventHandler? PropertyChanging;");
-            sb.AppendLine("        public event PropertyChangedEventHandler? PropertyChanged;");
+            if (m.ImplementsINotifyPropertyChanging)
+                sb.AppendLine("        public event PropertyChangingEventHandler? PropertyChanging;");
+            if (m.ImplementsINotifyPropertyChanged)
+                sb.AppendLine("        public event PropertyChangedEventHandler? PropertyChanged;");
             sb.AppendLine();
         }
 
@@ -603,9 +621,20 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             // setter
             sb.AppendLine("            set");
             sb.AppendLine("            {");
-            if (p.NotifyPropertyChanged)
+
+            // Determine which events this property should emit.
+            // Events are generated at interface level; per-property attributes can suppress them.
+            bool emitChanging = m.ImplementsINotifyPropertyChanging && !p.SuppressPropertyChanging;
+            bool emitChanged  = m.ImplementsINotifyPropertyChanged  && !p.SuppressPropertyChanged;
+
+            // Emit early-return equality check whenever NPC events will be fired.
+            // This prevents redundant events and stops infinite loops in WPF bindings.
+            if (emitChanging || emitChanged)
             {
                 sb.AppendLine($"                if (EqualityComparer<{p.TypeFullName}>.Default.Equals({fieldName}, value)) return;");
+            }
+            if (emitChanging)
+            {
                 sb.AppendLine($"                PropertyChanging?.Invoke(this, new PropertyChangingEventArgs(nameof({p.Name})));");
             }
 
@@ -645,11 +674,13 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 }
             }
 
-            if (p.NotifyPropertyChanged)
+            if (emitChanged)
             {
                 sb.AppendLine($"                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof({p.Name})));");
             }
-            if (needsValidation && (p.NotifyPropertyChanged || p.HasValidationAttributes))
+            // Validation always runs in the setter when the section has any form of validation,
+            // regardless of whether NPC events are emitted for that property.
+            if (needsValidation)
             {
                 sb.AppendLine($"                RunValidation(nameof({p.Name}));");
             }

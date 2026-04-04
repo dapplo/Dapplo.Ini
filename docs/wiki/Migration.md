@@ -178,13 +178,28 @@ the file:
 
 ```ini
 [__metadata__]
-Version   = 1.2.0
-CreatedBy = Greenshot
-SavedOn   = 12/03/2026 07:43:32
+Version    = 1.2.0
+CommitHash = abc1234def5678
+CreatedBy  = Greenshot
+SavedOn    = 12/03/2026 07:43:32
 ```
 
 `SavedOn` is formatted in the user's locale — it is intended for human inspection only and
 should not be parsed programmatically.
+
+`CommitHash` is only written when it can be determined (see below).
+
+### Version and commit hash resolution
+
+When `version` is not supplied to `EnableMetadata()`, the framework resolves it from the
+entry assembly using the following priority:
+
+1. **`AssemblyInformationalVersionAttribute.InformationalVersion`** — the preferred source.
+   Build tools such as [Nerdbank.GitVersioning](https://github.com/dotnet/Nerdbank.GitVersioning)
+   and `MinVer` set this to a string like `"1.2.0+abc1234def5678"`.  The framework splits
+   on `+` and stores the left part as `Version` and the right part as `CommitHash`.
+2. **`AssemblyName.Version`** — used as a plain-text fallback when the informational
+   version attribute is absent or empty.
 
 ### Enabling metadata
 
@@ -218,7 +233,8 @@ public interface IAppSettings : IIniSection, IAfterLoad<IAppSettings>
         // meta is null when the file has no [__metadata__] section yet (first run).
         if (meta is null) return;
 
-        // Parse the stored version; treat missing / unparseable as "very old".
+        // meta.Version holds the SemVer string (before '+' in InformationalVersion).
+        // meta.CommitHash holds the source-control hash (after '+'), or null when absent.
         var stored  = Version.TryParse(meta.Version, out var v) ? v : new Version(0, 0);
         var current = typeof(IAppSettings).Assembly.GetName().Version!;
 
@@ -230,6 +246,15 @@ public interface IAppSettings : IIniSection, IAfterLoad<IAppSettings>
     }
 }
 ```
+
+### `IniMetadata` properties
+
+| Property | INI key | Description |
+|---|---|---|
+| `Version` | `Version` | SemVer string (the portion of `InformationalVersion` before `+`). |
+| `CommitHash` | `CommitHash` | Source-control commit hash (the portion after `+`); `null` when absent. |
+| `ApplicationName` | `CreatedBy` | Entry assembly name or the `applicationName` argument. |
+| `SavedOn` | `SavedOn` | Locale-formatted save time; for human inspection only. |
 
 ### Order guarantee
 

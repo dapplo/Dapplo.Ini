@@ -28,8 +28,10 @@ public interface IDataValidation
 /// </summary>
 /// <remarks>
 /// The source generator will automatically implement <c>System.ComponentModel.INotifyDataErrorInfo</c>
-/// on the generated class when this interface is detected. Validation is re-run whenever a property
-/// annotated with <see cref="Attributes.IniValueAttribute.NotifyPropertyChanged"/> changes.
+/// on the generated class when this interface is detected. Validation is re-run in every property
+/// setter automatically, regardless of whether the section extends
+/// <see cref="System.ComponentModel.INotifyPropertyChanged"/> or
+/// <see cref="System.ComponentModel.INotifyPropertyChanging"/>.
 /// </remarks>
 /// <typeparam name="TSelf">The section interface itself (CRTP / curiously-recurring template pattern).</typeparam>
 /// <example>
@@ -37,7 +39,7 @@ public interface IDataValidation
 /// [IniSection]
 /// public interface IMySettings : IIniSection, IDataValidation&lt;IMySettings&gt;
 /// {
-///     [IniValue(DefaultValue = "8080", NotifyPropertyChanged = true)]
+///     [IniValue(DefaultValue = "8080")]
 ///     int Port { get; set; }
 ///
 ///     static IEnumerable&lt;string&gt; ValidateProperty(IMySettings self, string propertyName)
