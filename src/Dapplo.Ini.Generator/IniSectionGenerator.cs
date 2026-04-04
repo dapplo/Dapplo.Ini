@@ -786,7 +786,40 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         sb.AppendLine("        }");
         sb.AppendLine();
 
-        // ── Transactional implementation ──────────────────────────────────
+        // ── GetSectionDescription ─────────────────────────────────────────────
+        if (m.Description != null)
+            sb.AppendLine($"        public override string? GetSectionDescription() => \"{EscapeString(m.Description)}\";");
+        else
+            sb.AppendLine("        public override string? GetSectionDescription() => null;");
+        sb.AppendLine();
+
+        // ── GetPropertyDescription ────────────────────────────────────────────
+        sb.AppendLine("        public override string? GetPropertyDescription(string key)");
+        sb.AppendLine("        {");
+        bool hasPropertyDescriptions = m.Properties.Any(p =>
+            !p.IsIgnored && !p.IsReadOnly && !p.IsRuntimeOnly && p.Description != null);
+        if (hasPropertyDescriptions)
+        {
+            sb.AppendLine("            switch (key.ToLowerInvariant())");
+            sb.AppendLine("            {");
+            foreach (var p in m.Properties)
+            {
+                if (p.IsIgnored || p.IsReadOnly || p.IsRuntimeOnly || p.Description == null) continue;
+                string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
+                if (p.IsSubKeyDictionary)
+                    sb.AppendLine($"                case var __pd when __pd.StartsWith(\"{EscapeString(keyName)}.\"):  return \"{EscapeString(p.Description)}\";");
+                else
+                    sb.AppendLine($"                case \"{EscapeString(keyName)}\": return \"{EscapeString(p.Description)}\";");
+            }
+            sb.AppendLine("                default: return null;");
+            sb.AppendLine("            }");
+        }
+        else
+        {
+            sb.AppendLine("            return null;");
+        }
+        sb.AppendLine("        }");
+        sb.AppendLine();
         if (m.ImplementsTransactional)
         {
             var txProps = m.Properties.Where(p => p.IsTransactional).ToList();
@@ -995,7 +1028,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         => name.Length == 0 ? name : char.ToLowerInvariant(name[0]) + name.Substring(1);
 
     private static string EscapeString(string s)
-        => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+        => s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "\\r").Replace("\n", "\\n");
 
     /// <summary>
     /// Formats the <paramref name="value"/> from a <c>[DefaultValue(...)]</c> constructor argument

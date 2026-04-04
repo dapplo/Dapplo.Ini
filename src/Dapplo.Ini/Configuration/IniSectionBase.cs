@@ -132,6 +132,22 @@ public abstract class IniSectionBase : IIniSection
     /// </summary>
     public abstract IEnumerable<KeyValuePair<string, string?>> GetAllRawValues();
 
+    /// <summary>
+    /// Returns the description comment for this section, or <c>null</c> when no description
+    /// was specified. The source generator overrides this with the value from
+    /// <c>[IniSection(Description = "...")]</c> or <c>[Description("...")]</c>.
+    /// </summary>
+    public virtual string? GetSectionDescription() => null;
+
+    /// <summary>
+    /// Returns the description comment for the property identified by <paramref name="key"/>,
+    /// or <c>null</c> when no description was specified for that property. The source generator
+    /// overrides this with the values from <c>[IniValue(Description = "...")]</c> or
+    /// <c>[Description("...")]</c> on each property.
+    /// </summary>
+    /// <param name="key">The INI key name (case-insensitive).</param>
+    public virtual string? GetPropertyDescription(string key) => null;
+
     // ── Converter helpers (used by generated code) ────────────────────────────
 
     /// <summary>
