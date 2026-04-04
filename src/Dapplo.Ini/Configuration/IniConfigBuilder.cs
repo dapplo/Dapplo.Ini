@@ -271,23 +271,69 @@ public sealed class IniConfigBuilder
 
     /// <summary>
     /// Opts in to writing a <c>[__metadata__]</c> section as the first section in the INI file
-    /// on every save.  The section contains <c>Version</c>, <c>CreatedBy</c>, and a
-    /// locale-formatted <c>SavedOn</c> timestamp.  After load the values are exposed via
+    /// on every save.  The section contains <c>Version</c>, <c>CommitHash</c>, <c>CreatedBy</c>,
+    /// and a locale-formatted <c>SavedOn</c> timestamp.  After load the values are exposed via
     /// <see cref="IniConfig.Metadata"/> for version-gated migration logic in
     /// <see cref="Interfaces.IAfterLoad"/> hooks.
-    /// When <paramref name="version"/> or <paramref name="applicationName"/> are <c>null</c>,
-    /// the entry assembly's version and name are used.
-    /// See the Migration wiki page for full examples.
     /// </summary>
-    /// <param name="version">Version string to write (e.g. <c>"1.2.0"</c>); <c>null</c> = entry assembly version.</param>
+    /// <remarks>
+    /// <para>
+    /// When <paramref name="version"/> is <c>null</c>, the entry assembly's
+    /// <see cref="System.Reflection.AssemblyInformationalVersionAttribute.InformationalVersion"/>
+    /// is used.  If that attribute is not present, <see cref="System.Reflection.AssemblyName.Version"/>
+    /// is used as a fallback.
+    /// </para>
+    /// <para>
+    /// The commit hash is automatically extracted from the informational version when it contains
+    /// a <c>+</c> separator (e.g. <c>"1.2.0+abc1234def5678"</c> → commit hash <c>"abc1234def5678"</c>).
+    /// </para>
+    /// See the Migration wiki page for full examples.
+    /// </remarks>
+    /// <param name="version">
+    /// Semantic version string to write (e.g. <c>"1.2.0"</c>); <c>null</c> = auto-detect from entry assembly.
+    /// </param>
     /// <param name="applicationName">Application name to write as <c>CreatedBy</c>; <c>null</c> = entry assembly name.</param>
     public IniConfigBuilder EnableMetadata(string? version = null, string? applicationName = null)
     {
         var entryAssembly = System.Reflection.Assembly.GetEntryAssembly();
+
+        string? resolvedVersion = version;
+        string? resolvedCommitHash = null;
+
+        if (resolvedVersion == null)
+        {
+            // Prefer AssemblyInformationalVersionAttribute (carries SemVer + optional commit hash).
+            var infoVersion = entryAssembly?
+                .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+                .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
+                .FirstOrDefault()?.InformationalVersion;
+
+            if (!string.IsNullOrEmpty(infoVersion))
+            {
+                // InformationalVersion may carry a commit hash after '+' (e.g. "1.2.0+abc1234").
+                var plusIdx = infoVersion!.IndexOf('+');
+                if (plusIdx >= 0)
+                {
+                    resolvedVersion    = infoVersion.Substring(0, plusIdx);
+                    resolvedCommitHash = infoVersion.Substring(plusIdx + 1);
+                }
+                else
+                {
+                    resolvedVersion = infoVersion;
+                }
+            }
+            else
+            {
+                // Fallback: plain assembly version.
+                resolvedVersion = entryAssembly?.GetName().Version?.ToString();
+            }
+        }
+
         _metadataConfig = new IniMetadataConfig
         {
-            Version         = version ?? entryAssembly?.GetName().Version?.ToString(),
+            Version         = resolvedVersion,
             ApplicationName = applicationName ?? entryAssembly?.GetName().Name,
+            CommitHash      = resolvedCommitHash,
         };
         return this;
     }

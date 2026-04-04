@@ -11,7 +11,12 @@ namespace Dapplo.Ini;
 /// </summary>
 public sealed class IniMetadata
 {
-    /// <summary>Version string from the <c>Version</c> key; <c>null</c> when absent.</summary>
+    /// <summary>
+    /// Semantic version string from the <c>Version</c> key; <c>null</c> when absent.
+    /// When written from <see cref="Configuration.IniConfigBuilder.EnableMetadata"/>,
+    /// this is the portion of <c>AssemblyInformationalVersion</c> before any <c>+</c>
+    /// (i.e. the SemVer part), or the plain <c>AssemblyVersion</c> as a fallback.
+    /// </summary>
     public string? Version { get; internal set; }
 
     /// <summary>Application name from the <c>CreatedBy</c> key; <c>null</c> when absent.</summary>
@@ -22,6 +27,14 @@ public sealed class IniMetadata
     /// Intended for human inspection only — do not parse programmatically.
     /// </summary>
     public string? SavedOn { get; internal set; }
+
+    /// <summary>
+    /// Source-control commit hash from the <c>CommitHash</c> key; <c>null</c> when absent.
+    /// When written from <see cref="Configuration.IniConfigBuilder.EnableMetadata"/>,
+    /// this is the portion of <c>AssemblyInformationalVersion</c> after the <c>+</c>
+    /// separator (e.g. <c>"abc1234def5678"</c> from <c>"1.2.0+abc1234def5678"</c>).
+    /// </summary>
+    public string? CommitHash { get; internal set; }
 }
 
 /// <summary>
@@ -32,4 +45,5 @@ internal sealed class IniMetadataConfig
 {
     public string? Version { get; set; }
     public string? ApplicationName { get; set; }
+    public string? CommitHash { get; set; }
 }

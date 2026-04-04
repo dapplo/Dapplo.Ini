@@ -13,9 +13,9 @@ namespace Dapplo.Ini.Tests;
 
 /// <summary>Basic section with common value types.</summary>
 [IniSection("General", Description = "General application settings")]
-public interface IGeneralSettings : IIniSection
+public interface IGeneralSettings : IIniSection, INotifyPropertyChanged
 {
-    [IniValue(DefaultValue = "MyApp", Description = "Application name", NotifyPropertyChanged = true)]
+    [IniValue(DefaultValue = "MyApp", Description = "Application name")]
     string? AppName { get; set; }
 
     [IniValue(DefaultValue = "42")]
@@ -104,10 +104,10 @@ public interface ILifecycleSettings
 [IniSection("ServerConfig")]
 public interface IServerConfigSettings : IIniSection, IDataValidation<IServerConfigSettings>
 {
-    [IniValue(DefaultValue = "8080", NotifyPropertyChanged = true)]
+    [IniValue(DefaultValue = "8080")]
     int Port { get; set; }
 
-    [IniValue(DefaultValue = "localhost", NotifyPropertyChanged = true)]
+    [IniValue(DefaultValue = "localhost")]
     string? Host { get; set; }
 
     // Validation: Port must be in 1-65535; Host must not be empty.
@@ -380,11 +380,10 @@ public interface IAnnotatedSettings : IIniSection
 public interface ICombinedValidationSettings : IIniSection, IDataValidation<ICombinedValidationSettings>
 {
     [Required(ErrorMessage = "Host is required.")]
-    [IniValue(NotifyPropertyChanged = true)]
     string? Host { get; set; }
 
     [Range(1, 65535, ErrorMessage = "Port must be between 1 and 65535.")]
-    [IniValue(DefaultValue = "8080", NotifyPropertyChanged = true)]
+    [IniValue(DefaultValue = "8080")]
     int Port { get; set; }
 
     // Custom rule: Host must not equal "banned"

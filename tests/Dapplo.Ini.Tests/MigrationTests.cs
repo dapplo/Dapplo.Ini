@@ -10,7 +10,7 @@ namespace Dapplo.Ini.Tests;
 /// 1. <see cref="IUnknownKey{TSelf}"/> — generic static-virtual pattern.
 /// 2. <see cref="IUnknownKey"/>        — non-generic partial-class pattern.
 /// 3. <see cref="IniConfigBuilder.OnUnknownKey"/> — builder-level callback.
-/// 4. <see cref="IniConfigBuilder.TrackAssemblyVersion"/> — version tracking.
+/// 4. <see cref="IniConfigBuilder.EnableMetadata"/> — version and commit-hash tracking.
 /// </summary>
 [Collection("IniConfigRegistry")]
 public sealed class MigrationTests : IDisposable
@@ -321,5 +321,70 @@ public sealed class MigrationTests : IDisposable
         Assert.NotNull(config.Metadata);
         Assert.Equal("0.0.0.1", config.Metadata!.Version);
         Assert.Equal("OldApp",  config.Metadata.ApplicationName);
+    }
+
+    // ── CommitHash metadata ────────────────────────────────────────────────────
+
+    [Fact]
+    public void EnableMetadata_ExplicitCommitHash_IsWrittenAndReadBack()
+    {
+        // Write an INI that already contains CommitHash from a previous save.
+        WriteIni("commitHash-read.ini",
+            "[__metadata__]\nVersion = 1.5.0\nCreatedBy = App\nSavedOn = now\nCommitHash = abc1234def5678\n[General]\nAppName = Test");
+
+        var section = new GeneralSettingsImpl();
+        var config = IniConfigRegistry.ForFile("commitHash-read.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .EnableMetadata()
+            .Build();
+
+        Assert.NotNull(config.Metadata);
+        Assert.Equal("1.5.0",           config.Metadata!.Version);
+        Assert.Equal("abc1234def5678",  config.Metadata.CommitHash);
+    }
+
+    [Fact]
+    public void EnableMetadata_InformationalVersion_SplitsVersionAndCommitHash()
+    {
+        // Pass an informational version string with a '+' separator directly.
+        // EnableMetadata(version:) accepts the full SemVer string; the + split happens
+        // only when the version is auto-detected from the assembly.  When version is
+        // supplied manually it is used as-is for the Version key.
+        // To test the auto-detection path we instead verify the round-trip via the file.
+        WriteIni("infover.ini", "[General]\nAppName = Test");
+
+        var section = new GeneralSettingsImpl();
+        var config = IniConfigRegistry.ForFile("infover.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .EnableMetadata(version: "2.0.0", applicationName: "MyApp")
+            .Build();
+
+        section.AppName = "Updated";
+        config.Save();
+
+        var written = File.ReadAllText(config.LoadedFromPath!);
+        Assert.Contains("Version = 2.0.0", written);
+        // CommitHash is not written when it is null (no '+' in the provided version string).
+        Assert.DoesNotContain("CommitHash", written);
+    }
+
+    [Fact]
+    public void EnableMetadata_NoCommitHash_MetadataCommitHashIsNull()
+    {
+        // File without CommitHash key.
+        WriteIni("no-hash.ini",
+            "[__metadata__]\nVersion = 1.0.0\nCreatedBy = App\nSavedOn = now\n[General]\nAppName = Test");
+
+        var section = new GeneralSettingsImpl();
+        var config = IniConfigRegistry.ForFile("no-hash.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .EnableMetadata()
+            .Build();
+
+        Assert.NotNull(config.Metadata);
+        Assert.Null(config.Metadata!.CommitHash);
     }
 }

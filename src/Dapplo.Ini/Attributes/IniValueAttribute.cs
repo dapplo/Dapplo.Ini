@@ -26,8 +26,8 @@ namespace Dapplo.Ini.Attributes;
 /// </para>
 /// <para>
 /// Use <c>[IniValue]</c> only for the properties that have no standard equivalent:
-/// <see cref="Transactional"/>, <see cref="NotifyPropertyChanged"/>, and
-/// <see cref="RuntimeOnly"/>.
+/// <see cref="Transactional"/>, <see cref="SuppressPropertyChanged"/>,
+/// <see cref="SuppressPropertyChanging"/>, and <see cref="RuntimeOnly"/>.
 /// </para>
 /// </remarks>
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]
@@ -88,11 +88,34 @@ public sealed class IniValueAttribute : Attribute
     public bool Transactional { get; set; }
 
     /// <summary>
-    /// When <c>true</c> setting this property raises <c>INotifyPropertyChanging</c> and
-    /// <c>INotifyPropertyChanged</c> events from the generated class.
+    /// When <c>true</c>, suppresses the <c>PropertyChanged</c> event for this specific property,
+    /// even when the containing section interface extends <see cref="System.ComponentModel.INotifyPropertyChanged"/>.
     /// </summary>
-    /// <remarks>There is no standard .NET equivalent for this property.</remarks>
-    public bool NotifyPropertyChanged { get; set; }
+    /// <remarks>
+    /// <para>
+    /// Property-change notifications are generated at the <em>interface</em> level: if the section
+    /// interface extends <see cref="System.ComponentModel.INotifyPropertyChanged"/>, the generated
+    /// class fires <c>PropertyChanged</c> for every property setter by default.
+    /// Use this attribute to opt individual properties out of that behaviour.
+    /// </para>
+    /// <para>There is no standard .NET equivalent for this property.</para>
+    /// </remarks>
+    public bool SuppressPropertyChanged { get; set; }
+
+    /// <summary>
+    /// When <c>true</c>, suppresses the <c>PropertyChanging</c> event for this specific property,
+    /// even when the containing section interface extends <see cref="System.ComponentModel.INotifyPropertyChanging"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Property-changing notifications are generated at the <em>interface</em> level: if the section
+    /// interface extends <see cref="System.ComponentModel.INotifyPropertyChanging"/>, the generated
+    /// class fires <c>PropertyChanging</c> for every property setter by default.
+    /// Use this attribute to opt individual properties out of that behaviour.
+    /// </para>
+    /// <para>There is no standard .NET equivalent for this property.</para>
+    /// </remarks>
+    public bool SuppressPropertyChanging { get; set; }
 
     /// <summary>
     /// When <c>true</c> the property is never loaded from or saved to the INI file.
