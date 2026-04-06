@@ -82,6 +82,20 @@ public abstract class IniSectionBase : IIniSection
     /// <inheritdoc/>
     public bool IsConstant(string key) => _constantKeys.Contains(key);
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The base implementation returns the keys currently present in the raw backing store.
+    /// Source-generated subclasses override this with the compile-time property list.
+    /// </remarks>
+    public virtual IEnumerable<string> GetKeys() => _rawValues.Keys;
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The base implementation always returns <c>null</c>.
+    /// Source-generated subclasses override this with the exact property type for each key.
+    /// </remarks>
+    public virtual Type? GetPropertyType(string key) => null;
+
     // ── Unknown key detection ─────────────────────────────────────────────────
 
     /// <summary>

@@ -817,6 +817,50 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         sb.AppendLine("        }");
         sb.AppendLine();
 
+        // ── GetKeys ──────────────────────────────────────────────────────────
+        sb.AppendLine("        public override IEnumerable<string> GetKeys()");
+        sb.AppendLine("        {");
+        foreach (var p in m.Properties)
+        {
+            // Ignored properties are excluded; read-only and runtime-only are still declared keys.
+            if (p.IsIgnored) continue;
+            string keyName = p.KeyName ?? p.Name;
+            sb.AppendLine($"            yield return \"{EscapeString(keyName)}\";");
+        }
+        sb.AppendLine("        }");
+        sb.AppendLine();
+
+        // ── GetPropertyType ───────────────────────────────────────────────────
+        sb.AppendLine("        public override Type? GetPropertyType(string key)");
+        sb.AppendLine("        {");
+        var metaProps = m.Properties.Where(p => !p.IsIgnored).ToList();
+        if (metaProps.Count > 0)
+        {
+            sb.AppendLine("            switch (key.ToLowerInvariant())");
+            sb.AppendLine("            {");
+            foreach (var p in metaProps)
+            {
+                string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
+                // typeof() cannot be used on nullable reference types (CS8639).
+                // For value types int? is Nullable<int> and typeof(int?) is valid.
+                string typeofArg = (!p.IsValueType && p.TypeFullName.EndsWith("?"))
+                    ? p.TypeFullName.Substring(0, p.TypeFullName.Length - 1)
+                    : p.TypeFullName;
+                if (p.IsSubKeyDictionary)
+                    sb.AppendLine($"                case var __pt when __pt.StartsWith(\"{EscapeString(keyName)}.\"):  return typeof({typeofArg});");
+                else
+                    sb.AppendLine($"                case \"{EscapeString(keyName)}\": return typeof({typeofArg});");
+            }
+            sb.AppendLine("                default: return null;");
+            sb.AppendLine("            }");
+        }
+        else
+        {
+            sb.AppendLine("            return null;");
+        }
+        sb.AppendLine("        }");
+        sb.AppendLine();
+
         // ── GetSectionDescription ─────────────────────────────────────────────
         if (m.Description != null)
             sb.AppendLine($"        public override string? GetSectionDescription() => \"{EscapeString(m.Description)}\";");

@@ -46,6 +46,8 @@ If more than one INI file is registered, `Get()` / `GetSection<T>()` throw
 | Member | Description |
 |--------|-------------|
 | `GetSection<T>()` | Returns the registered section instance; throws if not found. **Always returns the same object reference.** |
+| `GetSection(sectionName)` | Returns the section whose `SectionName` matches (case-insensitive), or `null` if not registered. Useful for generic / dynamic access. See [[Generic-Access]]. |
+| `GetSections()` | Returns `IEnumerable<IIniSection>` over all registered sections. Enables generic iteration without compile-time type knowledge. See [[Generic-Access]]. |
 | `AddSection<T>(section)` | Registers a section without any file I/O. Returns `section` for chaining. For use between `Create()` and `Load()`. See [[Plugin-Registrations]]. |
 | `AddSection(section)` | Non-generic overload; infers the interface type at runtime. Prefer the generic overload (AOT/trim safe). |
 | `Load()` | Reads all files and applies value sources once for every registered section. Returns `this`. |
@@ -105,6 +107,8 @@ All generated section classes implement `IIniSection`:
 | `GetRawValue(key)` | Returns the raw string value stored for `key`, or `null` if absent |
 | `SetRawValue(key, value)` | Stores a raw string value; throws `AccessViolationException` when `key` is constant |
 | `ResetToDefaults()` | Resets all properties (including runtime-only properties) to their compiled defaults |
+| `GetKeys()` | Enumerates the declared property key names. Source-generated sections return the compile-time property list; non-generated sections return the keys currently in the raw backing store. See [[Generic-Access]]. |
+| `GetPropertyType(key)` | Returns the .NET `Type` for the property identified by `key`, or `null` when the key is not a declared property. See [[Generic-Access]]. |
 
 ---
 
@@ -158,3 +162,4 @@ automatically, so `ForBasename()` and `ForFile()` produce registry entries in th
 - [[Async-Support]] — full async API guide
 - [[Internationalization]] — `LanguageConfigRegistry`, language packs, and i18n builder API
 - [[Empty-When-Null]] — `EmptyWhenNull()` builder method and property/section-level equivalents
+- [[Generic-Access]] — `GetSections()`, `GetSection(name)`, `GetKeys()`, and `GetPropertyType()` for dynamic meta-model inspection
