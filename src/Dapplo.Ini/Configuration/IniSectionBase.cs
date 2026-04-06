@@ -80,6 +80,9 @@ public abstract class IniSectionBase : IIniSection
     public bool HasChanges => _isDirty;
 
     /// <inheritdoc/>
+    public void MarkAsDirty() => _isDirty = true;
+
+    /// <inheritdoc/>
     public bool IsConstant(string key) => _constantKeys.Contains(key);
 
     /// <inheritdoc/>

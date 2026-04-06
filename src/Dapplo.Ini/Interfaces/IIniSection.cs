@@ -36,6 +36,18 @@ public interface IIniSection
     bool HasChanges { get; }
 
     /// <summary>
+    /// Marks this section as having unsaved changes.
+    /// <para>
+    /// Call this method after mutating a collection property in-place (for example
+    /// <c>section.Tags.Add("new-tag")</c>) so that the auto-save timer and
+    /// <see cref="IniConfig.HasPendingChanges"/> correctly detect the modification.
+    /// Property setters call this automatically; only direct collection mutations
+    /// require an explicit call.
+    /// </para>
+    /// </summary>
+    void MarkAsDirty();
+
+    /// <summary>
     /// Returns <c>true</c> when the value for <paramref name="key"/> was loaded from a
     /// constants file (registered via <c>IniConfigBuilder.AddConstantsFile</c>) and is
     /// therefore protected against modification.
