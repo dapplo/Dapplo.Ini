@@ -404,7 +404,17 @@ public sealed class IniConfigBuilder
     public IniConfigBuilder RegisterSection<T>(T section) where T : IIniSection
     {
         if (section is null) throw new ArgumentNullException(nameof(section));
-        _sections[typeof(T)] = section;
+        // When T is a concrete class rather than an interface, prefer registering under
+        // the most-specific IIniSection-derived interface so that GetSection<IMySection>()
+        // works as expected — consistent with the behaviour of the non-generic overload.
+        Type keyType = typeof(T);
+        if (!keyType.IsInterface)
+        {
+            keyType = keyType.GetInterfaces()
+                .FirstOrDefault(i => typeof(IIniSection).IsAssignableFrom(i) && i != typeof(IIniSection))
+                ?? keyType;
+        }
+        _sections[keyType] = section;
         return this;
     }
 

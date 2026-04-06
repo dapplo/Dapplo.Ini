@@ -320,6 +320,44 @@ public sealed class DistributedRegistrationTests : IDisposable
         Assert.True(section.AfterLoadAsyncCalled);
     }
 
+    // ── AddSection with concrete class type T registers under the interface ─────
+
+    [Fact]
+    public void AddSection_WithClassTypeT_RegistersUnderInterface()
+    {
+        WriteIni("plugin.ini", "[General]\nAppName = ClassT");
+
+        var config = IniConfigRegistry.ForFile("plugin.ini")
+            .AddSearchPath(_tempDir)
+            .Create();
+
+        // T is the concrete class, not the interface
+        config.AddSection<GeneralSettingsImpl>(new GeneralSettingsImpl());
+        config.Load();
+
+        // Must be retrievable via the interface type
+        var retrieved = config.GetSection<IGeneralSettings>();
+        Assert.Equal("ClassT", retrieved.AppName);
+    }
+
+    [Fact]
+    public void RegisterSection_WithClassTypeT_RegistersUnderInterface()
+    {
+        WriteIni("plugin.ini", "[General]\nAppName = ClassTBuilder");
+
+        var section = new GeneralSettingsImpl();
+
+        // RegisterSection<T> on the builder also uses the concrete class as T
+        IniConfigRegistry.ForFile("plugin.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<GeneralSettingsImpl>(section)
+            .Build();
+
+        // Must be retrievable via the interface type
+        var retrieved = IniConfigRegistry.Get("plugin.ini").GetSection<IGeneralSettings>();
+        Assert.Equal("ClassTBuilder", retrieved.AppName);
+    }
+
     // ── Build() remains unchanged ───────────────────────────────────────────────
 
     [Fact]
