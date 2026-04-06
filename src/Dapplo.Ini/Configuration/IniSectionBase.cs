@@ -67,6 +67,9 @@ public abstract class IniSectionBase : IIniSection
     protected virtual object? GetValueCore(string key) => null;
 
     /// <inheritdoc/>
+    public object? GetValue(string key) => GetValueCore(key);
+
+    /// <inheritdoc/>
     public T? GetValue<T>(string key)
     {
         var value = GetValueCore(key);

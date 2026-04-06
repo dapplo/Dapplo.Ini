@@ -19,6 +19,27 @@ public interface IIniSection
     string? GetRawValue(string key);
 
     /// <summary>
+    /// Returns the current value for <paramref name="key"/> as an untyped <see cref="object"/>,
+    /// exactly as the property getter would return it (including any default configured via
+    /// <c>[IniValue(DefaultValue = "...")]</c>).
+    /// <para>
+    /// Use this overload when iterating over properties generically and the .NET type of
+    /// each property is not known at compile time. When the type <em>is</em> known, prefer
+    /// <see cref="GetValue{T}(string)"/> which avoids the boxing overhead for value types.
+    /// </para>
+    /// <para>
+    /// For dictionary properties, the entire dictionary object is returned; use
+    /// <see cref="GetRawValue"/> with the sub-key notation (<c>"PropertyName.subkey"</c>)
+    /// to retrieve individual entries.
+    /// </para>
+    /// </summary>
+    /// <param name="key">The INI key name (case-insensitive).</param>
+    /// <returns>
+    /// The value as <see cref="object"/>, or <c>null</c> when the key is not found.
+    /// </returns>
+    object? GetValue(string key);
+
+    /// <summary>
     /// Returns the current typed value for <paramref name="key"/>, exactly as the property
     /// getter would return it (including any default configured via
     /// <c>[IniValue(DefaultValue = "...")]</c>).

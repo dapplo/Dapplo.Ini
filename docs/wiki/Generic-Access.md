@@ -106,13 +106,32 @@ string? name = section.GetValue<string>("AppName");
   property getter). Use `GetRawValue("PropertyName.subkey")` to read individual entries.
 
 ```csharp
-// Dictionary property: GetValue returns the whole dictionary
+// Dictionary property: GetValue<T> returns the whole dictionary
 var dict = section.GetValue<Dictionary<string, int>>("Tags");
 // dict == { "a": 1, "b": 2 }
 
 // Individual sub-key access via GetRawValue:
 string? raw = section.GetRawValue("Tags.a");  // "1"
 ```
+
+### Untyped value — `GetValue` (no type parameter)
+
+`GetValue(string key)` returns the same value as the property getter but as an
+untyped `object?`. This is the overload to use when iterating over all properties in a
+generic loop where the .NET type of each property is not known at compile time:
+
+```csharp
+// Generic loop — no compile-time knowledge of property types needed:
+foreach (string key in section.GetKeys())
+{
+    object? value = section.GetValue(key);       // always works
+    Type?   type  = section.GetPropertyType(key); // for labelling
+    Console.WriteLine($"  {key} ({type?.Name}) = {value}");
+}
+```
+
+Returns `null` when the key is not found. When the type *is* known at compile time,
+prefer `GetValue<T>` to avoid boxing overhead for value types.
 
 ---
 
@@ -163,13 +182,21 @@ Example output:
   Threshold : Double = 3.14
 ```
 
-For typed access without knowing the concrete section type at compile time, use
-`GetValue<T>`:
+For typed or untyped access without knowing the concrete section type at compile time,
+use `GetValue` / `GetValue<T>`:
 
 ```csharp
 IIniSection? section = config.GetSection("General");
 if (section != null)
 {
+    // Untyped — useful in generic loops
+    foreach (string key in section.GetKeys())
+    {
+        object? value = section.GetValue(key);
+        Console.WriteLine($"  {key} = {value}");
+    }
+
+    // Typed — when the type is known at compile time
     int retries = section.GetValue<int>("MaxRetries");
     string? name = section.GetValue<string>("AppName");
     Console.WriteLine($"App={name}, Retries={retries}");
@@ -195,6 +222,7 @@ if (section != null)
 | `GetKeys()` | Enumerates declared property key names |
 | `GetPropertyType(string key)` | Returns the .NET `Type` for the property, or `null` for unknown keys |
 | `GetRawValue(string key)` | Returns the raw string stored for `key`, or `null` when absent |
+| `GetValue(string key)` | Returns the current value for `key` as `object?` (same as the property getter, including defaults); ideal for generic loops |
 | `GetValue<T>(string key)` | Returns the typed value for `key` (same as the property getter, including defaults), or `default(T)` when not found |
 | `SetRawValue(string key, string? value)` | Stores a raw string for `key` |
 | `MarkAsDirty()` | Marks the section as having unsaved changes (use after in-place collection mutations) |

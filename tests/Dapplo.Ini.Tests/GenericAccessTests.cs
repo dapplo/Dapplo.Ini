@@ -240,6 +240,67 @@ public sealed class GenericAccessTests : IDisposable
         Assert.Equal(typeof(int), type);
     }
 
+    // ── IIniSection.GetValue(string) — non-generic overload ───────────────────
+
+    [Fact]
+    public void GetValue_NonGeneric_ReturnsValueAsObject()
+    {
+        var config = BuildConfig("getval-obj.ini");
+        IIniSection section = config.GetSection("General")!;
+
+        object? name = section.GetValue("AppName");
+        object? retries = section.GetValue("MaxRetries");
+        object? logging = section.GetValue("EnableLogging");
+        object? threshold = section.GetValue("Threshold");
+
+        Assert.Equal("Test", name);
+        Assert.Equal(3, retries);
+        Assert.True((bool)logging!);
+        Assert.Equal(1.5, threshold);
+    }
+
+    [Fact]
+    public void GetValue_NonGeneric_ReturnsNull_ForUnknownKey()
+    {
+        var config = BuildConfig("getval-obj-null.ini");
+        IIniSection section = config.GetSection("General")!;
+
+        Assert.Null(section.GetValue("NonExistentKey"));
+    }
+
+    [Fact]
+    public void GetValue_NonGeneric_IsCaseInsensitive()
+    {
+        var config = BuildConfig("getval-obj-case.ini");
+        IIniSection section = config.GetSection("General")!;
+
+        Assert.Equal("Test", section.GetValue("appname"));
+        Assert.Equal("Test", section.GetValue("APPNAME"));
+    }
+
+    [Fact]
+    public void GetValue_NonGeneric_CanIterateAllPropertiesWithoutKnowingTypes()
+    {
+        WriteIni("getval-iterate.ini",
+            "[General]\nAppName = IterApp\nMaxRetries = 7\nEnableLogging = true\nThreshold = 2.5");
+
+        var section = new GeneralSettingsImpl();
+        IniConfigRegistry.ForFile("getval-iterate.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        // Simulate a generic loop that doesn't know the property types at compile time.
+        IIniSection iSection = section;
+        var values = iSection.GetKeys()
+            .ToDictionary(k => k, k => iSection.GetValue(k));
+
+        Assert.Equal("IterApp", values["AppName"]);
+        Assert.Equal(7, values["MaxRetries"]);
+        Assert.True((bool)values["EnableLogging"]!);
+        Assert.Equal(2.5, values["Threshold"]);
+    }
+
     // ── IIniSection.GetValue<T>(string) ───────────────────────────────────────
 
     [Fact]
