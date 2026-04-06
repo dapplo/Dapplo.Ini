@@ -754,7 +754,14 @@ public sealed class IniConfig : IDisposable
     /// added to read the INI file(s) exactly once for all sections.
     /// </para>
     /// </remarks>
-    /// <typeparam name="T">The INI section interface type.</typeparam>
+    /// <typeparam name="T">
+    /// The INI section interface type. When <typeparamref name="T"/> is a concrete class that
+    /// implements exactly one <see cref="IIniSection"/>-derived interface, the section is
+    /// registered under that interface type automatically so that
+    /// <see cref="GetSection{T}"/> can be called with the interface type.
+    /// If the class implements more than one <see cref="IIniSection"/>-derived interface,
+    /// pass the interface type directly as <typeparamref name="T"/> to remove the ambiguity.
+    /// </typeparam>
     /// <param name="section">The concrete section instance to register.</param>
     /// <returns>The <paramref name="section"/> instance (for fluent chaining).</returns>
     public T AddSection<T>(T section) where T : IIniSection

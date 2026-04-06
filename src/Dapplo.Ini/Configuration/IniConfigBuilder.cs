@@ -400,6 +400,10 @@ public sealed class IniConfigBuilder
     /// Registers an <see cref="IIniSection"/> instance under the explicit interface type
     /// <typeparamref name="T"/>. The generated concrete class must be passed; it will be
     /// populated when the file is loaded.
+    /// When <typeparamref name="T"/> is a concrete class that implements exactly one
+    /// <see cref="IIniSection"/>-derived interface, the section is registered under that
+    /// interface type automatically.  If the class implements more than one such interface,
+    /// pass the interface type directly as <typeparamref name="T"/> to remove the ambiguity.
     /// </summary>
     public IniConfigBuilder RegisterSection<T>(T section) where T : IIniSection
     {
