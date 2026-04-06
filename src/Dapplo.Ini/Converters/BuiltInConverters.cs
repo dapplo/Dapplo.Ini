@@ -3,7 +3,7 @@
 
 using System.Collections.Generic;
 using System.Globalization;
-using System.Linq;
+using System.Text;
 #if NET
 using System.Diagnostics.CodeAnalysis;
 #endif
@@ -211,6 +211,7 @@ public sealed class ListConverter<T> : ValueConverterBase<List<T>>
 {
     private readonly IValueConverter _elementConverter;
     private readonly char _separator;
+    private readonly string _separatorStr;
 
     /// <param name="elementConverter">Converter for the individual list elements.</param>
     /// <param name="separator">Delimiter used between elements. Defaults to <c>,</c>.</param>
@@ -218,6 +219,7 @@ public sealed class ListConverter<T> : ValueConverterBase<List<T>>
     {
         _elementConverter = elementConverter ?? throw new ArgumentNullException(nameof(elementConverter));
         _separator = separator;
+        _separatorStr = separator.ToString();
     }
 
     /// <inheritdoc/>
@@ -225,12 +227,27 @@ public sealed class ListConverter<T> : ValueConverterBase<List<T>>
     {
         if (raw == null) return defaultValue;
         if (raw.Length == 0) return new List<T>();
-        var result = new List<T>();
+
+        // Count occurrences of the separator to pre-size the list and avoid re-allocations.
+        int estimatedCount = 1;
+        for (int i = 0; i < raw.Length; i++)
+            if (raw[i] == _separator) estimatedCount++;
+        var result = new List<T>(estimatedCount);
+
+#if NET
+        foreach (var range in raw.AsSpan().Split(_separator))
+        {
+            var part = raw.AsSpan()[range].Trim();
+            var item = _elementConverter.ConvertFromString(part.IsEmpty ? null : part.ToString());
+            result.Add(item is T typed ? typed : default!);
+        }
+#else
         foreach (var part in raw.Split(_separator))
         {
             var item = _elementConverter.ConvertFromString(part.Trim());
             result.Add(item is T typed ? typed : default!);
         }
+#endif
         return result;
     }
 
@@ -238,8 +255,11 @@ public sealed class ListConverter<T> : ValueConverterBase<List<T>>
     public override string? ConvertToString(List<T>? value)
     {
         if (value == null) return null;
-        return string.Join(_separator.ToString(),
-            value.Select(item => _elementConverter.ConvertToString(item) ?? string.Empty));
+        var count = value.Count;
+        var parts = new string[count];
+        for (int i = 0; i < count; i++)
+            parts[i] = _elementConverter.ConvertToString(value[i]) ?? string.Empty;
+        return string.Join(_separatorStr, parts);
     }
 
     /// <inheritdoc/>
@@ -298,6 +318,7 @@ public sealed class DictionaryConverter<TKey, TValue> : ValueConverterBase<Dicti
     private readonly IValueConverter _valueConverter;
     private readonly char _pairSeparator;
     private readonly char _keyValueSeparator;
+    private readonly string _pairSeparatorStr;
 
     /// <param name="keyConverter">Converter for dictionary keys.</param>
     /// <param name="valueConverter">Converter for dictionary values.</param>
@@ -313,6 +334,7 @@ public sealed class DictionaryConverter<TKey, TValue> : ValueConverterBase<Dicti
         _valueConverter = valueConverter ?? throw new ArgumentNullException(nameof(valueConverter));
         _pairSeparator = pairSeparator;
         _keyValueSeparator = keyValueSeparator;
+        _pairSeparatorStr = pairSeparator.ToString();
     }
 
     /// <inheritdoc/>
@@ -321,7 +343,27 @@ public sealed class DictionaryConverter<TKey, TValue> : ValueConverterBase<Dicti
     {
         if (raw == null) return defaultValue;
         if (raw.Length == 0) return new Dictionary<TKey, TValue>();
-        var result = new Dictionary<TKey, TValue>();
+
+        // Count occurrences of the pair separator to pre-size the dictionary.
+        int estimatedCount = 1;
+        for (int i = 0; i < raw.Length; i++)
+            if (raw[i] == _pairSeparator) estimatedCount++;
+        var result = new Dictionary<TKey, TValue>(estimatedCount);
+
+#if NET
+        foreach (var pairRange in raw.AsSpan().Split(_pairSeparator))
+        {
+            var kv = raw.AsSpan()[pairRange].Trim();
+            var sepIdx = kv.IndexOf(_keyValueSeparator);
+            if (sepIdx < 0) continue;
+            var keyStr = kv.Slice(0, sepIdx).Trim();
+            var valStr = kv.Slice(sepIdx + 1).Trim();
+            var keyObj = _keyConverter.ConvertFromString(keyStr.IsEmpty ? null : keyStr.ToString());
+            var valObj = _valueConverter.ConvertFromString(valStr.IsEmpty ? null : valStr.ToString());
+            if (keyObj is TKey typedKey)
+                result[typedKey] = valObj is TValue typedVal ? typedVal : default!;
+        }
+#else
         foreach (var pair in raw.Split(_pairSeparator))
         {
             var kv = pair.Trim();
@@ -334,6 +376,7 @@ public sealed class DictionaryConverter<TKey, TValue> : ValueConverterBase<Dicti
             if (keyObj is TKey typedKey)
                 result[typedKey] = valObj is TValue typedVal ? typedVal : default!;
         }
+#endif
         return result;
     }
 
@@ -341,8 +384,17 @@ public sealed class DictionaryConverter<TKey, TValue> : ValueConverterBase<Dicti
     public override string? ConvertToString(Dictionary<TKey, TValue>? value)
     {
         if (value == null) return null;
-        return string.Join(_pairSeparator.ToString(), value.Select(kvp =>
-            $"{_keyConverter.ConvertToString(kvp.Key) ?? string.Empty}{_keyValueSeparator}{_valueConverter.ConvertToString(kvp.Value) ?? string.Empty}"));
+        var sb = new StringBuilder();
+        bool first = true;
+        foreach (var kvp in value)
+        {
+            if (!first) sb.Append(_pairSeparatorStr);
+            first = false;
+            sb.Append(_keyConverter.ConvertToString(kvp.Key) ?? string.Empty);
+            sb.Append(_keyValueSeparator);
+            sb.Append(_valueConverter.ConvertToString(kvp.Value) ?? string.Empty);
+        }
+        return sb.ToString();
     }
 
     /// <inheritdoc/>
@@ -351,8 +403,17 @@ public sealed class DictionaryConverter<TKey, TValue> : ValueConverterBase<Dicti
         if (value is Dictionary<TKey, TValue> dict) return ConvertToString(dict);
         if (value is IEnumerable<KeyValuePair<TKey, TValue>> pairs)
         {
-            return string.Join(_pairSeparator.ToString(), pairs.Select(kvp =>
-                $"{_keyConverter.ConvertToString(kvp.Key) ?? string.Empty}{_keyValueSeparator}{_valueConverter.ConvertToString(kvp.Value) ?? string.Empty}"));
+            var sb = new StringBuilder();
+            bool first = true;
+            foreach (var kvp in pairs)
+            {
+                if (!first) sb.Append(_pairSeparatorStr);
+                first = false;
+                sb.Append(_keyConverter.ConvertToString(kvp.Key) ?? string.Empty);
+                sb.Append(_keyValueSeparator);
+                sb.Append(_valueConverter.ConvertToString(kvp.Value) ?? string.Empty);
+            }
+            return sb.ToString();
         }
         return null;
     }

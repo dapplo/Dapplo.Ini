@@ -53,19 +53,31 @@ public static class IniFileWriter
 
             // Section comments
             foreach (var comment in section.Comments)
-                writer.WriteLine($"; {comment}");
+            {
+                writer.Write("; ");
+                writer.WriteLine(comment);
+            }
 
             // Only write header for named sections
             if (!string.IsNullOrEmpty(section.Name))
-                writer.WriteLine($"[{section.Name}]");
+            {
+                writer.Write('[');
+                writer.Write(section.Name);
+                writer.WriteLine(']');
+            }
 
             // Entries
             foreach (var entry in section.Entries)
             {
                 foreach (var comment in entry.Comments)
-                    writer.WriteLine($"; {comment}");
+                {
+                    writer.Write("; ");
+                    writer.WriteLine(comment);
+                }
 
-                writer.WriteLine($"{entry.Key} = {entry.Value ?? string.Empty}");
+                writer.Write(entry.Key);
+                writer.Write(" = ");
+                writer.WriteLine(entry.Value ?? string.Empty);
             }
         }
     }

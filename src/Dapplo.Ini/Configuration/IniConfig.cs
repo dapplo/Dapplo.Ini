@@ -55,6 +55,8 @@ public sealed class IniConfig : IDisposable
     internal bool ShouldLockFile;
     internal bool ShouldMonitorFile;
     internal FileChangedCallback? PendingMonitorCallback;
+    /// <summary>Milliseconds to wait before triggering a reload after a file-change notification. Defaults to 200.</summary>
+    internal int MonitorDebounceMs = 200;
     internal bool ShouldSaveOnExit;
     internal TimeSpan? ConfiguredAutoSaveInterval;
     internal string? WritablePath;
@@ -90,7 +92,6 @@ public sealed class IniConfig : IDisposable
 
     // Debounce timer: coalesces rapid Changed events (e.g. truncate + write) into one reload.
     private System.Threading.Timer? _reloadDebounceTimer;
-    private const int ReloadDebounceMs = 200;
 
     // ── Save re-entrance guard ────────────────────────────────────────────────
 
@@ -664,7 +665,7 @@ public sealed class IniConfig : IDisposable
                 // Changed events (e.g. file truncated then written by File.WriteAllText) are
                 // coalesced into a single reload once the write is complete.
                 // Use a local copy to avoid a null-reference race with Dispose().
-                _reloadDebounceTimer?.Change(ReloadDebounceMs, Timeout.Infinite);
+                _reloadDebounceTimer?.Change(MonitorDebounceMs, Timeout.Infinite);
                 break;
 
             case ReloadDecision.Postpone:
@@ -1075,13 +1076,9 @@ public sealed class IniConfig : IDisposable
         }
     }
 
-    /// <summary>Returns all known keys for a section (from GetAllRawValues if available).</summary>
+    /// <summary>Returns all known keys for a section.</summary>
     private static IEnumerable<string> GetSectionKeys(IIniSection section)
-    {
-        if (section is IniSectionBase sectionBase)
-            return sectionBase.GetAllRawValues().Select(kvp => kvp.Key);
-        return Array.Empty<string>();
-    }
+        => section.GetKeys();
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
