@@ -53,6 +53,27 @@ public abstract class IniSectionBase : IIniSection
     public string? GetRawValue(string key)
         => _rawValues.TryGetValue(key, out var v) ? v : null;
 
+    /// <summary>
+    /// Returns the current typed backing-field value for the property identified by
+    /// <paramref name="key"/> as an untyped <see cref="object"/>, or <c>null</c> when
+    /// the key is not found.
+    /// <para>
+    /// The source generator overrides this to return the typed backing field directly
+    /// (no converter round-trip), covering all properties including read-only and
+    /// runtime-only ones. Non-generated subclasses return <c>null</c> for all keys.
+    /// </para>
+    /// </summary>
+    /// <param name="key">The INI key name (case-insensitive).</param>
+    protected virtual object? GetValueCore(string key) => null;
+
+    /// <inheritdoc/>
+    public T? GetValue<T>(string key)
+    {
+        var value = GetValueCore(key);
+        if (value is T typed) return typed;
+        return default;
+    }
+
     /// <inheritdoc/>
     public void SetRawValue(string key, string? value)
     {
