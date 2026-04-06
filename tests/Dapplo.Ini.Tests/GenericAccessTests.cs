@@ -240,6 +240,182 @@ public sealed class GenericAccessTests : IDisposable
         Assert.Equal(typeof(int), type);
     }
 
+    // ── IIniSection.GetValue(string) — non-generic overload ───────────────────
+
+    [Fact]
+    public void GetValue_NonGeneric_ReturnsValueAsObject()
+    {
+        var config = BuildConfig("getval-obj.ini");
+        IIniSection section = config.GetSection("General")!;
+
+        object? name = section.GetValue("AppName");
+        object? retries = section.GetValue("MaxRetries");
+        object? logging = section.GetValue("EnableLogging");
+        object? threshold = section.GetValue("Threshold");
+
+        Assert.Equal("Test", name);
+        Assert.Equal(3, retries);
+        Assert.True((bool)logging!);
+        Assert.Equal(1.5, threshold);
+    }
+
+    [Fact]
+    public void GetValue_NonGeneric_ReturnsNull_ForUnknownKey()
+    {
+        var config = BuildConfig("getval-obj-null.ini");
+        IIniSection section = config.GetSection("General")!;
+
+        Assert.Null(section.GetValue("NonExistentKey"));
+    }
+
+    [Fact]
+    public void GetValue_NonGeneric_IsCaseInsensitive()
+    {
+        var config = BuildConfig("getval-obj-case.ini");
+        IIniSection section = config.GetSection("General")!;
+
+        Assert.Equal("Test", section.GetValue("appname"));
+        Assert.Equal("Test", section.GetValue("APPNAME"));
+    }
+
+    [Fact]
+    public void GetValue_NonGeneric_CanIterateAllPropertiesWithoutKnowingTypes()
+    {
+        WriteIni("getval-iterate.ini",
+            "[General]\nAppName = IterApp\nMaxRetries = 7\nEnableLogging = true\nThreshold = 2.5");
+
+        var section = new GeneralSettingsImpl();
+        IniConfigRegistry.ForFile("getval-iterate.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        // Simulate a generic loop that doesn't know the property types at compile time.
+        IIniSection iSection = section;
+        var values = iSection.GetKeys()
+            .ToDictionary(k => k, k => iSection.GetValue(k));
+
+        Assert.Equal("IterApp", values["AppName"]);
+        Assert.Equal(7, values["MaxRetries"]);
+        Assert.True((bool)values["EnableLogging"]!);
+        Assert.Equal(2.5, values["Threshold"]);
+    }
+
+    // ── IIniSection.GetValue<T>(string) ───────────────────────────────────────
+
+    [Fact]
+    public void GetValue_ReturnsTypedValue_ForStringProperty()
+    {
+        var config = BuildConfig("getval-string.ini");
+        var section = config.GetSection<IGeneralSettings>();
+
+        var value = section.GetValue<string>("AppName");
+
+        Assert.Equal("Test", value);
+    }
+
+    [Fact]
+    public void GetValue_ReturnsTypedValue_ForIntProperty()
+    {
+        var config = BuildConfig("getval-int.ini");
+        var section = config.GetSection<IGeneralSettings>();
+
+        var value = section.GetValue<int>("MaxRetries");
+
+        Assert.Equal(3, value);
+    }
+
+    [Fact]
+    public void GetValue_ReturnsTypedValue_ForBoolProperty()
+    {
+        var config = BuildConfig("getval-bool.ini");
+        var section = config.GetSection<IGeneralSettings>();
+
+        var value = section.GetValue<bool>("EnableLogging");
+
+        Assert.True(value);
+    }
+
+    [Fact]
+    public void GetValue_ReturnsTypedValue_ForDoubleProperty()
+    {
+        var config = BuildConfig("getval-double.ini");
+        var section = config.GetSection<IGeneralSettings>();
+
+        var value = section.GetValue<double>("Threshold");
+
+        Assert.Equal(1.5, value);
+    }
+
+    [Fact]
+    public void GetValue_IsCaseInsensitive()
+    {
+        var config = BuildConfig("getval-case.ini");
+        var section = config.GetSection<IGeneralSettings>();
+
+        Assert.Equal("Test", section.GetValue<string>("appname"));
+        Assert.Equal("Test", section.GetValue<string>("APPNAME"));
+        Assert.Equal("Test", section.GetValue<string>("AppName"));
+    }
+
+    [Fact]
+    public void GetValue_ReturnsDefault_ForUnknownKey()
+    {
+        var config = BuildConfig("getval-unknown.ini");
+        var section = config.GetSection<IGeneralSettings>();
+
+        var value = section.GetValue<string>("NonExistentKey");
+
+        Assert.Null(value);
+    }
+
+    [Fact]
+    public void GetValue_ReturnsConfiguredDefault_WhenKeyAbsentFromFile()
+    {
+        // File without MaxRetries — default should be applied (42 per IGeneralSettings)
+        WriteIni("getval-default.ini", "[General]\nAppName = Only");
+
+        var section = new GeneralSettingsImpl();
+        IniConfigRegistry.ForFile("getval-default.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        // GetValue should return the default, same as the property getter
+        Assert.Equal(42, section.GetValue<int>("MaxRetries"));
+        Assert.Equal(42, section.MaxRetries);
+    }
+
+    [Fact]
+    public void GetValue_Via_IIniSection_Interface_Works()
+    {
+        var config = BuildConfig("getval-iface.ini");
+
+        IIniSection s = config.GetSection("General")!;
+
+        Assert.Equal("Test", s.GetValue<string>("AppName"));
+        Assert.Equal(3, s.GetValue<int>("MaxRetries"));
+    }
+
+    [Fact]
+    public void GetValue_ReturnsDictionaryObject_ForDictionaryProperty()
+    {
+        WriteIni("getval-dict.ini", "[Collections]\nStringIntDictionary.a = 1\nStringIntDictionary.b = 2");
+
+        var section = new CollectionSettingsImpl();
+        IniConfigRegistry.ForFile("getval-dict.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<ICollectionSettings>(section)
+            .Build();
+
+        var dict = section.GetValue<Dictionary<string, int>>("StringIntDictionary");
+
+        Assert.NotNull(dict);
+        var nonNullDict = dict!;
+        Assert.Equal(1, nonNullDict["a"]);
+        Assert.Equal(2, nonNullDict["b"]);
+    }
+
     // ── End-to-end generic iteration scenario ──────────────────────────────────
 
     [Fact]

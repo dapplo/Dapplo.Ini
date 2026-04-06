@@ -861,6 +861,30 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         sb.AppendLine("        }");
         sb.AppendLine();
 
+        // ── GetValueCore ──────────────────────────────────────────────────────
+        sb.AppendLine("        protected override object? GetValueCore(string key)");
+        sb.AppendLine("        {");
+        var valueProps = m.Properties.Where(p => !p.IsIgnored).ToList();
+        if (valueProps.Count > 0)
+        {
+            sb.AppendLine("            switch (key.ToLowerInvariant())");
+            sb.AppendLine("            {");
+            foreach (var p in valueProps)
+            {
+                string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
+                string fieldName = $"_{Camel(p.Name)}";
+                sb.AppendLine($"                case \"{EscapeString(keyName)}\": return {fieldName};");
+            }
+            sb.AppendLine("                default: return null;");
+            sb.AppendLine("            }");
+        }
+        else
+        {
+            sb.AppendLine("            return null;");
+        }
+        sb.AppendLine("        }");
+        sb.AppendLine();
+
         // ── GetSectionDescription ─────────────────────────────────────────────
         if (m.Description != null)
             sb.AppendLine($"        public override string? GetSectionDescription() => \"{EscapeString(m.Description)}\";");

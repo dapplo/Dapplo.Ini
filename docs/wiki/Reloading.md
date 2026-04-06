@@ -58,6 +58,23 @@ if (section.HasChanges)
 Both flags are cleared automatically by `Reload()` (after fresh data is applied)
 and by `Save()` (after a successful write).
 
+### Manually signalling a change — `MarkAsDirty()`
+
+Property setters set the dirty flag automatically. However, **in-place collection
+mutations** (e.g. `section.Tags.Add("item")`) bypass the setter and therefore do not
+trigger the flag. Call `MarkAsDirty()` after such mutations so that
+`HasPendingChanges()` and the auto-save timer detect the change:
+
+```csharp
+// Mutation bypasses the setter — auto-save won't notice without MarkAsDirty()
+section.Tags.Add("new-tag");
+
+// Explicitly mark the section as dirty:
+section.MarkAsDirty();
+
+// Now HasPendingChanges() returns true and the auto-save timer will pick it up.
+```
+
 ---
 
 ## See also

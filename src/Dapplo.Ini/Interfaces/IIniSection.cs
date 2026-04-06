@@ -19,6 +19,45 @@ public interface IIniSection
     string? GetRawValue(string key);
 
     /// <summary>
+    /// Returns the current value for <paramref name="key"/> as an untyped <see cref="object"/>,
+    /// exactly as the property getter would return it (including any default configured via
+    /// <c>[IniValue(DefaultValue = "...")]</c>).
+    /// <para>
+    /// Use this overload when iterating over properties generically and the .NET type of
+    /// each property is not known at compile time. When the type <em>is</em> known, prefer
+    /// <see cref="GetValue{T}(string)"/> which avoids the boxing overhead for value types.
+    /// </para>
+    /// <para>
+    /// For dictionary properties, the entire dictionary object is returned; use
+    /// <see cref="GetRawValue"/> with the sub-key notation (<c>"PropertyName.subkey"</c>)
+    /// to retrieve individual entries.
+    /// </para>
+    /// </summary>
+    /// <param name="key">The INI key name (case-insensitive).</param>
+    /// <returns>
+    /// The value as <see cref="object"/>, or <c>null</c> when the key is not found.
+    /// </returns>
+    object? GetValue(string key);
+
+    /// <summary>
+    /// Returns the current typed value for <paramref name="key"/>, exactly as the property
+    /// getter would return it (including any default configured via
+    /// <c>[IniValue(DefaultValue = "...")]</c>).
+    /// <para>
+    /// For dictionary properties, the entire dictionary object is returned; use
+    /// <see cref="GetRawValue"/> with the sub-key notation (<c>"PropertyName.subkey"</c>)
+    /// to retrieve individual entries.
+    /// </para>
+    /// </summary>
+    /// <typeparam name="T">The expected .NET type of the property.</typeparam>
+    /// <param name="key">The INI key name (case-insensitive).</param>
+    /// <returns>
+    /// The typed value, or <c>default(<typeparamref name="T"/>)</c> when the key is not
+    /// found or cannot be cast to <typeparamref name="T"/>.
+    /// </returns>
+    T? GetValue<T>(string key);
+
+    /// <summary>
     /// Stores a raw string value for <paramref name="key"/> in this section.
     /// The property whose key matches will be updated via its converter.
     /// </summary>
@@ -34,6 +73,18 @@ public interface IIniSection
     /// <see cref="IniConfig.Save"/> or <see cref="IniConfig.Reload"/>.
     /// </summary>
     bool HasChanges { get; }
+
+    /// <summary>
+    /// Marks this section as having unsaved changes.
+    /// <para>
+    /// Call this method after mutating a collection property in-place (for example
+    /// <c>section.Tags.Add("new-tag")</c>) so that the auto-save timer and
+    /// <see cref="IniConfig.HasPendingChanges"/> correctly detect the modification.
+    /// Property setters call this automatically; only direct collection mutations
+    /// require an explicit call.
+    /// </para>
+    /// </summary>
+    void MarkAsDirty();
 
     /// <summary>
     /// Returns <c>true</c> when the value for <paramref name="key"/> was loaded from a

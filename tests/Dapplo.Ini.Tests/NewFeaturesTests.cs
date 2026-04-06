@@ -143,6 +143,72 @@ public sealed class NewFeaturesTests : IDisposable
         Assert.False(config.HasPendingChanges());
     }
 
+    [Fact]
+    public void MarkAsDirty_MarksSection_AsDirty()
+    {
+        WriteIni("markdirty.ini", "[General]\nAppName = Loaded");
+
+        var section = new GeneralSettingsImpl();
+        var config = IniConfigRegistry.ForFile("markdirty.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        Assert.False(section.HasChanges);
+
+        // Simulate a collection mutation that bypasses the setter
+        section.MarkAsDirty();
+
+        Assert.True(section.HasChanges);
+        Assert.True(config.HasPendingChanges());
+    }
+
+    [Fact]
+    public void MarkAsDirty_IsCleared_AfterSave()
+    {
+        WriteIni("markdirty-save.ini", "[General]\nAppName = Loaded");
+
+        var section = new GeneralSettingsImpl();
+        var config = IniConfigRegistry.ForFile("markdirty-save.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        section.MarkAsDirty();
+        Assert.True(section.HasChanges);
+
+        config.Save();
+
+        Assert.False(section.HasChanges);
+        Assert.False(config.HasPendingChanges());
+    }
+
+    [Fact]
+    public async Task MarkAsDirty_TriggersAutoSave()
+    {
+        WriteIni("markdirty-autosave.ini", "[General]\nAppName = Original");
+
+        var section = new CollectionSettingsImpl();
+        var config = IniConfigRegistry.ForFile("markdirty-autosave.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<ICollectionSettings>(section)
+            .AutoSaveInterval(TimeSpan.FromMilliseconds(100))
+            .Build();
+
+        // Mutate a list in-place (bypasses the setter) then manually mark dirty
+        section.StringList!.Add("extra-item");
+        section.MarkAsDirty();
+
+        Assert.True(config.HasPendingChanges());
+
+        // Wait for the auto-save timer to fire
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+
+        Assert.False(config.HasPendingChanges(), "Auto-save should have cleared pending changes.");
+
+        config.Dispose();
+    }
+
     // ── Configurable encoding ──────────────────────────────────────────────────
 
     [Fact]

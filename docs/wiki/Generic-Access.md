@@ -75,6 +75,66 @@ from the file at the last `Load()` / `Reload()`.
 
 ---
 
+## Reading values generically
+
+### Raw string — `GetRawValue`
+
+`GetRawValue(string key)` returns the raw string exactly as it appears in the INI file,
+or `null` when the key is absent from the store (e.g. the file was loaded without that
+key and no default was written back):
+
+```csharp
+string? raw = section.GetRawValue("MaxRetries");
+// raw == "5" (string)
+```
+
+### Typed value — `GetValue<T>`
+
+`GetValue<T>(string key)` returns the typed value that the property getter would
+return — including any default configured via `[IniValue(DefaultValue = "...")]`:
+
+```csharp
+int retries = section.GetValue<int>("MaxRetries");
+// retries == 5 (int, same as section.MaxRetries)
+
+string? name = section.GetValue<string>("AppName");
+// name == "MyApp" (default applied even when absent from the file)
+```
+
+- Returns `default(T)` when the key does not exist or cannot be cast to `T`.
+- For **dictionary properties**, the entire dictionary object is returned (same as the
+  property getter). Use `GetRawValue("PropertyName.subkey")` to read individual entries.
+
+```csharp
+// Dictionary property: GetValue<T> returns the whole dictionary
+var dict = section.GetValue<Dictionary<string, int>>("Tags");
+// dict == { "a": 1, "b": 2 }
+
+// Individual sub-key access via GetRawValue:
+string? raw = section.GetRawValue("Tags.a");  // "1"
+```
+
+### Untyped value — `GetValue` (no type parameter)
+
+`GetValue(string key)` returns the same value as the property getter but as an
+untyped `object?`. This is the overload to use when iterating over all properties in a
+generic loop where the .NET type of each property is not known at compile time:
+
+```csharp
+// Generic loop — no compile-time knowledge of property types needed:
+foreach (string key in section.GetKeys())
+{
+    object? value = section.GetValue(key);       // always works
+    Type?   type  = section.GetPropertyType(key); // for labelling
+    Console.WriteLine($"  {key} ({type?.Name}) = {value}");
+}
+```
+
+Returns `null` when the key is not found. When the type *is* known at compile time,
+prefer `GetValue<T>` to avoid boxing overhead for value types.
+
+---
+
 ## Inspecting property types
 
 Use `GetPropertyType(string key)` to retrieve the .NET `Type` of a declared property:
@@ -104,10 +164,10 @@ foreach (IIniSection section in config.GetSections())
 
     foreach (string key in section.GetKeys())
     {
-        Type?   type  = section.GetPropertyType(key);
-        string? value = section.GetRawValue(key);
+        Type?   type     = section.GetPropertyType(key);
+        string? rawValue = section.GetRawValue(key);
 
-        Console.WriteLine($"  {key} : {type?.Name ?? "unknown"} = {value}");
+        Console.WriteLine($"  {key} : {type?.Name ?? "unknown"} = {rawValue}");
     }
 }
 ```
@@ -120,6 +180,27 @@ Example output:
   MaxRetries : Int32 = 5
   EnableLogging : Boolean = true
   Threshold : Double = 3.14
+```
+
+For typed or untyped access without knowing the concrete section type at compile time,
+use `GetValue` / `GetValue<T>`:
+
+```csharp
+IIniSection? section = config.GetSection("General");
+if (section != null)
+{
+    // Untyped — useful in generic loops
+    foreach (string key in section.GetKeys())
+    {
+        object? value = section.GetValue(key);
+        Console.WriteLine($"  {key} = {value}");
+    }
+
+    // Typed — when the type is known at compile time
+    int retries = section.GetValue<int>("MaxRetries");
+    string? name = section.GetValue<string>("AppName");
+    Console.WriteLine($"App={name}, Retries={retries}");
+}
 ```
 
 ---
@@ -141,7 +222,10 @@ Example output:
 | `GetKeys()` | Enumerates declared property key names |
 | `GetPropertyType(string key)` | Returns the .NET `Type` for the property, or `null` for unknown keys |
 | `GetRawValue(string key)` | Returns the raw string stored for `key`, or `null` when absent |
+| `GetValue(string key)` | Returns the current value for `key` as `object?` (same as the property getter, including defaults); ideal for generic loops |
+| `GetValue<T>(string key)` | Returns the typed value for `key` (same as the property getter, including defaults), or `default(T)` when not found |
 | `SetRawValue(string key, string? value)` | Stores a raw string for `key` |
+| `MarkAsDirty()` | Marks the section as having unsaved changes (use after in-place collection mutations) |
 | `SectionName` | The INI section name (e.g. `"General"`) |
 
 ---
