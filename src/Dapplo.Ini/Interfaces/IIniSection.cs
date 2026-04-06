@@ -48,4 +48,20 @@ public interface IIniSection
     /// Typically the property name, unless overridden via <c>[IniValue(KeyName="...")]</c>.
     /// </param>
     bool IsConstant(string key);
+
+    /// <summary>
+    /// Returns the INI key names of all properties declared on this section.
+    /// For source-generated sections this reflects the compile-time property list;
+    /// for non-generated sections it reflects the keys currently held in the raw store.
+    /// </summary>
+    IEnumerable<string> GetKeys();
+
+    /// <summary>
+    /// Returns the .NET <see cref="Type"/> of the property identified by <paramref name="key"/>,
+    /// or <c>null</c> when the key is not a known declared property.
+    /// Source-generated sections return the exact property type; non-generated sections
+    /// always return <c>null</c>.
+    /// </summary>
+    /// <param name="key">The INI key name (case-insensitive).</param>
+    Type? GetPropertyType(string key);
 }

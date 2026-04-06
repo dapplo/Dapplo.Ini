@@ -170,6 +170,28 @@ public sealed class IniConfig : IDisposable
             $"Section '{typeof(T).Name}' has not been registered with the INI configuration '{FileName}'.");
     }
 
+    /// <summary>
+    /// Returns the registered section whose <see cref="IIniSection.SectionName"/> matches
+    /// <paramref name="sectionName"/> (case-insensitive), or <c>null</c> when no such
+    /// section has been registered.
+    /// </summary>
+    /// <param name="sectionName">The INI section name as it appears in the file.</param>
+    public IIniSection? GetSection(string sectionName)
+    {
+        foreach (var section in Sections.Values)
+        {
+            if (string.Equals(section.SectionName, sectionName, StringComparison.OrdinalIgnoreCase))
+                return section;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Returns all registered sections, allowing generic iteration over the meta model
+    /// without needing to know the concrete section types at compile time.
+    /// </summary>
+    public IEnumerable<IIniSection> GetSections() => Sections.Values;
+
     // ── Change tracking ───────────────────────────────────────────────────────
 
     /// <summary>
