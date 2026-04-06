@@ -6,4 +6,19 @@
       <Version>3.9.50</Version>
     </PackageReference>
   </ItemGroup>
+  <PropertyGroup>
+    <Copyright>Copyright © Dapplo 2016-2026</Copyright>
+    <Authors>Dapplo</Authors>
+    <PackageIcon>icon.png</PackageIcon>
+    <RepositoryUrl>https://github.com/dapplo/Dapplo.Ini</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <LangVersion>latest</LangVersion>
+    <!-- Optional: Publish the repository URL in the built .nupkg (in the NuSpec <Repository> element) -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)icon.png" Pack="true" PackagePath="\" />
+  </ItemGroup>
 </Project>
