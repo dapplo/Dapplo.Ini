@@ -21,6 +21,7 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
 - ✅ **Runtime-only properties** — in-memory values with defaults that are never loaded from or saved to disk (`[IniValue(RuntimeOnly = true)]`)
 - ✅ **Constants protection** — keys loaded from an admin constants file are write-protected; `IsConstant(key)` lets UI code disable the corresponding input control
 - ✅ **Empty-over-null semantics** — opt reference-type properties into returning empty values instead of `null` via `[IniValue(EmptyWhenNull = true)]`, `[IniSection(EmptyWhenNull = true)]`, or `IniConfigBuilder.EmptyWhenNull()`
+- ✅ **Generic meta-model access** — enumerate all sections by name, iterate their keys, and inspect property types at runtime without needing the concrete section types at compile time
 
 ---
 
@@ -96,3 +97,4 @@ config.Save();
 | [[Async-Await-Benefits]] | Background analysis of async/await trade-offs (pre-implementation reference) |
 | [[Runtime-Only-and-Constants]] | Runtime-only properties and constants-file protection |
 | [[Empty-When-Null]] | `EmptyWhenNull` at property, section, and config levels — return empty instead of `null` for absent reference-type values |
+| [[Generic-Access]] | `GetSections()`, `GetSection(name)`, `GetKeys()`, and `GetPropertyType()` — inspect the configuration meta-model at runtime without compile-time type knowledge |

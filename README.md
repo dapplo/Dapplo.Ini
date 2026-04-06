@@ -24,6 +24,7 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
 - ✅ **DI-friendly async loading** — `InitialLoadTask` lets consumers await the initial load while sections are injected as singletons immediately
 - ✅ **Plugin / distributed registrations** — `Create()` + `AddSection<T>()` + `Load()` lets plugins register sections before the single file read
 - ✅ **Migration support** — unknown-key callbacks, `IUnknownKey<TSelf>`, and an optional `[__metadata__]` section for version-gated upgrades
+- ✅ **Generic meta-model access** — enumerate sections by name, iterate keys, and inspect property types at runtime without knowing the concrete types at compile time
 - ✅ Targets **net48** and **net10.0**
 
 ---
@@ -75,6 +76,7 @@ Full documentation is available in the [project wiki](../../wiki):
 - [INI File Format](../../wiki/Ini-File-Format) — syntax, value formats, collections, and examples
 - [Getting Started](../../wiki/Getting-Started) — installation and first steps
 - [Defining Sections](../../wiki/Defining-Sections) — `[IniSection]` and `[IniValue]` reference
+- [Generic Access](../../wiki/Generic-Access) — enumerate sections/keys and inspect property types at runtime
 
 ## License
 
