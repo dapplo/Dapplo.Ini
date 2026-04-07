@@ -1,5 +1,6 @@
 // Copyright (c) Dapplo. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for details.
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 #if NET
 using System.Diagnostics.CodeAnalysis;
@@ -12,7 +13,7 @@ namespace Dapplo.Ini.Converters;
 /// </summary>
 public static class ValueConverterRegistry
 {
-    private static readonly Dictionary<Type, IValueConverter> _converters = new();
+    private static readonly ConcurrentDictionary<Type, IValueConverter> _converters = new();
 
     // Generic type definitions used for collection/dictionary detection
     private static readonly HashSet<Type> _listLikeGenericDefinitions = new()
@@ -68,7 +69,7 @@ public static class ValueConverterRegistry
     /// compatibility register a typed <see cref="ValueConverterBase{T}"/> for each enum type
     /// instead of relying on the automatic <see cref="EnumConverter"/>.
     /// Collection and dictionary converters are created on demand using reflection and are cached
-    /// for subsequent lookups.
+    /// for subsequent lookups. This method is safe to call concurrently from multiple threads.
     /// </remarks>
 #if NET
     [RequiresDynamicCode("Auto-registering converters for enum, collection, and dictionary types requires dynamic code. Register typed converters for full AOT compatibility.")]
@@ -106,8 +107,9 @@ public static class ValueConverterRegistry
             {
                 var arrayConverterType = typeof(ArrayConverter<>).MakeGenericType(elementType);
                 converter = (IValueConverter)Activator.CreateInstance(arrayConverterType, elementConverter, ',')!;
-                _converters[type] = converter;
-                return converter;
+                // Use TryAdd so that only the first writer wins; all callers then read back the winner.
+                _converters.TryAdd(type, converter);
+                return _converters[type];
             }
         }
 
@@ -126,8 +128,8 @@ public static class ValueConverterRegistry
                 {
                     var listConverterType = typeof(ListConverter<>).MakeGenericType(elementType);
                     converter = (IValueConverter)Activator.CreateInstance(listConverterType, elementConverter, ',')!;
-                    _converters[type] = converter;
-                    return converter;
+                    _converters.TryAdd(type, converter);
+                    return _converters[type];
                 }
             }
 
@@ -140,8 +142,8 @@ public static class ValueConverterRegistry
                 {
                     var dictConverterType = typeof(DictionaryConverter<,>).MakeGenericType(typeArgs[0], typeArgs[1]);
                     converter = (IValueConverter)Activator.CreateInstance(dictConverterType, keyConverter, valueConverter, ',', '=')!;
-                    _converters[type] = converter;
-                    return converter;
+                    _converters.TryAdd(type, converter);
+                    return _converters[type];
                 }
             }
         }
@@ -155,11 +157,6 @@ public static class ValueConverterRegistry
 #endif
     private static IValueConverter GetOrCreateEnumConverter(Type enumType)
     {
-        if (!_converters.TryGetValue(enumType, out var conv))
-        {
-            conv = new EnumConverter(enumType);
-            _converters[enumType] = conv;
-        }
-        return conv;
+        return _converters.GetOrAdd(enumType, static t => new EnumConverter(t));
     }
 }

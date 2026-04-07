@@ -29,6 +29,7 @@ public sealed class IniConfigBuilder
     private bool _lockFile;
     private bool _monitorFile;
     private FileChangedCallback? _fileChangedCallback;
+    private int _monitorDebounceMs = 200;
 
     // Explicit write-target path (overrides the search-path fallback)
     private string? _writablePath;
@@ -219,10 +220,16 @@ public sealed class IniConfigBuilder
     /// Optional hook.  Return <see cref="ReloadDecision.Reload"/> (default), 
     /// <see cref="ReloadDecision.Ignore"/>, or <see cref="ReloadDecision.Postpone"/>.
     /// </param>
-    public IniConfigBuilder MonitorFile(FileChangedCallback? callback = null)
+    /// <param name="debounceMs">
+    /// Milliseconds to wait before triggering a reload after a file-change notification.
+    /// Coalesces rapid successive changes (e.g. truncate + write) into a single reload.
+    /// Defaults to 200 ms.  Set to 0 to disable debouncing.
+    /// </param>
+    public IniConfigBuilder MonitorFile(FileChangedCallback? callback = null, int debounceMs = 200)
     {
         _monitorFile = true;
         _fileChangedCallback = callback;
+        _monitorDebounceMs = debounceMs;
         return this;
     }
 
@@ -546,6 +553,7 @@ public sealed class IniConfigBuilder
         config.ShouldLockFile = _lockFile;
         config.ShouldMonitorFile = _monitorFile;
         config.PendingMonitorCallback = _fileChangedCallback;
+        config.MonitorDebounceMs = _monitorDebounceMs;
         config.ShouldSaveOnExit = _saveOnExit;
         config.ConfiguredAutoSaveInterval = _autoSaveInterval;
         config.UnknownKeyHandler = _unknownKeyCallback;
