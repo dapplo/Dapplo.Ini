@@ -138,6 +138,20 @@ public sealed class IniValueAttribute : Attribute
     public bool RuntimeOnly { get; set; }
 
     /// <summary>
+    /// When <c>true</c>, the value for this specific property is never loaded from default
+    /// files (registered via <c>IniConfigBuilder.AddDefaultsFile</c>).
+    /// The property value will only be set from the main user INI file or constant files.
+    /// </summary>
+    public bool IgnoreDefaults { get; set; }
+
+    /// <summary>
+    /// When <c>true</c>, the value for this specific property is never loaded from constant
+    /// files (registered via <c>IniConfigBuilder.AddConstantsFile</c>).
+    /// The property value will never be locked by an administrator constants file.
+    /// </summary>
+    public bool IgnoreConstants { get; set; }
+
+    /// <summary>
     /// When <c>true</c>, an absent or <c>null</c> INI value is represented as an empty value
     /// rather than <c>null</c>.
     /// </summary>

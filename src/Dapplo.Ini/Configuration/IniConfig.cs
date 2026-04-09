@@ -437,7 +437,7 @@ public sealed class IniConfig : IDisposable
                 foreach (var path in DefaultFilePaths)
                 {
                     if (File.Exists(path))
-                        ApplyIniFile(IniFileParser.ParseFile(path, Encoding));
+                        ApplyIniFile(IniFileParser.ParseFile(path, Encoding), isDefault: true);
                 }
 
                 // 3. Apply user file
@@ -523,7 +523,7 @@ public sealed class IniConfig : IDisposable
                 foreach (var path in DefaultFilePaths)
                 {
                     if (File.Exists(path))
-                        ApplyIniFile(await IniFileParser.ParseFileAsync(path, Encoding, cancellationToken).ConfigureAwait(false));
+                        ApplyIniFile(await IniFileParser.ParseFileAsync(path, Encoding, cancellationToken).ConfigureAwait(false), isDefault: true);
                 }
 
                 // 3. Apply user file
@@ -856,7 +856,7 @@ public sealed class IniConfig : IDisposable
             {
                 var resolvedDefault = ResolveAuxiliaryFilePath(path);
                 if (resolvedDefault != null)
-                    ApplyIniFile(IniFileParser.ParseFile(resolvedDefault, Encoding));
+                    ApplyIniFile(IniFileParser.ParseFile(resolvedDefault, Encoding), isDefault: true);
             }
 
             // 3. Resolve and apply user file
@@ -969,7 +969,7 @@ public sealed class IniConfig : IDisposable
             {
                 var resolvedDefault = ResolveAuxiliaryFilePath(path);
                 if (resolvedDefault != null)
-                    ApplyIniFile(await IniFileParser.ParseFileAsync(resolvedDefault, Encoding, cancellationToken).ConfigureAwait(false));
+                    ApplyIniFile(await IniFileParser.ParseFileAsync(resolvedDefault, Encoding, cancellationToken).ConfigureAwait(false), isDefault: true);
             }
 
             // 3. Resolve and apply user file
@@ -1143,23 +1143,28 @@ public sealed class IniConfig : IDisposable
         return iniFile;
     }
 
-    private void ApplyIniFile(IniFile iniFile, bool isConstant = false)
+    private void ApplyIniFile(IniFile iniFile, bool isConstant = false, bool isDefault = false)
     {
-        // Read and store the metadata section when it exists in the file.
-        var metaIniSection = iniFile.GetSection(MetadataSectionName);
-        if (metaIniSection != null)
+        // Only read metadata from the main user file — never from defaults or constants files.
+        // This ensures that metadata (version, app name, timestamp) is always authentic and
+        // reflects the actual settings file, not administrative or default overlays.
+        if (!isDefault && !isConstant)
         {
-            Metadata = new IniMetadata
+            var metaIniSection = iniFile.GetSection(MetadataSectionName);
+            if (metaIniSection != null)
             {
-                Version         = metaIniSection.GetValue("Version"),
-                ApplicationName = metaIniSection.GetValue("CreatedBy"),
-                SavedOn         = metaIniSection.GetValue("SavedOn"),
-                CommitHash      = metaIniSection.GetValue("CommitHash"),
-            };
-        }
-        else
-        {
-            Metadata = null;
+                Metadata = new IniMetadata
+                {
+                    Version         = metaIniSection.GetValue("Version"),
+                    ApplicationName = metaIniSection.GetValue("CreatedBy"),
+                    SavedOn         = metaIniSection.GetValue("SavedOn"),
+                    CommitHash      = metaIniSection.GetValue("CommitHash"),
+                };
+            }
+            else
+            {
+                Metadata = null;
+            }
         }
 
         foreach (var section in Sections.Values)
@@ -1169,6 +1174,10 @@ public sealed class IniConfig : IDisposable
 
             // Capture as IniSectionBase once for all uses within this iteration.
             var sectionBase = section as IniSectionBase;
+
+            // Check section-level skip flags before processing any entries.
+            if (isDefault && sectionBase?.SectionIgnoresDefaults == true) continue;
+            if (isConstant && sectionBase?.SectionIgnoresConstants == true) continue;
 
             // Wire the conversion-failed callback so IniSectionBase can report to listeners.
             if (sectionBase != null && Listeners.Count > 0)
@@ -1181,6 +1190,10 @@ public sealed class IniConfig : IDisposable
             {
                 foreach (var entry in iniSection.Entries)
                 {
+                    // Check property-level skip flags.
+                    if (isDefault && sectionBase?.IsIgnoreDefaultsKey(entry.Key) == true) continue;
+                    if (isConstant && sectionBase?.IsIgnoreConstantsKey(entry.Key) == true) continue;
+
                     section.SetRawValue(entry.Key, entry.Value);
 
                     // When applying a constants file, protect this key from further changes.

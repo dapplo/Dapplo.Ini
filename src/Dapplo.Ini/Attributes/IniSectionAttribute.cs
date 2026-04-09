@@ -61,6 +61,20 @@ public sealed class IniSectionAttribute : Attribute
     public string? Description { get; set; }
 
     /// <summary>
+    /// When <c>true</c>, values for all properties in this section are never loaded from
+    /// default files (registered via <c>IniConfigBuilder.AddDefaultsFile</c>).
+    /// The property values will only be set from the main user INI file or constant files.
+    /// </summary>
+    public bool IgnoreDefaults { get; set; }
+
+    /// <summary>
+    /// When <c>true</c>, values for all properties in this section are never loaded from
+    /// constant files (registered via <c>IniConfigBuilder.AddConstantsFile</c>).
+    /// The property values will never be locked by an administrator constants file.
+    /// </summary>
+    public bool IgnoreConstants { get; set; }
+
+    /// <summary>
     /// When <c>true</c>, every reference-type property in this section (strings, lists, arrays,
     /// dictionaries) returns an empty value instead of <c>null</c> when no INI key is present
     /// and the property has no explicit <see cref="IniValueAttribute.DefaultValue"/>.
