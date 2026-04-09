@@ -16,6 +16,8 @@ extends `IIniSection`, with or without the attribute.
 | `SectionName` (ctor) | `string?` | interface name minus leading `I` | Name of the `[Section]` in the INI file |
 | `Description` | `string?` | `null` | Written as a comment above the section header |
 | `EmptyWhenNull` | `bool` | `false` | When `true`, every non-value-type property in the section returns an empty value (e.g. `string.Empty`, empty list, empty array) instead of `null` when absent. Equivalent to placing `[IniValue(EmptyWhenNull = true)]` on each property individually. See [[Empty-When-Null]]. |
+| `IgnoreDefaults` | `bool` | `false` | When `true`, values from files registered via `AddDefaultsFile` are never applied to any property in this section. Compiled defaults and the user file still apply. See [[Ignore-Defaults-and-Constants]]. |
+| `IgnoreConstants` | `bool` | `false` | When `true`, values from files registered via `AddConstantsFile` are never applied to any property in this section. No key in the section will ever be locked by an admin constants file. See [[Ignore-Defaults-and-Constants]]. |
 
 When `[IniSection]` is omitted:
 
@@ -99,6 +101,8 @@ For the following three capabilities there is no standard .NET attribute; use
 | `Transactional = true` | Property participates in `Begin` / `Commit` / `Rollback` — requires `ITransactional` |
 | `RuntimeOnly = true` | Property is never loaded from or saved to the INI file but its default **is** restored by `ResetToDefaults` on every reload |
 | `EmptyWhenNull = true` | When absent from the file, returns `string.Empty`, an empty list, an empty array, or an empty dictionary instead of `null`. See [[Empty-When-Null]]. |
+| `IgnoreDefaults = true` | Values from defaults files are never applied to this property. Compiled defaults and the user file still apply. See [[Ignore-Defaults-and-Constants]]. |
+| `IgnoreConstants = true` | Values from constants files are never applied to this property. The key is never locked by an admin constants file. See [[Ignore-Defaults-and-Constants]]. |
 
 ```csharp
 [IniSection("AppState")]
@@ -288,6 +292,37 @@ See [[Runtime-Only-and-Constants]] for the full guide.
 
 ---
 
+## Ignoring defaults and constants files
+
+Use `IgnoreDefaults` / `IgnoreConstants` to opt a section or individual property out of
+the corresponding overlay layer:
+
+```csharp
+// Entire section: never touched by the defaults file
+[IniSection("UserPreferences", IgnoreDefaults = true)]
+public interface IUserPreferences : IIniSection
+{
+    [DefaultValue("Light")]
+    string? Theme { get; set; }
+}
+
+// Single property: user-owned value; admin constants file cannot lock it
+[IniSection("App")]
+public interface IAppSettings : IIniSection
+{
+    [DefaultValue("5")]
+    int MaxRetries { get; set; }
+
+    [DefaultValue("Light")]
+    [IniValue(IgnoreConstants = true)]
+    string? Theme { get; set; }
+}
+```
+
+See [[Ignore-Defaults-and-Constants]] for the full guide.
+
+---
+
 ## Validation attributes (DataAnnotations)
 
 Place `System.ComponentModel.DataAnnotations` attributes on properties to have the
@@ -343,6 +378,7 @@ code in a separate file — see [[Lifecycle-Hooks#legacy-partial-class-pattern]]
 
 - [[Empty-When-Null]] — `EmptyWhenNull` at property, section, and config levels
 - [[Runtime-Only-and-Constants]] — `RuntimeOnly` properties and constants-file protection
+- [[Ignore-Defaults-and-Constants]] — opt sections/properties out of defaults and constants overlays
 - [[Lifecycle-Hooks]] — `IAfterLoad`, `IBeforeSave`, `IAfterSave`
 - [[Validation]] — `IDataValidation<TSelf>`, DataAnnotations attributes, and `INotifyDataErrorInfo`
 - [[Transactional-Updates]] — `ITransactional` for atomic updates

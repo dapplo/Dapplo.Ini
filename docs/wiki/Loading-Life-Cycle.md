@@ -14,6 +14,8 @@ state of any property after `Build()` or `Reload()`.
 │ STEP 2 — Apply defaults files (AddDefaultsFile order)               │
 │   Each defaults file is read with IniFileParser and merged into the │
 │   sections. Later files win over earlier ones.                      │
+│   Sections marked [IniSection(IgnoreDefaults=true)] and properties  │
+│   marked [IniValue(IgnoreDefaults=true)] are skipped.               │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────────────┐
@@ -28,6 +30,9 @@ state of any property after `Build()` or `Reload()`.
 │ STEP 4 — Apply constants files (AddConstantsFile order)             │
 │   Admin-forced values that cannot be overridden by users.           │
 │   These win over everything above.                                  │
+│   Sections marked [IniSection(IgnoreConstants=true)] and properties │
+│   marked [IniValue(IgnoreConstants=true)] are skipped (and are      │
+│   never write-protected).                                           │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────────────┐
@@ -80,3 +85,4 @@ custom converters can be registered with `ValueConverterRegistry.Register()`.
 - [[External-Value-Sources]] — implementing `IValueSource` and `IValueSourceAsync`
 - [[Lifecycle-Hooks]] — `IAfterLoad` hooks (Step 6) including async variants
 - [[Async-Support]] — how the async code paths differ from the synchronous ones
+- [[Ignore-Defaults-and-Constants]] — opt sections/properties out of steps 2 or 4
