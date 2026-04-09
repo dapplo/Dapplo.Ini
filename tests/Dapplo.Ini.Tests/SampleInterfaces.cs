@@ -512,3 +512,47 @@ public interface ISectionEmptyWhenNullSettings : IIniSection
     /// <summary>Value-type property — section-level EmptyWhenNull does NOT affect value types.</summary>
     int Counter { get; set; }
 }
+
+// ── IgnoreDefaults / IgnoreConstants section-level sample interfaces ───────────
+
+/// <summary>
+/// Section with <c>[IniSection(IgnoreDefaults = true)]</c>:
+/// values in this section are never loaded from defaults files.
+/// </summary>
+[IniSection("IgnoreDefaultsSection", IgnoreDefaults = true)]
+public interface IIgnoreDefaultsSectionSettings : IIniSection
+{
+    [IniValue(DefaultValue = "compiled-default")]
+    string? Value { get; set; }
+}
+
+/// <summary>
+/// Section with <c>[IniSection(IgnoreConstants = true)]</c>:
+/// values in this section are never loaded from constants files
+/// and are therefore never locked.
+/// </summary>
+[IniSection("IgnoreConstantsSection", IgnoreConstants = true)]
+public interface IIgnoreConstantsSectionSettings : IIniSection
+{
+    [IniValue(DefaultValue = "compiled-default")]
+    string? Value { get; set; }
+}
+
+/// <summary>
+/// Section with mixed property-level <c>IgnoreDefaults</c> / <c>IgnoreConstants</c> flags.
+/// </summary>
+[IniSection("MixedIgnoreSection")]
+public interface IMixedIgnoreSettings : IIniSection
+{
+    /// <summary>This property IS loaded from defaults files normally.</summary>
+    [IniValue(DefaultValue = "compiled-a")]
+    string? ValueA { get; set; }
+
+    /// <summary>This property is NEVER loaded from defaults files.</summary>
+    [IniValue(DefaultValue = "compiled-b", IgnoreDefaults = true)]
+    string? ValueB { get; set; }
+
+    /// <summary>This property is NEVER loaded from constants files (and therefore never locked).</summary>
+    [IniValue(DefaultValue = "compiled-c", IgnoreConstants = true)]
+    string? ValueC { get; set; }
+}

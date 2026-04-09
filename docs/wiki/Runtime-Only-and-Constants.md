@@ -165,3 +165,4 @@ config.Reload();
 - [[Loading-Configuration]] — `AddConstantsFile`, `AddDefaultsFile`, and loading order
 - [[Loading-Life-Cycle]] — the exact order in which values are applied during a load cycle
 - [[Reloading]] — how `Reload()` interacts with defaults and constants
+- [[Ignore-Defaults-and-Constants]] — opt individual sections or properties out of defaults/constants overlays

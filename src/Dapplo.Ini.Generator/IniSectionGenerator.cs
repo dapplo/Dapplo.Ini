@@ -103,6 +103,10 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         // True when [IniValue(EmptyWhenNull=true)] — a null/absent raw value produces an empty
         // result (string.Empty, empty list, empty array, empty dictionary) instead of null.
         public bool EmptyWhenNull { get; set; }
+        // True when [IniValue(IgnoreDefaults=true)] — property is never set from defaults files.
+        public bool IgnoreDefaults { get; set; }
+        // True when [IniValue(IgnoreConstants=true)] — property is never set from constants files.
+        public bool IgnoreConstants { get; set; }
         // Validation attributes from System.ComponentModel.DataAnnotations
         public bool IsRequired { get; set; }
         public string? RequiredErrorMessage { get; set; }
@@ -143,6 +147,10 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         public bool HasAttributeBasedValidation { get; set; }
         // True when [IniSection(EmptyWhenNull=true)] — propagates to all non-value-type properties
         public bool SectionEmptyWhenNull { get; set; }
+        // True when [IniSection(IgnoreDefaults=true)] — section is never populated from defaults files
+        public bool SectionIgnoresDefaults { get; set; }
+        // True when [IniSection(IgnoreConstants=true)] — section is never populated from constants files
+        public bool SectionIgnoresConstants { get; set; }
         // True when the section interface extends INotifyPropertyChanged / INotifyPropertyChanging
         public bool ImplementsINotifyPropertyChanged { get; set; }
         public bool ImplementsINotifyPropertyChanging { get; set; }
@@ -202,6 +210,8 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
 
         string? description = null;
         bool sectionEmptyWhenNull = false;
+        bool sectionIgnoresDefaults = false;
+        bool sectionIgnoresConstants = false;
         if (iniSectionAttr != null)
             foreach (var na in iniSectionAttr.NamedArguments)
             {
@@ -209,6 +219,10 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                     description = d;
                 if (na.Key == "EmptyWhenNull" && na.Value.Value is true)
                     sectionEmptyWhenNull = true;
+                if (na.Key == "IgnoreDefaults" && na.Value.Value is true)
+                    sectionIgnoresDefaults = true;
+                if (na.Key == "IgnoreConstants" && na.Value.Value is true)
+                    sectionIgnoresConstants = true;
             }
 
         // Fall back to [Description("...")] on the interface if [IniSection] doesn't specify Description
@@ -302,6 +316,8 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                         case "ReadOnly":                prop.IsReadOnly = na.Value.Value is true; break;
                         case "RuntimeOnly":             prop.IsRuntimeOnly = na.Value.Value is true; break;
                         case "EmptyWhenNull":           prop.EmptyWhenNull = na.Value.Value is true; break;
+                        case "IgnoreDefaults":          prop.IgnoreDefaults = na.Value.Value is true; break;
+                        case "IgnoreConstants":         prop.IgnoreConstants = na.Value.Value is true; break;
                     }
                 }
             }
@@ -425,6 +441,8 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             ImplementsUnknownKey        = implementsUnknownKey,
             HasAttributeBasedValidation = hasAttributeBasedValidation,
             SectionEmptyWhenNull        = sectionEmptyWhenNull,
+            SectionIgnoresDefaults      = sectionIgnoresDefaults,
+            SectionIgnoresConstants     = sectionIgnoresConstants,
             ImplementsINotifyPropertyChanged  = implementsINotifyPropertyChanged,
             ImplementsINotifyPropertyChanging = implementsINotifyPropertyChanging,
             // All properties are included so the generated class satisfies the interface contract.
@@ -919,6 +937,67 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         }
         sb.AppendLine("        }");
         sb.AppendLine();
+
+        // ── SectionIgnoresDefaults / SectionIgnoresConstants ───────────────────
+        if (m.SectionIgnoresDefaults)
+        {
+            sb.AppendLine("        public override bool SectionIgnoresDefaults => true;");
+            sb.AppendLine();
+        }
+        if (m.SectionIgnoresConstants)
+        {
+            sb.AppendLine("        public override bool SectionIgnoresConstants => true;");
+            sb.AppendLine();
+        }
+
+        // ── IsIgnoreDefaultsKey ───────────────────────────────────────────────
+        var ignoreDefaultsProps = m.Properties
+            .Where(p => !p.IsIgnored && !p.IsRuntimeOnly && p.IgnoreDefaults)
+            .ToList();
+        if (ignoreDefaultsProps.Count > 0)
+        {
+            sb.AppendLine("        public override bool IsIgnoreDefaultsKey(string key)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            switch (key.ToLowerInvariant())");
+            sb.AppendLine("            {");
+            foreach (var p in ignoreDefaultsProps)
+            {
+                string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
+                if (p.IsSubKeyDictionary)
+                    sb.AppendLine($"                case var __idk when __idk.StartsWith(\"{EscapeString(keyName)}.\"):  return true;");
+                else
+                    sb.AppendLine($"                case \"{EscapeString(keyName)}\": return true;");
+            }
+            sb.AppendLine("                default: return false;");
+            sb.AppendLine("            }");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+        }
+
+        // ── IsIgnoreConstantsKey ──────────────────────────────────────────────
+        var ignoreConstantsProps = m.Properties
+            .Where(p => !p.IsIgnored && !p.IsRuntimeOnly && p.IgnoreConstants)
+            .ToList();
+        if (ignoreConstantsProps.Count > 0)
+        {
+            sb.AppendLine("        public override bool IsIgnoreConstantsKey(string key)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            switch (key.ToLowerInvariant())");
+            sb.AppendLine("            {");
+            foreach (var p in ignoreConstantsProps)
+            {
+                string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
+                if (p.IsSubKeyDictionary)
+                    sb.AppendLine($"                case var __ick when __ick.StartsWith(\"{EscapeString(keyName)}.\"):  return true;");
+                else
+                    sb.AppendLine($"                case \"{EscapeString(keyName)}\": return true;");
+            }
+            sb.AppendLine("                default: return false;");
+            sb.AppendLine("            }");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+        }
+
         if (m.ImplementsTransactional)
         {
             var txProps = m.Properties.Where(p => p.IsTransactional).ToList();

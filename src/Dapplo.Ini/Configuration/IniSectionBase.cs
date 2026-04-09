@@ -138,6 +138,42 @@ public abstract class IniSectionBase : IIniSection
     /// <param name="key">The key name to check (comparison is case-insensitive).</param>
     public virtual bool IsKnownKey(string key) => true;
 
+    // ── Defaults/constants skip support ───────────────────────────────────────
+
+    /// <summary>
+    /// When <c>true</c>, values for all properties in this section are never loaded from
+    /// default files (registered via <c>AddDefaultsFile</c>).
+    /// Overridden by source-generated subclasses when <c>[IniSection(IgnoreDefaults = true)]</c>
+    /// is present on the section interface.
+    /// </summary>
+    public virtual bool SectionIgnoresDefaults => false;
+
+    /// <summary>
+    /// When <c>true</c>, values for all properties in this section are never loaded from
+    /// constant files (registered via <c>AddConstantsFile</c>).
+    /// Overridden by source-generated subclasses when <c>[IniSection(IgnoreConstants = true)]</c>
+    /// is present on the section interface.
+    /// </summary>
+    public virtual bool SectionIgnoresConstants => false;
+
+    /// <summary>
+    /// Returns <c>true</c> when the property identified by <paramref name="key"/> should not
+    /// be loaded from default files.
+    /// Overridden by source-generated subclasses for properties marked with
+    /// <c>[IniValue(IgnoreDefaults = true)]</c>.
+    /// </summary>
+    /// <param name="key">The INI key name (case-insensitive).</param>
+    public virtual bool IsIgnoreDefaultsKey(string key) => false;
+
+    /// <summary>
+    /// Returns <c>true</c> when the property identified by <paramref name="key"/> should not
+    /// be loaded from constant files.
+    /// Overridden by source-generated subclasses for properties marked with
+    /// <c>[IniValue(IgnoreConstants = true)]</c>.
+    /// </summary>
+    /// <param name="key">The INI key name (case-insensitive).</param>
+    public virtual bool IsIgnoreConstantsKey(string key) => false;
+
     // ── Internal helpers for IniConfig ────────────────────────────────────────
 
     /// <summary>

@@ -98,24 +98,38 @@ public static class IniFileParser
     /// <summary>
     /// Parses an INI file from the file system using the specified <paramref name="encoding"/>
     /// (defaults to UTF-8 when <c>null</c>).
+    /// The file is opened with <see cref="FileAccess.Read"/> and <see cref="FileShare.ReadWrite"/>
+    /// so that it is never held open or locked for writing after parsing.
     /// </summary>
     public static IniFile ParseFile(string filePath, Encoding? encoding = null)
     {
-        var content = File.ReadAllText(filePath, encoding ?? Encoding.UTF8);
+        using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream, encoding ?? Encoding.UTF8);
+        var content = reader.ReadToEnd();
         return Parse(content);
     }
 
     /// <summary>
     /// Asynchronously parses an INI file from the file system using the specified
     /// <paramref name="encoding"/> (defaults to UTF-8 when <c>null</c>).
+    /// The file is opened with <see cref="FileAccess.Read"/> and <see cref="FileShare.ReadWrite"/>
+    /// so that it is never held open or locked for writing after parsing.
     /// </summary>
     public static async Task<IniFile> ParseFileAsync(string filePath, Encoding? encoding = null, CancellationToken cancellationToken = default)
     {
         string content;
 #if NET
-        content = await File.ReadAllTextAsync(filePath, encoding ?? Encoding.UTF8, cancellationToken).ConfigureAwait(false);
+        // FileOptions.Asynchronous enables true async I/O on platforms that support it.
+        var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite,
+            bufferSize: 4096, FileOptions.Asynchronous);
+        await using (fileStream.ConfigureAwait(false))
+        {
+            using var reader = new StreamReader(fileStream, encoding ?? Encoding.UTF8);
+            content = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+        }
 #else
-        using var reader = new StreamReader(filePath, encoding ?? Encoding.UTF8);
+        using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream, encoding ?? Encoding.UTF8);
         content = await reader.ReadToEndAsync().ConfigureAwait(false);
 #endif
         return Parse(content);
