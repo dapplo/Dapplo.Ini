@@ -23,7 +23,10 @@ public abstract class IniSectionBase : IIniSection
     private readonly HashSet<string> _constantKeys = new(StringComparer.OrdinalIgnoreCase);
 
     // Dirty flag: set when a value is written via SetRawValue; cleared by IniConfig after Save/Reload.
-    private bool _isDirty;
+    // volatile so that reads from the auto-save timer thread always see the most recent write
+    // from any application thread, and so that ClearDirtyFlag() cannot be re-ordered ahead of
+    // the file-write by the CPU or JIT.
+    private volatile bool _isDirty;
 
     // Tracks the key currently being applied from an INI file (set/cleared by SetRawValue).
     // When non-null, ConvertFromRaw knows a file-load is in progress and can report errors.
@@ -195,6 +198,14 @@ public abstract class IniSectionBase : IIniSection
     /// constants files.
     /// </summary>
     internal void ClearConstants() => _constantKeys.Clear();
+
+    /// <summary>
+    /// Clears the raw backing store. Called by <see cref="IniConfig"/> at the start of every
+    /// load / reload cycle so that <see cref="GetRawValue"/> returns consistent results with
+    /// the actual file state: keys that were removed from the file between two loads are no
+    /// longer reported as having a value.
+    /// </summary>
+    internal void ClearRawValues() => _rawValues.Clear();
 
     // ── Internal helpers for generated code ──────────────────────────────────
 

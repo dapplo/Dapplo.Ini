@@ -427,8 +427,11 @@ public sealed class IniConfig : IDisposable
                         // ClearConstants() before ResetToDefaults() is also safe because
                         // ResetToDefaults() assigns backing fields directly; it never calls
                         // SetRawValue(), so constant-key protection is irrelevant here.
+                        // ClearRawValues() before ResetToDefaults() ensures that keys removed
+                        // from the file since the last load are not re-written on the next Save().
                         sectionBase.GlobalEmptyWhenNull = GlobalEmptyWhenNull;
                         sectionBase.ClearConstants();
+                        sectionBase.ClearRawValues();
                     }
                     section.ResetToDefaults();
                 }
@@ -442,7 +445,9 @@ public sealed class IniConfig : IDisposable
 
                 // 3. Apply user file
                 if (!string.IsNullOrEmpty(LoadedFromPath) && File.Exists(LoadedFromPath))
+                {
                     ApplyIniFile(IniFileParser.ParseFile(LoadedFromPath!, Encoding));
+                }
 
                 // 4. Apply constant files
                 foreach (var path in ConstantFilePaths)
@@ -513,8 +518,11 @@ public sealed class IniConfig : IDisposable
                         // ClearConstants() before ResetToDefaults() is also safe because
                         // ResetToDefaults() assigns backing fields directly; it never calls
                         // SetRawValue(), so constant-key protection is irrelevant here.
+                        // ClearRawValues() before ResetToDefaults() ensures that keys removed
+                        // from the file since the last load are not re-written on the next Save().
                         sectionBase.GlobalEmptyWhenNull = GlobalEmptyWhenNull;
                         sectionBase.ClearConstants();
+                        sectionBase.ClearRawValues();
                     }
                     section.ResetToDefaults();
                 }
@@ -528,7 +536,9 @@ public sealed class IniConfig : IDisposable
 
                 // 3. Apply user file
                 if (!string.IsNullOrEmpty(LoadedFromPath) && File.Exists(LoadedFromPath))
+                {
                     ApplyIniFile(await IniFileParser.ParseFileAsync(LoadedFromPath!, Encoding, cancellationToken).ConfigureAwait(false));
+                }
 
                 // 4. Apply constant files
                 foreach (var path in ConstantFilePaths)
@@ -845,8 +855,11 @@ public sealed class IniConfig : IDisposable
                     // ClearConstants() before ResetToDefaults() is also safe because
                     // ResetToDefaults() assigns backing fields directly; it never calls
                     // SetRawValue(), so constant-key protection is irrelevant here.
+                    // ClearRawValues() before ResetToDefaults() ensures that keys removed
+                    // from the file since the last load are not re-written on the next Save().
                     sectionBase.GlobalEmptyWhenNull = GlobalEmptyWhenNull;
                     sectionBase.ClearConstants();
+                    sectionBase.ClearRawValues();
                 }
                 section.ResetToDefaults();
             }
@@ -958,8 +971,11 @@ public sealed class IniConfig : IDisposable
                     // ClearConstants() before ResetToDefaults() is also safe because
                     // ResetToDefaults() assigns backing fields directly; it never calls
                     // SetRawValue(), so constant-key protection is irrelevant here.
+                    // ClearRawValues() before ResetToDefaults() ensures that keys removed
+                    // from the file since the last load are not re-written on the next Save().
                     sectionBase.GlobalEmptyWhenNull = GlobalEmptyWhenNull;
                     sectionBase.ClearConstants();
+                    sectionBase.ClearRawValues();
                 }
                 section.ResetToDefaults();
             }

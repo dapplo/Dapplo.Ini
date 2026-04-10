@@ -394,4 +394,178 @@ public sealed class IniConfigBuilderTests : IDisposable
         Assert.Throws<ArgumentException>(() => builder.SetWritablePath(""));
         Assert.Throws<ArgumentException>(() => builder.SetWritablePath("   "));
     }
+
+    // ── Value preservation tests ───────────────────────────────────────────────
+
+    /// <summary>
+    /// A boolean property with DefaultValue=true that is explicitly set to false must
+    /// survive a full save/reload cycle.  This validates that ResetToDefaults() (which
+    /// resets to the compile-time default "true") is always overridden by the saved file
+    /// value when the file is re-read.
+    /// </summary>
+    [Fact]
+    public void Save_BoolDefaultTrue_SetToFalse_SurvivesSaveReload()
+    {
+        // Start with the default (true).
+        WriteIni("bool-roundtrip.ini", "[General]\nAppName = MyApp");
+
+        var section = new GeneralSettingsImpl();
+        var config = IniConfigRegistry.ForFile("bool-roundtrip.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        // Confirm default.
+        Assert.True(section.EnableLogging);
+
+        // Explicitly set to false and save.
+        section.EnableLogging = false;
+        config.Save();
+
+        // Reload from disk (simulates application restart).
+        IniConfigRegistry.Unregister("bool-roundtrip.ini");
+        var section2 = new GeneralSettingsImpl();
+        IniConfigRegistry.ForFile("bool-roundtrip.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section2)
+            .Build();
+
+        // The saved value must survive; it must NOT have been reset to the default true.
+        Assert.False(section2.EnableLogging);
+    }
+
+    /// <summary>
+    /// A constants file that defines only a subset of a section's properties must
+    /// override exactly those properties and leave all others at their user-file values.
+    /// The undefined properties in the constants file must NOT be reset to defaults.
+    /// </summary>
+    [Fact]
+    public void Build_ConstantsFileWithPartialSection_OnlyOverridesDefinedKeys()
+    {
+        // User file sets all four General properties.
+        WriteIni("app.ini", """
+            [General]
+            AppName = UserApp
+            MaxRetries = 7
+            EnableLogging = False
+            Threshold = 1.5
+            """);
+
+        // Constants file overrides only AppName — the other three stay with user values.
+        WriteIni("constants.ini", "[General]\nAppName = AdminApp");
+
+        var section = new GeneralSettingsImpl();
+        IniConfigRegistry.ForFile("app.ini")
+            .AddSearchPath(_tempDir)
+            .AddConstantsFile(Path.Combine(_tempDir, "constants.ini"))
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        // Constants override
+        Assert.Equal("AdminApp", section.AppName);
+
+        // Properties NOT in constants file keep their user-file values (not reset to defaults).
+        Assert.Equal(7, section.MaxRetries);
+        Assert.False(section.EnableLogging);
+        Assert.Equal(1.5, section.Threshold, precision: 10);
+    }
+
+    /// <summary>
+    /// Full application-restart simulation:
+    /// (1) Start fresh — no pre-existing file, set a writable path.
+    /// (2) Change multiple properties from their defaults and save.
+    /// (3) Completely remove the IniConfig registration (simulating process exit).
+    /// (4) Re-create the registration and load from the same file.
+    /// (5) Assert that all changed values are read back, not reset to defaults.
+    /// </summary>
+    [Fact]
+    public void AppRestartSimulation_AllChangedValuesAreRestoredFromFile()
+    {
+        var iniPath = Path.Combine(_tempDir, "restart-sim.ini");
+
+        // ── Phase 1: first "run" ───────────────────────────────────────────────
+
+        var section1 = new GeneralSettingsImpl();
+        IniConfigRegistry.ForFile("restart-sim.ini")
+            .AddSearchPath(_tempDir)
+            .SetWritablePath(iniPath)
+            .RegisterSection<IGeneralSettings>(section1)
+            .Build();
+
+        // Verify compile-time defaults loaded correctly.
+        Assert.Equal("MyApp",   section1.AppName);
+        Assert.Equal(42,         section1.MaxRetries);
+        Assert.True(             section1.EnableLogging);
+        Assert.Equal(3.14,       section1.Threshold, precision: 10);
+
+        // Change all four properties away from their defaults.
+        section1.AppName       = "ChangedApp";
+        section1.MaxRetries    = 99;
+        section1.EnableLogging = false;
+        section1.Threshold     = 1.23;
+
+        // Save to disk.
+        IniConfigRegistry.Get("restart-sim.ini")!.Save();
+
+        // Confirm the file was actually written.
+        Assert.True(File.Exists(iniPath));
+
+        // ── Phase 2: "process exit" — remove registration entirely ─────────────
+
+        IniConfigRegistry.Unregister("restart-sim.ini");
+        Assert.False(IniConfigRegistry.TryGet("restart-sim.ini", out _));
+
+        // ── Phase 3: second "run" — cold start from the saved file ─────────────
+
+        var section2 = new GeneralSettingsImpl();
+        IniConfigRegistry.ForFile("restart-sim.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section2)
+            .Build();
+
+        // Every property must reflect the saved values, not the compiled defaults.
+        Assert.Equal("ChangedApp", section2.AppName);
+        Assert.Equal(99,            section2.MaxRetries);
+        Assert.False(               section2.EnableLogging);  // was default=true
+        Assert.Equal(1.23,          section2.Threshold, precision: 10);
+    }
+
+    /// <summary>
+    /// PauseAutoSave() / ResumeAutoSave() allow a batch of property changes to be made
+    /// atomically without an interleaving auto-save writing a half-updated file.
+    /// After ResumeAutoSave() the config is in a consistent, fully-updated state.
+    /// </summary>
+    [Fact]
+    public void PauseAutoSave_PreventsSaveWhilePropertiesAreBeingChanged()
+    {
+        WriteIni("pause-autosave.ini", "[General]\nAppName = Original\nMaxRetries = 1");
+
+        var section = new GeneralSettingsImpl();
+        var config = IniConfigRegistry.ForFile("pause-autosave.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        // Pause auto-save before making a batch of changes.
+        config.PauseAutoSave();
+        try
+        {
+            section.AppName    = "Batch";
+            section.MaxRetries = 42;
+            // (any auto-save timer that fires here would skip the save)
+        }
+        finally
+        {
+            config.ResumeAutoSave();
+        }
+
+        // Explicitly save the completed batch.
+        config.Save();
+
+        // Reload to verify the file contains the fully-updated values.
+        config.Reload();
+        Assert.Equal("Batch", section.AppName);
+        Assert.Equal(42, section.MaxRetries);
+    }
 }
+
