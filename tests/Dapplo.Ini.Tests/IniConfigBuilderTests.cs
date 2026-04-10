@@ -394,4 +394,150 @@ public sealed class IniConfigBuilderTests : IDisposable
         Assert.Throws<ArgumentException>(() => builder.SetWritablePath(""));
         Assert.Throws<ArgumentException>(() => builder.SetWritablePath("   "));
     }
+
+    // ── Round-trip preservation tests ─────────────────────────────────────────
+
+    /// <summary>
+    /// Keys that exist in the INI file but are not declared on the section interface
+    /// (e.g. written by a newer version of the app) must survive a save/load cycle
+    /// unchanged so that no user data is silently discarded.
+    /// </summary>
+    [Fact]
+    public void Save_PreservesUnknownKeysWithinRegisteredSection()
+    {
+        // The INI file contains "FutureKey" which is not declared on IGeneralSettings.
+        WriteIni("unknown-keys.ini", """
+            [General]
+            AppName = Hello
+            MaxRetries = 3
+            FutureKey = preserved-value
+            AnotherFutureKey = 42
+            """);
+
+        var section = new GeneralSettingsImpl();
+        var config = IniConfigRegistry.ForFile("unknown-keys.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        // Modify a known key and save
+        section.AppName = "Modified";
+        config.Save();
+
+        // Read back the raw file content
+        var written = File.ReadAllText(Path.Combine(_tempDir, "unknown-keys.ini"));
+
+        // Known property must be updated
+        Assert.Contains("AppName = Modified", written);
+        // Unknown keys from the original file must be preserved
+        Assert.Contains("FutureKey = preserved-value", written);
+        Assert.Contains("AnotherFutureKey = 42", written);
+    }
+
+    /// <summary>
+    /// INI file sections that are not registered with the current IniConfig (e.g. sections
+    /// belonging to plugins that are not loaded, or sections added by a newer version of the
+    /// application) must survive a save/load cycle so that no data is silently discarded.
+    /// </summary>
+    [Fact]
+    public void Save_PreservesUnregisteredSections()
+    {
+        // The INI file contains [General] (registered) and [Plugin] (not registered).
+        WriteIni("unregistered-section.ini", """
+            [General]
+            AppName = MyApp
+            [Plugin]
+            PluginKey = plugin-value
+            PluginNumber = 99
+            """);
+
+        var section = new GeneralSettingsImpl();
+        var config = IniConfigRegistry.ForFile("unregistered-section.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        // Modify the registered section and save
+        section.AppName = "Updated";
+        config.Save();
+
+        // Read back the raw file content
+        var written = File.ReadAllText(Path.Combine(_tempDir, "unregistered-section.ini"));
+
+        // Registered section must be updated
+        Assert.Contains("AppName = Updated", written);
+        // Unregistered section must be preserved verbatim
+        Assert.Contains("[Plugin]", written);
+        Assert.Contains("PluginKey = plugin-value", written);
+        Assert.Contains("PluginNumber = 99", written);
+    }
+
+    /// <summary>
+    /// After a Reload(), unknown keys that are no longer present in the file should not be
+    /// re-written on the next save (i.e. the user's explicit removal is respected).
+    /// </summary>
+    [Fact]
+    public void Save_DoesNotRestoreUnknownKeysRemovedFromFile()
+    {
+        // Initial file with an unknown key
+        var iniPath = WriteIni("removed-unknown-key.ini", """
+            [General]
+            AppName = Original
+            FutureKey = will-be-removed
+            """);
+
+        var section = new GeneralSettingsImpl();
+        var config = IniConfigRegistry.ForFile("removed-unknown-key.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        // Simulate external removal of the unknown key between the initial load and the reload
+        File.WriteAllText(iniPath, """
+            [General]
+            AppName = Original
+            """);
+
+        // Reload picks up the new file (FutureKey is gone)
+        config.Reload();
+
+        // Save should not bring FutureKey back
+        config.Save();
+        var written = File.ReadAllText(iniPath);
+        Assert.DoesNotContain("FutureKey", written);
+    }
+
+    /// <summary>
+    /// After a Reload(), unregistered sections that are no longer present in the file should
+    /// not be re-written on the next save.
+    /// </summary>
+    [Fact]
+    public void Save_DoesNotRestoreUnregisteredSectionsRemovedFromFile()
+    {
+        var iniPath = WriteIni("removed-section.ini", """
+            [General]
+            AppName = Original
+            [Plugin]
+            PluginKey = value
+            """);
+
+        var section = new GeneralSettingsImpl();
+        var config = IniConfigRegistry.ForFile("removed-section.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        // Simulate external removal of the [Plugin] section
+        File.WriteAllText(iniPath, """
+            [General]
+            AppName = Original
+            """);
+
+        config.Reload();
+        config.Save();
+
+        var written = File.ReadAllText(iniPath);
+        Assert.DoesNotContain("[Plugin]", written);
+        Assert.DoesNotContain("PluginKey", written);
+    }
 }
