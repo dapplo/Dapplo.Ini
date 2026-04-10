@@ -1183,6 +1183,11 @@ public sealed class IniConfig : IDisposable
         // loaded (or by a newer version of the application) would be silently dropped on save.
         if (_lastLoadedUserFile != null)
         {
+            // Build a set of registered section names for O(1) lookup in the loop below.
+            var registeredNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var registeredSection in Sections.Values)
+                registeredNames.Add(registeredSection.SectionName);
+
             foreach (var iniSection in _lastLoadedUserFile.Sections)
             {
                 // Skip the synthetic global section and the internal metadata section.
@@ -1190,16 +1195,7 @@ public sealed class IniConfig : IDisposable
                 if (string.Equals(iniSection.Name, MetadataSectionName, StringComparison.OrdinalIgnoreCase)) continue;
 
                 // Skip sections that are registered — they are already handled above.
-                bool isRegistered = false;
-                foreach (var registeredSection in Sections.Values)
-                {
-                    if (string.Equals(registeredSection.SectionName, iniSection.Name, StringComparison.OrdinalIgnoreCase))
-                    {
-                        isRegistered = true;
-                        break;
-                    }
-                }
-                if (isRegistered) continue;
+                if (registeredNames.Contains(iniSection.Name)) continue;
 
                 iniFile.AddSection(iniSection);
             }
