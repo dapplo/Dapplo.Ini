@@ -198,25 +198,11 @@ public abstract class IniSectionBase : IIniSection
 
     /// <summary>
     /// Clears the raw backing store. Called by <see cref="IniConfig"/> at the start of every
-    /// load / reload cycle so that keys removed from the file are not re-written on the next save.
+    /// load / reload cycle so that <see cref="GetRawValue"/> returns consistent results with
+    /// the actual file state: keys that were removed from the file between two loads are no
+    /// longer reported as having a value.
     /// </summary>
     internal void ClearRawValues() => _rawValues.Clear();
-
-    /// <summary>
-    /// Returns all key/value pairs from the raw backing store whose keys are <em>not</em>
-    /// recognised by this section's interface (i.e. <see cref="IsKnownKey"/> returns
-    /// <c>false</c>). These are typically keys written by a newer or different version of the
-    /// application that the current interface does not declare, and should be round-tripped
-    /// through the file unchanged so they are not silently lost on save.
-    /// </summary>
-    public IEnumerable<KeyValuePair<string, string?>> GetExtraRawValues()
-    {
-        foreach (var kvp in _rawValues)
-        {
-            if (!IsKnownKey(kvp.Key))
-                yield return kvp;
-        }
-    }
 
     // ── Internal helpers for generated code ──────────────────────────────────
 

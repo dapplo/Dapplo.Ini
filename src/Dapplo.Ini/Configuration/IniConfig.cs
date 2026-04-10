@@ -93,15 +93,6 @@ public sealed class IniConfig : IDisposable
     // Debounce timer: coalesces rapid Changed events (e.g. truncate + write) into one reload.
     private System.Threading.Timer? _reloadDebounceTimer;
 
-    // ── Last loaded user file (for round-tripping unknown sections/keys) ─────────
-
-    // Preserved across Load/Reload cycles so that BuildIniFile() can include:
-    //   (a) sections from the file that are not registered with this IniConfig, and
-    //   (b) keys within registered sections that are not declared on the section interface.
-    // Both would otherwise be silently dropped on the next Save(), which could cause
-    // settings written by a newer or different version of the application to be lost.
-    private Parsing.IniFile? _lastLoadedUserFile;
-
     // ── Save re-entrance guard ────────────────────────────────────────────────
 
     // 0 = idle, 1 = save in progress.  Manipulated via Interlocked to allow concurrent callers
@@ -455,13 +446,7 @@ public sealed class IniConfig : IDisposable
                 // 3. Apply user file
                 if (!string.IsNullOrEmpty(LoadedFromPath) && File.Exists(LoadedFromPath))
                 {
-                    var userFile = IniFileParser.ParseFile(LoadedFromPath!, Encoding);
-                    _lastLoadedUserFile = userFile;
-                    ApplyIniFile(userFile);
-                }
-                else
-                {
-                    _lastLoadedUserFile = null;
+                    ApplyIniFile(IniFileParser.ParseFile(LoadedFromPath!, Encoding));
                 }
 
                 // 4. Apply constant files
@@ -552,13 +537,7 @@ public sealed class IniConfig : IDisposable
                 // 3. Apply user file
                 if (!string.IsNullOrEmpty(LoadedFromPath) && File.Exists(LoadedFromPath))
                 {
-                    var userFile = await IniFileParser.ParseFileAsync(LoadedFromPath!, Encoding, cancellationToken).ConfigureAwait(false);
-                    _lastLoadedUserFile = userFile;
-                    ApplyIniFile(userFile);
-                }
-                else
-                {
-                    _lastLoadedUserFile = null;
+                    ApplyIniFile(await IniFileParser.ParseFileAsync(LoadedFromPath!, Encoding, cancellationToken).ConfigureAwait(false));
                 }
 
                 // 4. Apply constant files
@@ -898,15 +877,11 @@ public sealed class IniConfig : IDisposable
             if (resolved != null)
             {
                 LoadedFromPath = resolved;
-                var userFile = IniFileParser.ParseFile(resolved, Encoding);
-                _lastLoadedUserFile = userFile;
-                ApplyIniFile(userFile);
+                ApplyIniFile(IniFileParser.ParseFile(resolved, Encoding));
                 NotifyListeners(l => l.OnFileLoaded(resolved));
             }
             else
             {
-                _lastLoadedUserFile = null;
-
                 // Determine write target for future saves
                 if (WritablePath != null)
                 {
@@ -1018,15 +993,11 @@ public sealed class IniConfig : IDisposable
             if (resolved != null)
             {
                 LoadedFromPath = resolved;
-                var userFile = await IniFileParser.ParseFileAsync(resolved, Encoding, cancellationToken).ConfigureAwait(false);
-                _lastLoadedUserFile = userFile;
-                ApplyIniFile(userFile);
+                ApplyIniFile(await IniFileParser.ParseFileAsync(resolved, Encoding, cancellationToken).ConfigureAwait(false));
                 NotifyListeners(l => l.OnFileLoaded(resolved));
             }
             else
             {
-                _lastLoadedUserFile = null;
-
                 if (WritablePath != null)
                 {
                     LoadedFromPath = WritablePath;
@@ -1164,40 +1135,11 @@ public sealed class IniConfig : IDisposable
                         : Array.Empty<string>();
                     iniSection.SetEntry(new Parsing.IniEntry(rawKvp.Key, rawKvp.Value, propComments));
                 }
-
-                // Also write back any keys that were in the loaded file but are not declared
-                // on the section interface.  This prevents keys written by a newer or different
-                // version of the application from being silently lost when the current version saves.
-                foreach (var rawKvp in sectionBase.GetExtraRawValues())
-                    iniSection.SetEntry(new Parsing.IniEntry(rawKvp.Key, rawKvp.Value, Array.Empty<string>()));
             }
             else
             {
                 // Non-generated sections: add an empty section placeholder to the file.
                 iniFile.AddSection(new Parsing.IniSection(section.SectionName, Array.Empty<string>()));
-            }
-        }
-
-        // Preserve any sections from the last loaded user file that are not registered with
-        // this IniConfig.  Without this, sections written by plugins that are not currently
-        // loaded (or by a newer version of the application) would be silently dropped on save.
-        if (_lastLoadedUserFile != null)
-        {
-            // Build a set of registered section names for O(1) lookup in the loop below.
-            var registeredNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var registeredSection in Sections.Values)
-                registeredNames.Add(registeredSection.SectionName);
-
-            foreach (var iniSection in _lastLoadedUserFile.Sections)
-            {
-                // Skip the synthetic global section and the internal metadata section.
-                if (string.IsNullOrEmpty(iniSection.Name)) continue;
-                if (string.Equals(iniSection.Name, MetadataSectionName, StringComparison.OrdinalIgnoreCase)) continue;
-
-                // Skip sections that are registered — they are already handled above.
-                if (registeredNames.Contains(iniSection.Name)) continue;
-
-                iniFile.AddSection(iniSection);
             }
         }
 

@@ -395,149 +395,113 @@ public sealed class IniConfigBuilderTests : IDisposable
         Assert.Throws<ArgumentException>(() => builder.SetWritablePath("   "));
     }
 
-    // ── Round-trip preservation tests ─────────────────────────────────────────
+    // ── Value preservation tests ───────────────────────────────────────────────
 
     /// <summary>
-    /// Keys that exist in the INI file but are not declared on the section interface
-    /// (e.g. written by a newer version of the app) must survive a save/load cycle
-    /// unchanged so that no user data is silently discarded.
+    /// A boolean property with DefaultValue=true that is explicitly set to false must
+    /// survive a full save/reload cycle.  This validates that ResetToDefaults() (which
+    /// resets to the compile-time default "true") is always overridden by the saved file
+    /// value when the file is re-read.
     /// </summary>
     [Fact]
-    public void Save_PreservesUnknownKeysWithinRegisteredSection()
+    public void Save_BoolDefaultTrue_SetToFalse_SurvivesSaveReload()
     {
-        // The INI file contains "FutureKey" which is not declared on IGeneralSettings.
-        WriteIni("unknown-keys.ini", """
-            [General]
-            AppName = Hello
-            MaxRetries = 3
-            FutureKey = preserved-value
-            AnotherFutureKey = 42
-            """);
+        // Start with the default (true).
+        WriteIni("bool-roundtrip.ini", "[General]\nAppName = MyApp");
 
         var section = new GeneralSettingsImpl();
-        var config = IniConfigRegistry.ForFile("unknown-keys.ini")
+        var config = IniConfigRegistry.ForFile("bool-roundtrip.ini")
             .AddSearchPath(_tempDir)
             .RegisterSection<IGeneralSettings>(section)
             .Build();
 
-        // Modify a known key and save
-        section.AppName = "Modified";
+        // Confirm default.
+        Assert.True(section.EnableLogging);
+
+        // Explicitly set to false and save.
+        section.EnableLogging = false;
         config.Save();
 
-        // Read back the raw file content
-        var written = File.ReadAllText(Path.Combine(_tempDir, "unknown-keys.ini"));
+        // Reload from disk (simulates application restart).
+        IniConfigRegistry.Unregister("bool-roundtrip.ini");
+        var section2 = new GeneralSettingsImpl();
+        IniConfigRegistry.ForFile("bool-roundtrip.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section2)
+            .Build();
 
-        // Known property must be updated
-        Assert.Contains("AppName = Modified", written);
-        // Unknown keys from the original file must be preserved
-        Assert.Contains("FutureKey = preserved-value", written);
-        Assert.Contains("AnotherFutureKey = 42", written);
+        // The saved value must survive; it must NOT have been reset to the default true.
+        Assert.False(section2.EnableLogging);
     }
 
     /// <summary>
-    /// INI file sections that are not registered with the current IniConfig (e.g. sections
-    /// belonging to plugins that are not loaded, or sections added by a newer version of the
-    /// application) must survive a save/load cycle so that no data is silently discarded.
+    /// A constants file that defines only a subset of a section's properties must
+    /// override exactly those properties and leave all others at their user-file values.
+    /// The undefined properties in the constants file must NOT be reset to defaults.
     /// </summary>
     [Fact]
-    public void Save_PreservesUnregisteredSections()
+    public void Build_ConstantsFileWithPartialSection_OnlyOverridesDefinedKeys()
     {
-        // The INI file contains [General] (registered) and [Plugin] (not registered).
-        WriteIni("unregistered-section.ini", """
+        // User file sets all four General properties.
+        WriteIni("app.ini", """
             [General]
-            AppName = MyApp
-            [Plugin]
-            PluginKey = plugin-value
-            PluginNumber = 99
+            AppName = UserApp
+            MaxRetries = 7
+            EnableLogging = False
+            Threshold = 1.5
             """);
 
+        // Constants file overrides only AppName — the other three stay with user values.
+        WriteIni("constants.ini", "[General]\nAppName = AdminApp");
+
         var section = new GeneralSettingsImpl();
-        var config = IniConfigRegistry.ForFile("unregistered-section.ini")
+        IniConfigRegistry.ForFile("app.ini")
             .AddSearchPath(_tempDir)
+            .AddConstantsFile(Path.Combine(_tempDir, "constants.ini"))
             .RegisterSection<IGeneralSettings>(section)
             .Build();
 
-        // Modify the registered section and save
-        section.AppName = "Updated";
-        config.Save();
+        // Constants override
+        Assert.Equal("AdminApp", section.AppName);
 
-        // Read back the raw file content
-        var written = File.ReadAllText(Path.Combine(_tempDir, "unregistered-section.ini"));
-
-        // Registered section must be updated
-        Assert.Contains("AppName = Updated", written);
-        // Unregistered section must be preserved verbatim
-        Assert.Contains("[Plugin]", written);
-        Assert.Contains("PluginKey = plugin-value", written);
-        Assert.Contains("PluginNumber = 99", written);
+        // Properties NOT in constants file keep their user-file values (not reset to defaults).
+        Assert.Equal(7, section.MaxRetries);
+        Assert.False(section.EnableLogging);
+        Assert.Equal(1.5, section.Threshold, precision: 10);
     }
 
     /// <summary>
-    /// After a Reload(), unknown keys that are no longer present in the file should not be
-    /// re-written on the next save (i.e. the user's explicit removal is respected).
+    /// Reload() must correctly re-apply all section values from disk. Properties that
+    /// were changed in memory since the last load must reflect the file state after reload,
+    /// not the in-memory state.
     /// </summary>
     [Fact]
-    public void Save_DoesNotRestoreUnknownKeysRemovedFromFile()
+    public void Reload_ResetsInMemoryChangesToFileValues()
     {
-        // Initial file with an unknown key
-        var iniPath = WriteIni("removed-unknown-key.ini", """
+        WriteIni("reload-values.ini", """
             [General]
-            AppName = Original
-            FutureKey = will-be-removed
+            AppName = FileApp
+            EnableLogging = False
             """);
 
         var section = new GeneralSettingsImpl();
-        var config = IniConfigRegistry.ForFile("removed-unknown-key.ini")
+        var config = IniConfigRegistry.ForFile("reload-values.ini")
             .AddSearchPath(_tempDir)
             .RegisterSection<IGeneralSettings>(section)
             .Build();
 
-        // Simulate external removal of the unknown key between the initial load and the reload
-        File.WriteAllText(iniPath, """
-            [General]
-            AppName = Original
-            """);
+        Assert.Equal("FileApp", section.AppName);
+        Assert.False(section.EnableLogging);
 
-        // Reload picks up the new file (FutureKey is gone)
+        // Change in-memory without saving.
+        section.AppName = "MemoryApp";
+        section.EnableLogging = true;
+
+        // Reload must restore the file values.
         config.Reload();
 
-        // Save should not bring FutureKey back
-        config.Save();
-        var written = File.ReadAllText(iniPath);
-        Assert.DoesNotContain("FutureKey", written);
-    }
-
-    /// <summary>
-    /// After a Reload(), unregistered sections that are no longer present in the file should
-    /// not be re-written on the next save.
-    /// </summary>
-    [Fact]
-    public void Save_DoesNotRestoreUnregisteredSectionsRemovedFromFile()
-    {
-        var iniPath = WriteIni("removed-section.ini", """
-            [General]
-            AppName = Original
-            [Plugin]
-            PluginKey = value
-            """);
-
-        var section = new GeneralSettingsImpl();
-        var config = IniConfigRegistry.ForFile("removed-section.ini")
-            .AddSearchPath(_tempDir)
-            .RegisterSection<IGeneralSettings>(section)
-            .Build();
-
-        // Simulate external removal of the [Plugin] section
-        File.WriteAllText(iniPath, """
-            [General]
-            AppName = Original
-            """);
-
-        config.Reload();
-        config.Save();
-
-        var written = File.ReadAllText(iniPath);
-        Assert.DoesNotContain("[Plugin]", written);
-        Assert.DoesNotContain("PluginKey", written);
+        Assert.Equal("FileApp", section.AppName);
+        Assert.False(section.EnableLogging);
     }
 }
+
