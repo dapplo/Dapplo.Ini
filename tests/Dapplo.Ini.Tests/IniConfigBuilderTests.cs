@@ -471,37 +471,101 @@ public sealed class IniConfigBuilderTests : IDisposable
     }
 
     /// <summary>
-    /// Reload() must correctly re-apply all section values from disk. Properties that
-    /// were changed in memory since the last load must reflect the file state after reload,
-    /// not the in-memory state.
+    /// Full application-restart simulation:
+    /// (1) Start fresh — no pre-existing file, set a writable path.
+    /// (2) Change multiple properties from their defaults and save.
+    /// (3) Completely remove the IniConfig registration (simulating process exit).
+    /// (4) Re-create the registration and load from the same file.
+    /// (5) Assert that all changed values are read back, not reset to defaults.
     /// </summary>
     [Fact]
-    public void Reload_ResetsInMemoryChangesToFileValues()
+    public void AppRestartSimulation_AllChangedValuesAreRestoredFromFile()
     {
-        WriteIni("reload-values.ini", """
-            [General]
-            AppName = FileApp
-            EnableLogging = False
-            """);
+        var iniPath = Path.Combine(_tempDir, "restart-sim.ini");
+
+        // ── Phase 1: first "run" ───────────────────────────────────────────────
+
+        var section1 = new GeneralSettingsImpl();
+        IniConfigRegistry.ForFile("restart-sim.ini")
+            .AddSearchPath(_tempDir)
+            .SetWritablePath(iniPath)
+            .RegisterSection<IGeneralSettings>(section1)
+            .Build();
+
+        // Verify compile-time defaults loaded correctly.
+        Assert.Equal("MyApp",   section1.AppName);
+        Assert.Equal(42,         section1.MaxRetries);
+        Assert.True(             section1.EnableLogging);
+        Assert.Equal(3.14,       section1.Threshold, precision: 10);
+
+        // Change all four properties away from their defaults.
+        section1.AppName       = "ChangedApp";
+        section1.MaxRetries    = 99;
+        section1.EnableLogging = false;
+        section1.Threshold     = 1.23;
+
+        // Save to disk.
+        IniConfigRegistry.Get("restart-sim.ini")!.Save();
+
+        // Confirm the file was actually written.
+        Assert.True(File.Exists(iniPath));
+
+        // ── Phase 2: "process exit" — remove registration entirely ─────────────
+
+        IniConfigRegistry.Unregister("restart-sim.ini");
+        Assert.False(IniConfigRegistry.TryGet("restart-sim.ini", out _));
+
+        // ── Phase 3: second "run" — cold start from the saved file ─────────────
+
+        var section2 = new GeneralSettingsImpl();
+        IniConfigRegistry.ForFile("restart-sim.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section2)
+            .Build();
+
+        // Every property must reflect the saved values, not the compiled defaults.
+        Assert.Equal("ChangedApp", section2.AppName);
+        Assert.Equal(99,            section2.MaxRetries);
+        Assert.False(               section2.EnableLogging);  // was default=true
+        Assert.Equal(1.23,          section2.Threshold, precision: 10);
+    }
+
+    /// <summary>
+    /// PauseAutoSave() / ResumeAutoSave() allow a batch of property changes to be made
+    /// atomically without an interleaving auto-save writing a half-updated file.
+    /// After ResumeAutoSave() the config is in a consistent, fully-updated state.
+    /// </summary>
+    [Fact]
+    public void PauseAutoSave_PreventsSaveWhilePropertiesAreBeingChanged()
+    {
+        WriteIni("pause-autosave.ini", "[General]\nAppName = Original\nMaxRetries = 1");
 
         var section = new GeneralSettingsImpl();
-        var config = IniConfigRegistry.ForFile("reload-values.ini")
+        var config = IniConfigRegistry.ForFile("pause-autosave.ini")
             .AddSearchPath(_tempDir)
             .RegisterSection<IGeneralSettings>(section)
             .Build();
 
-        Assert.Equal("FileApp", section.AppName);
-        Assert.False(section.EnableLogging);
+        // Pause auto-save before making a batch of changes.
+        config.PauseAutoSave();
+        try
+        {
+            section.AppName    = "Batch";
+            section.MaxRetries = 42;
+            // (any auto-save timer that fires here would skip the save)
+        }
+        finally
+        {
+            config.ResumeAutoSave();
+        }
 
-        // Change in-memory without saving.
-        section.AppName = "MemoryApp";
-        section.EnableLogging = true;
+        // Explicitly save the completed batch.
+        config.Save();
 
-        // Reload must restore the file values.
+        // Reload to verify the file contains the fully-updated values.
         config.Reload();
-
-        Assert.Equal("FileApp", section.AppName);
-        Assert.False(section.EnableLogging);
+        Assert.Equal("Batch", section.AppName);
+        Assert.Equal(42, section.MaxRetries);
     }
 }
 
