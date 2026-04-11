@@ -403,6 +403,34 @@ public sealed class IniConfigBuilder
         return this;
     }
 
+    // ── key=value separator ───────────────────────────────────────────────────
+
+    // The separator used between keys and values when writing the INI file.
+    private string _assignmentSeparator = " = ";
+
+    /// <summary>
+    /// Sets the separator string written between each key and its value in the saved INI file.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// By default the framework writes <c>key = value</c> (equals sign surrounded by spaces).
+    /// Some applications require <c>key=value</c> without spaces — pass <c>"="</c> to achieve
+    /// that format.
+    /// </para>
+    /// <para>
+    /// Any non-null, non-empty string is accepted.  The parser supports both formats on load.
+    /// </para>
+    /// </remarks>
+    /// <param name="separator">The separator string, e.g. <c>"="</c> or <c>" = "</c>.</param>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="separator"/> is null or empty.</exception>
+    public IniConfigBuilder AssignmentSeparator(string separator)
+    {
+        if (string.IsNullOrEmpty(separator))
+            throw new ArgumentException("Separator must not be null or empty.", nameof(separator));
+        _assignmentSeparator = separator;
+        return this;
+    }
+
     /// <summary>
     /// Registers an <see cref="IIniSection"/> instance under the explicit interface type
     /// <typeparamref name="T"/>. The generated concrete class must be passed; it will be
@@ -559,6 +587,7 @@ public sealed class IniConfigBuilder
         config.UnknownKeyHandler = _unknownKeyCallback;
         config.MetadataConfig = _metadataConfig;
         config.GlobalEmptyWhenNull = _globalEmptyWhenNull;
+        config.AssignmentSeparator = _assignmentSeparator;
 
         config.SearchPaths.AddRange(_searchPaths);
         config.DefaultFilePaths.AddRange(_defaultFilePaths);

@@ -76,7 +76,7 @@ public static class IniFileWriter
                 }
 
                 writer.Write(entry.Key);
-                writer.Write(" = ");
+                writer.Write(iniFile.AssignmentSeparator);
                 writer.WriteLine(entry.Value ?? string.Empty);
             }
         }
