@@ -70,6 +70,13 @@ public sealed class IniConfig : IDisposable
     internal bool GlobalEmptyWhenNull;
 
     /// <summary>
+    /// The separator string written between each key and value when saving the INI file.
+    /// Defaults to <c>" = "</c> (spaces around the equals sign).
+    /// Set via <see cref="IniConfigBuilder.AssignmentSeparator"/>.
+    /// </summary>
+    internal string AssignmentSeparator = " = ";
+
+    /// <summary>
     /// The metadata that was read from the <c>[__metadata__]</c> section of the INI file
     /// on the last load / reload.
     /// <c>null</c> when the section did not exist in the file (e.g. first-run or no metadata enabled).
@@ -1115,6 +1122,7 @@ public sealed class IniConfig : IDisposable
     internal IniFile BuildIniFile()
     {
         var iniFile = new Parsing.IniFile();
+        iniFile.AssignmentSeparator = AssignmentSeparator;
         foreach (var kvp in Sections)
         {
             var section = kvp.Value;

@@ -13,6 +13,13 @@ public sealed class IniFile
 
     private readonly List<IniSection> _sectionsOrdered = new();
 
+    /// <summary>
+    /// The separator string written between the key and value in each entry.
+    /// Defaults to <c>" = "</c> (spaces around the equals sign).
+    /// Set to <c>"="</c> for compact formatting without surrounding spaces.
+    /// </summary>
+    public string AssignmentSeparator { get; set; } = " = ";
+
     /// <summary>All sections, in file order.</summary>
     public IReadOnlyList<IniSection> Sections => _sectionsOrdered;
 

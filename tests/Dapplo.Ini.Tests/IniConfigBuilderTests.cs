@@ -535,6 +535,73 @@ public sealed class IniConfigBuilderTests : IDisposable
     /// atomically without an interleaving auto-save writing a half-updated file.
     /// After ResumeAutoSave() the config is in a consistent, fully-updated state.
     /// </summary>
+    // ── AssignmentSeparator tests ──────────────────────────────────────────────
+
+    [Fact]
+    public void AssignmentSeparator_Default_WritesSpacesAroundEquals()
+    {
+        var section = new GeneralSettingsImpl();
+        var savePath = Path.Combine(_tempDir, "sep-default.ini");
+
+        var config = IniConfigRegistry.ForFile("sep-default.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        section.AppName = "Test";
+        config.Save();
+
+        var written = File.ReadAllText(savePath);
+        Assert.Contains("AppName = Test", written);
+    }
+
+    [Fact]
+    public void AssignmentSeparator_Compact_WritesNoSpacesAroundEquals()
+    {
+        var section = new GeneralSettingsImpl();
+        var savePath = Path.Combine(_tempDir, "sep-compact.ini");
+
+        var config = IniConfigRegistry.ForFile("sep-compact.ini")
+            .AddSearchPath(_tempDir)
+            .AssignmentSeparator("=")
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        section.AppName = "Test";
+        config.Save();
+
+        var written = File.ReadAllText(savePath);
+        Assert.Contains("AppName=Test", written);
+        Assert.DoesNotContain("AppName = Test", written);
+    }
+
+    [Fact]
+    public void AssignmentSeparator_CompactFile_CanBeLoadedBack()
+    {
+        // Write a file with compact separators, then load it back.
+        WriteIni("compact-load.ini", "[General]\nAppName=ReloadedApp\nMaxRetries=3\nEnableLogging=True\nThreshold=1.0");
+
+        var section = new GeneralSettingsImpl();
+        IniConfigRegistry.ForFile("compact-load.ini")
+            .AddSearchPath(_tempDir)
+            .AssignmentSeparator("=")
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        Assert.Equal("ReloadedApp", section.AppName);
+        Assert.Equal(3, section.MaxRetries);
+    }
+
+    [Fact]
+    public void AssignmentSeparator_NullOrEmpty_ThrowsArgumentException()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            IniConfigRegistry.ForFile("x.ini").AssignmentSeparator(null!));
+
+        Assert.Throws<ArgumentException>(() =>
+            IniConfigRegistry.ForFile("x.ini").AssignmentSeparator(string.Empty));
+    }
+
     [Fact]
     public void PauseAutoSave_PreventsSaveWhilePropertiesAreBeingChanged()
     {
