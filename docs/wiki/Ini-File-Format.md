@@ -26,7 +26,9 @@ AnotherKey=another value
 | **Comment** | A line starting with `;` or `#` |
 | **Blank line** | Ignored — resets pending comments so they aren't attached to the next key |
 
-**Case sensitivity:** Section names and key names are looked up **case-insensitively**.
+**Case sensitivity:** Section names and key names are looked up **case-insensitively** by default.
+Enable case-sensitive lookup with `IniParserOptions.CaseSensitiveSections` and/or
+`IniParserOptions.CaseSensitiveKeys` — see [[Parser-Options]].
 
 ---
 
@@ -283,6 +285,53 @@ IniConfigRegistry.ForFile("legacy.ini")
 
 ---
 
+## Configurable parser behaviour
+
+Several aspects of INI syntax interpretation are off by default but can be enabled
+via `IniParserOptions` or the corresponding `IniConfigBuilder` fluent methods.
+
+### Quoted values
+
+When `QuotedValues = true`, surrounding `"…"` or `'…'` are stripped from values,
+preserving interior whitespace:
+
+```ini
+key = "  hello  "   ; parsed as:   hello  (with spaces)
+key = 'plain'       ; parsed as: plain
+```
+
+### Escape sequences
+
+When `EscapeSequences = true`, standard C-style sequences are decoded:
+
+```ini
+DataDir  = C:\\ProgramData\\MyApp   ; → C:\ProgramData\MyApp
+Greeting = Hello\nWorld              ; → Hello<newline>World
+Tab      = col1\tcol2                ; → col1<tab>col2
+Bullet   = \x2022 item               ; → • item
+```
+
+Supported sequences: `\\`, `\n`, `\r`, `\t`, `\0`, `\"`, `\'`, `\a`, `\b`, `\xHH`.
+
+### Line continuation
+
+When `LineContinuation = true`, a trailing `\` joins the trimmed next line:
+
+```ini
+Text = Hello, \
+       World!
+; parsed as: Hello, World!
+```
+
+### Duplicate key handling
+
+By default the last occurrence of a duplicate key wins.  Set
+`DuplicateKeyHandling` to `FirstWins` or `ThrowError` to change this.
+
+See [[Parser-Options]] for the full reference, examples, and builder shortcuts.
+
+---
+
 ## Language pack files
 
 The internationalization subsystem uses the same INI syntax.  See
@@ -297,5 +346,6 @@ The internationalization subsystem uses the same INI syntax.  See
 - [[Loading-Configuration]] — search paths, defaults file, constants file
 - [[Loading-Life-Cycle]] — value resolution order
 - [[Value-Converters]] — built-in converters and adding custom ones
+- [[Parser-Options]] — duplicate-key handling, quoted values, escape sequences, line continuation, case sensitivity
 - [[Migration]] — `[__metadata__]`, unknown-key callbacks, version-gated upgrades
 - [[Internationalization]] — language pack `.ini` files

@@ -55,6 +55,9 @@ public sealed class IniConfigBuilder
     // Global EmptyWhenNull flag — applied to all sections/properties at runtime
     private bool _globalEmptyWhenNull;
 
+    // Parser options (null = use IniParserOptions.Default)
+    private Parsing.IniParserOptions? _parserOptions;
+
     internal IniConfigBuilder(string fileName)
     {
         // Extract just the filename component (in case a full path was passed), then strip
@@ -431,6 +434,105 @@ public sealed class IniConfigBuilder
         return this;
     }
 
+    // ── parser options ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Applies a complete set of parser options in one call, replacing any previously
+    /// configured individual parser settings.
+    /// </summary>
+    /// <param name="options">The options to use; must not be <c>null</c>.</param>
+    public IniConfigBuilder WithParserOptions(Parsing.IniParserOptions options)
+    {
+        _parserOptions = options ?? throw new ArgumentNullException(nameof(options));
+        return this;
+    }
+
+    /// <summary>
+    /// Enables case-sensitive key lookup within sections.
+    /// By default keys are case-insensitive (<c>AppName</c> and <c>appname</c> are the same).
+    /// </summary>
+    public IniConfigBuilder CaseSensitiveKeys()
+    {
+        MutateParserOptions(o => o.CaseSensitiveKeys = true);
+        return this;
+    }
+
+    /// <summary>
+    /// Enables case-sensitive section-name lookup.
+    /// By default section names are case-insensitive.
+    /// </summary>
+    public IniConfigBuilder CaseSensitiveSections()
+    {
+        MutateParserOptions(o => o.CaseSensitiveSections = true);
+        return this;
+    }
+
+    /// <summary>
+    /// Enables decoding of C-style escape sequences (<c>\n</c>, <c>\t</c>, <c>\\</c>, etc.)
+    /// in values read from the INI file.
+    /// </summary>
+    public IniConfigBuilder EnableEscapeSequences()
+    {
+        MutateParserOptions(o => o.EscapeSequences = true);
+        return this;
+    }
+
+    /// <summary>
+    /// Enables stripping of surrounding double-quotes or single-quotes from values.
+    /// Example: <c>key = "hello"</c> is read as <c>hello</c>.
+    /// </summary>
+    public IniConfigBuilder EnableQuotedValues()
+    {
+        MutateParserOptions(o => o.QuotedValues = true);
+        return this;
+    }
+
+    /// <summary>
+    /// Enables line continuation: a backslash (<c>\</c>) at the end of a value line joins
+    /// the trimmed content of the following line into a single value.
+    /// </summary>
+    public IniConfigBuilder EnableLineContinuation()
+    {
+        MutateParserOptions(o => o.LineContinuation = true);
+        return this;
+    }
+
+    /// <summary>
+    /// Configures how duplicate keys within the same section are handled during parsing.
+    /// </summary>
+    /// <param name="handling">
+    /// <see cref="Parsing.DuplicateKeyHandling.LastWins"/> (default), 
+    /// <see cref="Parsing.DuplicateKeyHandling.FirstWins"/>, or
+    /// <see cref="Parsing.DuplicateKeyHandling.ThrowError"/>.
+    /// </param>
+    public IniConfigBuilder WithDuplicateKeyHandling(Parsing.DuplicateKeyHandling handling)
+    {
+        MutateParserOptions(o => o.DuplicateKeyHandling = handling);
+        return this;
+    }
+
+    /// <summary>
+    /// Returns a new copy of the current parser options (or a copy of the defaults when no
+    /// custom options have been set yet), applies <paramref name="mutate"/> to it, and
+    /// stores the result back.  This allows individual convenience methods to layer changes
+    /// without touching <see cref="Parsing.IniParserOptions.Default"/>.
+    /// </summary>
+    private void MutateParserOptions(Action<Parsing.IniParserOptions> mutate)
+    {
+        var current = _parserOptions ?? Parsing.IniParserOptions.Default;
+        var copy = new Parsing.IniParserOptions
+        {
+            DuplicateKeyHandling  = current.DuplicateKeyHandling,
+            QuotedValues          = current.QuotedValues,
+            LineContinuation      = current.LineContinuation,
+            EscapeSequences       = current.EscapeSequences,
+            CaseSensitiveKeys     = current.CaseSensitiveKeys,
+            CaseSensitiveSections = current.CaseSensitiveSections,
+        };
+        mutate(copy);
+        _parserOptions = copy;
+    }
+
     /// <summary>
     /// Registers an <see cref="IIniSection"/> instance under the explicit interface type
     /// <typeparamref name="T"/>. The generated concrete class must be passed; it will be
@@ -588,6 +690,7 @@ public sealed class IniConfigBuilder
         config.MetadataConfig = _metadataConfig;
         config.GlobalEmptyWhenNull = _globalEmptyWhenNull;
         config.AssignmentSeparator = _assignmentSeparator;
+        config.ParserOptions = _parserOptions ?? Parsing.IniParserOptions.Default;
 
         config.SearchPaths.AddRange(_searchPaths);
         config.DefaultFilePaths.AddRange(_defaultFilePaths);

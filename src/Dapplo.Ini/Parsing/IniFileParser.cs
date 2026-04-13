@@ -14,15 +14,28 @@ namespace Dapplo.Ini.Parsing;
 ///   <item>Comments: lines starting with <c>;</c> or <c>#</c></item>
 ///   <item>Blank lines (ignored between entries; preserved as section/key comment context)</item>
 /// </list>
+/// Behaviour for duplicate keys, quoted values, escape sequences, line continuation, and
+/// case sensitivity can all be configured via <see cref="IniParserOptions"/>.
 /// </summary>
 public static class IniFileParser
 {
     /// <summary>
     /// Parses the content of an INI file from <paramref name="content"/> and returns an <see cref="IniFile"/>.
     /// </summary>
-    public static IniFile Parse(string content)
+    /// <param name="content">The full text of the INI file.</param>
+    /// <param name="options">
+    /// Parser options controlling duplicate-key handling, quoted values, escape sequences,
+    /// line continuation, and case sensitivity.
+    /// When <c>null</c>, <see cref="IniParserOptions.Default"/> is used.
+    /// </param>
+    public static IniFile Parse(string content, IniParserOptions? options = null)
     {
-        var iniFile = new IniFile();
+        options ??= IniParserOptions.Default;
+
+        var sectionComparer = options.CaseSensitiveSections ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
+        var keyComparer     = options.CaseSensitiveKeys     ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
+
+        var iniFile = new IniFile(sectionComparer, keyComparer);
         var span = content.AsSpan();
 
         IniSection? currentSection = null;
@@ -65,7 +78,7 @@ public static class IniFileParser
                     IReadOnlyList<string> comments = pendingComments.Count > 0
                         ? pendingComments.ToArray()
                         : (IReadOnlyList<string>)Array.Empty<string>();
-                    currentSection = new IniSection(sectionName, comments);
+                    currentSection = new IniSection(sectionName, comments, keyComparer);
                     iniFile.AddSection(currentSection);
                 }
                 pendingComments.Clear();
@@ -76,11 +89,39 @@ public static class IniFileParser
             var equalsIndex = trimmed.IndexOf('=');
             if (equalsIndex > 0)
             {
-                var key = trimmed.Slice(0, equalsIndex).TrimEnd().ToString();
+                var key   = trimmed.Slice(0, equalsIndex).TrimEnd().ToString();
                 var value = trimmed.Slice(equalsIndex + 1).TrimStart().ToString();
+
+                // Line continuation: if value ends with '\', join the next line(s)
+                if (options.LineContinuation)
+                    value = ApplyLineContinuation(value, ref span);
+
+                // Quoted values: strip surrounding quotes if present
+                if (options.QuotedValues)
+                    value = StripQuotes(value);
+
+                // Escape sequences: decode \n, \t, \\, etc.
+                if (options.EscapeSequences)
+                    value = DecodeEscapeSequences(value);
 
                 // Ensure there is a section (global / no-section entries go into a synthetic "" section)
                 currentSection ??= iniFile.GetOrAddSection(string.Empty);
+
+                // Duplicate key handling
+                if (options.DuplicateKeyHandling != DuplicateKeyHandling.LastWins
+                    && currentSection.ContainsKey(key))
+                {
+                    switch (options.DuplicateKeyHandling)
+                    {
+                        case DuplicateKeyHandling.FirstWins:
+                            // Skip – keep the first value
+                            pendingComments.Clear();
+                            continue;
+                        case DuplicateKeyHandling.ThrowError:
+                            throw new InvalidOperationException(
+                                $"Duplicate key '{key}' found in section '{currentSection.Name}'.");
+                    }
+                }
 
                 IReadOnlyList<string> entryComments = pendingComments.Count > 0
                     ? pendingComments.ToArray()
@@ -101,12 +142,17 @@ public static class IniFileParser
     /// The file is opened with <see cref="FileAccess.Read"/> and <see cref="FileShare.ReadWrite"/>
     /// so that it is never held open or locked for writing after parsing.
     /// </summary>
-    public static IniFile ParseFile(string filePath, Encoding? encoding = null)
+    /// <param name="filePath">Path to the INI file to parse.</param>
+    /// <param name="encoding">Character encoding; defaults to UTF-8.</param>
+    /// <param name="options">
+    /// Parser options; when <c>null</c>, <see cref="IniParserOptions.Default"/> is used.
+    /// </param>
+    public static IniFile ParseFile(string filePath, Encoding? encoding = null, IniParserOptions? options = null)
     {
         using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         using var reader = new StreamReader(stream, encoding ?? Encoding.UTF8);
         var content = reader.ReadToEnd();
-        return Parse(content);
+        return Parse(content, options);
     }
 
     /// <summary>
@@ -115,7 +161,13 @@ public static class IniFileParser
     /// The file is opened with <see cref="FileAccess.Read"/> and <see cref="FileShare.ReadWrite"/>
     /// so that it is never held open or locked for writing after parsing.
     /// </summary>
-    public static async Task<IniFile> ParseFileAsync(string filePath, Encoding? encoding = null, CancellationToken cancellationToken = default)
+    /// <param name="filePath">Path to the INI file to parse.</param>
+    /// <param name="encoding">Character encoding; defaults to UTF-8.</param>
+    /// <param name="options">
+    /// Parser options; when <c>null</c>, <see cref="IniParserOptions.Default"/> is used.
+    /// </param>
+    /// <param name="cancellationToken">Token to cancel the async operation.</param>
+    public static async Task<IniFile> ParseFileAsync(string filePath, Encoding? encoding = null, IniParserOptions? options = null, CancellationToken cancellationToken = default)
     {
         string content;
 #if NET
@@ -132,7 +184,7 @@ public static class IniFileParser
         using var reader = new StreamReader(stream, encoding ?? Encoding.UTF8);
         content = await reader.ReadToEndAsync().ConfigureAwait(false);
 #endif
-        return Parse(content);
+        return Parse(content, options);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
@@ -157,4 +209,110 @@ public static class IniFileParser
 
         return result;
     }
+
+    /// <summary>
+    /// Handles line continuation: if <paramref name="value"/> ends with a backslash,
+    /// the backslash is replaced by the trimmed content of the next line(s) from
+    /// <paramref name="remaining"/>.
+    /// </summary>
+    private static string ApplyLineContinuation(string value, ref ReadOnlySpan<char> remaining)
+    {
+        if (value.Length == 0 || value[value.Length - 1] != '\\')
+            return value;
+
+        // Strip the trailing backslash from the initial segment.
+        var sb = new StringBuilder(value, 0, value.Length - 1, value.Length + 64);
+        while (!remaining.IsEmpty)
+        {
+            var nextLine = ReadLine(ref remaining).Trim();
+            if (nextLine.IsEmpty)
+            {
+                // Empty continuation line: stop
+                break;
+            }
+
+            if (nextLine[nextLine.Length - 1] == '\\')
+            {
+                // This line also continues — append without trailing backslash
+                sb.Append(nextLine.Slice(0, nextLine.Length - 1).ToString());
+            }
+            else
+            {
+                sb.Append(nextLine.ToString());
+                break;
+            }
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Strips matching surrounding double-quote or single-quote characters from
+    /// <paramref name="value"/> when they are present.
+    /// </summary>
+    private static string StripQuotes(string value)
+    {
+        if (value.Length >= 2)
+        {
+            var first = value[0];
+            var last  = value[value.Length - 1];
+            if ((first == '"'  && last == '"') ||
+                (first == '\'' && last == '\''))
+            {
+                return value.Substring(1, value.Length - 2);
+            }
+        }
+        return value;
+    }
+
+    /// <summary>
+    /// Decodes standard C-style escape sequences in <paramref name="value"/>.
+    /// Unrecognised sequences are left unchanged (the backslash is preserved).
+    /// </summary>
+    private static string DecodeEscapeSequences(string value)
+    {
+        if (!value.Contains('\\'))
+            return value;
+
+        var sb = new StringBuilder(value.Length);
+        var i  = 0;
+        while (i < value.Length)
+        {
+            var c = value[i];
+            if (c != '\\' || i + 1 >= value.Length)
+            {
+                sb.Append(c);
+                i++;
+                continue;
+            }
+
+            var next = value[i + 1];
+            switch (next)
+            {
+                case '\\': sb.Append('\\');  i += 2; break;
+                case 'n':  sb.Append('\n');  i += 2; break;
+                case 'r':  sb.Append('\r');  i += 2; break;
+                case 't':  sb.Append('\t');  i += 2; break;
+                case '0':  sb.Append('\0');  i += 2; break;
+                case '"':  sb.Append('"');   i += 2; break;
+                case '\'': sb.Append('\'');  i += 2; break;
+                case 'a':  sb.Append('\a');  i += 2; break;
+                case 'b':  sb.Append('\b');  i += 2; break;
+                case 'x' when i + 3 < value.Length &&
+                              IsHexDigit(value[i + 2]) && IsHexDigit(value[i + 3]):
+                    sb.Append((char)Convert.ToByte(value.Substring(i + 2, 2), 16));
+                    i += 4;
+                    break;
+                default:
+                    // Unknown escape: keep as-is
+                    sb.Append('\\');
+                    sb.Append(next);
+                    i += 2;
+                    break;
+            }
+        }
+        return sb.ToString();
+    }
+
+    private static bool IsHexDigit(char c)
+        => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }

@@ -23,6 +23,7 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
 - ✅ **Empty-over-null semantics** — opt reference-type properties into returning empty values instead of `null` via `[IniValue(EmptyWhenNull = true)]`, `[IniSection(EmptyWhenNull = true)]`, or `IniConfigBuilder.EmptyWhenNull()`
 - ✅ **Ignore-defaults / ignore-constants** — mark a section or individual property to be skipped when applying defaults files or constants files (`[IniSection(IgnoreDefaults = true)]`, `[IniValue(IgnoreConstants = true)]`, etc.)
 - ✅ **Generic meta-model access** — enumerate all sections by name, iterate their keys, and inspect property types at runtime without needing the concrete section types at compile time
+- ✅ **Configurable parser behaviour** — control duplicate-key handling, quoted values, escape sequences, line continuation, and case sensitivity via `IniParserOptions` or individual `IniConfigBuilder` fluent methods
 
 ---
 
@@ -100,3 +101,4 @@ config.Save();
 | [[Ignore-Defaults-and-Constants]] | Opt sections or individual properties out of defaults files and/or constants files |
 | [[Empty-When-Null]] | `EmptyWhenNull` at property, section, and config levels — return empty instead of `null` for absent reference-type values |
 | [[Generic-Access]] | `GetSections()`, `GetSection(name)`, `GetKeys()`, and `GetPropertyType()` — inspect the configuration meta-model at runtime without compile-time type knowledge |
+| [[Parser-Options]] | `IniParserOptions` — configurable duplicate-key handling, quoted values, escape sequences, line continuation, and case sensitivity |
