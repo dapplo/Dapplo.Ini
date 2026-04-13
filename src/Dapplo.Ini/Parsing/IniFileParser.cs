@@ -220,11 +220,11 @@ public static class IniFileParser
         if (value.Length == 0 || value[value.Length - 1] != '\\')
             return value;
 
+        // Strip the trailing backslash from the initial segment.
         var sb = new StringBuilder(value, 0, value.Length - 1, value.Length + 64);
         while (!remaining.IsEmpty)
         {
             var nextLine = ReadLine(ref remaining).Trim();
-            // Append the trimmed next-line content (a space is used as join separator)
             if (nextLine.IsEmpty)
             {
                 // Empty continuation line: stop

@@ -453,15 +453,7 @@ public sealed class IniConfigBuilder
     /// </summary>
     public IniConfigBuilder CaseSensitiveKeys()
     {
-        _parserOptions = new Parsing.IniParserOptions
-        {
-            DuplicateKeyHandling  = (_parserOptions ?? Parsing.IniParserOptions.Default).DuplicateKeyHandling,
-            QuotedValues          = (_parserOptions ?? Parsing.IniParserOptions.Default).QuotedValues,
-            LineContinuation      = (_parserOptions ?? Parsing.IniParserOptions.Default).LineContinuation,
-            EscapeSequences       = (_parserOptions ?? Parsing.IniParserOptions.Default).EscapeSequences,
-            CaseSensitiveKeys     = true,
-            CaseSensitiveSections = (_parserOptions ?? Parsing.IniParserOptions.Default).CaseSensitiveSections,
-        };
+        MutateParserOptions(o => o.CaseSensitiveKeys = true);
         return this;
     }
 
@@ -471,15 +463,7 @@ public sealed class IniConfigBuilder
     /// </summary>
     public IniConfigBuilder CaseSensitiveSections()
     {
-        _parserOptions = new Parsing.IniParserOptions
-        {
-            DuplicateKeyHandling  = (_parserOptions ?? Parsing.IniParserOptions.Default).DuplicateKeyHandling,
-            QuotedValues          = (_parserOptions ?? Parsing.IniParserOptions.Default).QuotedValues,
-            LineContinuation      = (_parserOptions ?? Parsing.IniParserOptions.Default).LineContinuation,
-            EscapeSequences       = (_parserOptions ?? Parsing.IniParserOptions.Default).EscapeSequences,
-            CaseSensitiveKeys     = (_parserOptions ?? Parsing.IniParserOptions.Default).CaseSensitiveKeys,
-            CaseSensitiveSections = true,
-        };
+        MutateParserOptions(o => o.CaseSensitiveSections = true);
         return this;
     }
 
@@ -489,15 +473,7 @@ public sealed class IniConfigBuilder
     /// </summary>
     public IniConfigBuilder EnableEscapeSequences()
     {
-        _parserOptions = new Parsing.IniParserOptions
-        {
-            DuplicateKeyHandling  = (_parserOptions ?? Parsing.IniParserOptions.Default).DuplicateKeyHandling,
-            QuotedValues          = (_parserOptions ?? Parsing.IniParserOptions.Default).QuotedValues,
-            LineContinuation      = (_parserOptions ?? Parsing.IniParserOptions.Default).LineContinuation,
-            EscapeSequences       = true,
-            CaseSensitiveKeys     = (_parserOptions ?? Parsing.IniParserOptions.Default).CaseSensitiveKeys,
-            CaseSensitiveSections = (_parserOptions ?? Parsing.IniParserOptions.Default).CaseSensitiveSections,
-        };
+        MutateParserOptions(o => o.EscapeSequences = true);
         return this;
     }
 
@@ -507,15 +483,7 @@ public sealed class IniConfigBuilder
     /// </summary>
     public IniConfigBuilder EnableQuotedValues()
     {
-        _parserOptions = new Parsing.IniParserOptions
-        {
-            DuplicateKeyHandling  = (_parserOptions ?? Parsing.IniParserOptions.Default).DuplicateKeyHandling,
-            QuotedValues          = true,
-            LineContinuation      = (_parserOptions ?? Parsing.IniParserOptions.Default).LineContinuation,
-            EscapeSequences       = (_parserOptions ?? Parsing.IniParserOptions.Default).EscapeSequences,
-            CaseSensitiveKeys     = (_parserOptions ?? Parsing.IniParserOptions.Default).CaseSensitiveKeys,
-            CaseSensitiveSections = (_parserOptions ?? Parsing.IniParserOptions.Default).CaseSensitiveSections,
-        };
+        MutateParserOptions(o => o.QuotedValues = true);
         return this;
     }
 
@@ -525,15 +493,7 @@ public sealed class IniConfigBuilder
     /// </summary>
     public IniConfigBuilder EnableLineContinuation()
     {
-        _parserOptions = new Parsing.IniParserOptions
-        {
-            DuplicateKeyHandling  = (_parserOptions ?? Parsing.IniParserOptions.Default).DuplicateKeyHandling,
-            QuotedValues          = (_parserOptions ?? Parsing.IniParserOptions.Default).QuotedValues,
-            LineContinuation      = true,
-            EscapeSequences       = (_parserOptions ?? Parsing.IniParserOptions.Default).EscapeSequences,
-            CaseSensitiveKeys     = (_parserOptions ?? Parsing.IniParserOptions.Default).CaseSensitiveKeys,
-            CaseSensitiveSections = (_parserOptions ?? Parsing.IniParserOptions.Default).CaseSensitiveSections,
-        };
+        MutateParserOptions(o => o.LineContinuation = true);
         return this;
     }
 
@@ -547,16 +507,30 @@ public sealed class IniConfigBuilder
     /// </param>
     public IniConfigBuilder WithDuplicateKeyHandling(Parsing.DuplicateKeyHandling handling)
     {
-        _parserOptions = new Parsing.IniParserOptions
-        {
-            DuplicateKeyHandling  = handling,
-            QuotedValues          = (_parserOptions ?? Parsing.IniParserOptions.Default).QuotedValues,
-            LineContinuation      = (_parserOptions ?? Parsing.IniParserOptions.Default).LineContinuation,
-            EscapeSequences       = (_parserOptions ?? Parsing.IniParserOptions.Default).EscapeSequences,
-            CaseSensitiveKeys     = (_parserOptions ?? Parsing.IniParserOptions.Default).CaseSensitiveKeys,
-            CaseSensitiveSections = (_parserOptions ?? Parsing.IniParserOptions.Default).CaseSensitiveSections,
-        };
+        MutateParserOptions(o => o.DuplicateKeyHandling = handling);
         return this;
+    }
+
+    /// <summary>
+    /// Returns a new copy of the current parser options (or a copy of the defaults when no
+    /// custom options have been set yet), applies <paramref name="mutate"/> to it, and
+    /// stores the result back.  This allows individual convenience methods to layer changes
+    /// without touching <see cref="Parsing.IniParserOptions.Default"/>.
+    /// </summary>
+    private void MutateParserOptions(Action<Parsing.IniParserOptions> mutate)
+    {
+        var current = _parserOptions ?? Parsing.IniParserOptions.Default;
+        var copy = new Parsing.IniParserOptions
+        {
+            DuplicateKeyHandling  = current.DuplicateKeyHandling,
+            QuotedValues          = current.QuotedValues,
+            LineContinuation      = current.LineContinuation,
+            EscapeSequences       = current.EscapeSequences,
+            CaseSensitiveKeys     = current.CaseSensitiveKeys,
+            CaseSensitiveSections = current.CaseSensitiveSections,
+        };
+        mutate(copy);
+        _parserOptions = copy;
     }
 
     /// <summary>
