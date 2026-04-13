@@ -77,6 +77,14 @@ public sealed class IniConfig : IDisposable
     internal string AssignmentSeparator = " = ";
 
     /// <summary>
+    /// Parser options that control how INI files are interpreted on load/reload.
+    /// Set via <see cref="IniConfigBuilder.WithParserOptions"/> or the individual
+    /// convenience methods on <see cref="IniConfigBuilder"/>.
+    /// Defaults to <see cref="Parsing.IniParserOptions.Default"/>.
+    /// </summary>
+    internal Parsing.IniParserOptions ParserOptions = Parsing.IniParserOptions.Default;
+
+    /// <summary>
     /// The metadata that was read from the <c>[__metadata__]</c> section of the INI file
     /// on the last load / reload.
     /// <c>null</c> when the section did not exist in the file (e.g. first-run or no metadata enabled).
@@ -447,20 +455,20 @@ public sealed class IniConfig : IDisposable
                 foreach (var path in DefaultFilePaths)
                 {
                     if (File.Exists(path))
-                        ApplyIniFile(IniFileParser.ParseFile(path, Encoding), isDefault: true);
+                        ApplyIniFile(IniFileParser.ParseFile(path, Encoding, ParserOptions), isDefault: true);
                 }
 
                 // 3. Apply user file
                 if (!string.IsNullOrEmpty(LoadedFromPath) && File.Exists(LoadedFromPath))
                 {
-                    ApplyIniFile(IniFileParser.ParseFile(LoadedFromPath!, Encoding));
+                    ApplyIniFile(IniFileParser.ParseFile(LoadedFromPath!, Encoding, ParserOptions));
                 }
 
                 // 4. Apply constant files
                 foreach (var path in ConstantFilePaths)
                 {
                     if (File.Exists(path))
-                        ApplyIniFile(IniFileParser.ParseFile(path, Encoding), isConstant: true);
+                        ApplyIniFile(IniFileParser.ParseFile(path, Encoding, ParserOptions), isConstant: true);
                 }
 
                 // 5. Apply external value sources
@@ -538,20 +546,20 @@ public sealed class IniConfig : IDisposable
                 foreach (var path in DefaultFilePaths)
                 {
                     if (File.Exists(path))
-                        ApplyIniFile(await IniFileParser.ParseFileAsync(path, Encoding, cancellationToken).ConfigureAwait(false), isDefault: true);
+                        ApplyIniFile(await IniFileParser.ParseFileAsync(path, Encoding, ParserOptions, cancellationToken).ConfigureAwait(false), isDefault: true);
                 }
 
                 // 3. Apply user file
                 if (!string.IsNullOrEmpty(LoadedFromPath) && File.Exists(LoadedFromPath))
                 {
-                    ApplyIniFile(await IniFileParser.ParseFileAsync(LoadedFromPath!, Encoding, cancellationToken).ConfigureAwait(false));
+                    ApplyIniFile(await IniFileParser.ParseFileAsync(LoadedFromPath!, Encoding, ParserOptions, cancellationToken).ConfigureAwait(false));
                 }
 
                 // 4. Apply constant files
                 foreach (var path in ConstantFilePaths)
                 {
                     if (File.Exists(path))
-                        ApplyIniFile(await IniFileParser.ParseFileAsync(path, Encoding, cancellationToken).ConfigureAwait(false), isConstant: true);
+                        ApplyIniFile(await IniFileParser.ParseFileAsync(path, Encoding, ParserOptions, cancellationToken).ConfigureAwait(false), isConstant: true);
                 }
 
                 // 5. Apply external value sources (sync and async)
@@ -876,7 +884,7 @@ public sealed class IniConfig : IDisposable
             {
                 var resolvedDefault = ResolveAuxiliaryFilePath(path);
                 if (resolvedDefault != null)
-                    ApplyIniFile(IniFileParser.ParseFile(resolvedDefault, Encoding), isDefault: true);
+                    ApplyIniFile(IniFileParser.ParseFile(resolvedDefault, Encoding, ParserOptions), isDefault: true);
             }
 
             // 3. Resolve and apply user file
@@ -884,7 +892,7 @@ public sealed class IniConfig : IDisposable
             if (resolved != null)
             {
                 LoadedFromPath = resolved;
-                ApplyIniFile(IniFileParser.ParseFile(resolved, Encoding));
+                ApplyIniFile(IniFileParser.ParseFile(resolved, Encoding, ParserOptions));
                 NotifyListeners(l => l.OnFileLoaded(resolved));
             }
             else
@@ -909,7 +917,7 @@ public sealed class IniConfig : IDisposable
             {
                 var resolvedConstant = ResolveAuxiliaryFilePath(path);
                 if (resolvedConstant != null)
-                    ApplyIniFile(IniFileParser.ParseFile(resolvedConstant, Encoding), isConstant: true);
+                    ApplyIniFile(IniFileParser.ParseFile(resolvedConstant, Encoding, ParserOptions), isConstant: true);
             }
 
             // 5. Apply external value sources
@@ -992,7 +1000,7 @@ public sealed class IniConfig : IDisposable
             {
                 var resolvedDefault = ResolveAuxiliaryFilePath(path);
                 if (resolvedDefault != null)
-                    ApplyIniFile(await IniFileParser.ParseFileAsync(resolvedDefault, Encoding, cancellationToken).ConfigureAwait(false), isDefault: true);
+                    ApplyIniFile(await IniFileParser.ParseFileAsync(resolvedDefault, Encoding, ParserOptions, cancellationToken).ConfigureAwait(false), isDefault: true);
             }
 
             // 3. Resolve and apply user file
@@ -1000,7 +1008,7 @@ public sealed class IniConfig : IDisposable
             if (resolved != null)
             {
                 LoadedFromPath = resolved;
-                ApplyIniFile(await IniFileParser.ParseFileAsync(resolved, Encoding, cancellationToken).ConfigureAwait(false));
+                ApplyIniFile(await IniFileParser.ParseFileAsync(resolved, Encoding, ParserOptions, cancellationToken).ConfigureAwait(false));
                 NotifyListeners(l => l.OnFileLoaded(resolved));
             }
             else
@@ -1024,7 +1032,7 @@ public sealed class IniConfig : IDisposable
             {
                 var resolvedConstant = ResolveAuxiliaryFilePath(path);
                 if (resolvedConstant != null)
-                    ApplyIniFile(await IniFileParser.ParseFileAsync(resolvedConstant, Encoding, cancellationToken).ConfigureAwait(false), isConstant: true);
+                    ApplyIniFile(await IniFileParser.ParseFileAsync(resolvedConstant, Encoding, ParserOptions, cancellationToken).ConfigureAwait(false), isConstant: true);
             }
 
             // 5. Apply external value sources (sync + async)

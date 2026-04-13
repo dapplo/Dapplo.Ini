@@ -8,8 +8,7 @@ namespace Dapplo.Ini.Parsing;
 /// </summary>
 public sealed class IniSection
 {
-    private readonly Dictionary<string, IniEntry> _entries =
-        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, IniEntry> _entries;
 
     /// <summary>The section name (without brackets).</summary>
     public string Name { get; }
@@ -22,10 +21,21 @@ public sealed class IniSection
 
     private readonly List<IniEntry> _entriesOrdered = new();
 
-    public IniSection(string name, IReadOnlyList<string> comments)
+    /// <summary>
+    /// Initialises a new section.
+    /// </summary>
+    /// <param name="name">The section name (without brackets).</param>
+    /// <param name="comments">Comment lines that appeared above the section header.</param>
+    /// <param name="keyComparer">
+    /// String comparer to use for key lookups.
+    /// Defaults to <see cref="StringComparer.OrdinalIgnoreCase"/> when <c>null</c>.
+    /// Pass <see cref="StringComparer.Ordinal"/> to enable case-sensitive key lookup.
+    /// </param>
+    public IniSection(string name, IReadOnlyList<string> comments, StringComparer? keyComparer = null)
     {
         Name = name;
         Comments = comments;
+        _entries = new Dictionary<string, IniEntry>(keyComparer ?? StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>Adds or replaces an entry.</summary>

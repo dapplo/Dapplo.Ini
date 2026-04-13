@@ -8,8 +8,8 @@ namespace Dapplo.Ini.Parsing;
 /// </summary>
 public sealed class IniFile
 {
-    private readonly Dictionary<string, IniSection> _sections =
-        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, IniSection> _sections;
+    private readonly StringComparer _keyComparer;
 
     private readonly List<IniSection> _sectionsOrdered = new();
 
@@ -23,6 +23,24 @@ public sealed class IniFile
     /// <summary>All sections, in file order.</summary>
     public IReadOnlyList<IniSection> Sections => _sectionsOrdered;
 
+    /// <summary>
+    /// Initialises a new <see cref="IniFile"/>.
+    /// </summary>
+    /// <param name="sectionComparer">
+    /// String comparer to use for section-name lookups.
+    /// Defaults to <see cref="StringComparer.OrdinalIgnoreCase"/> when <c>null</c>.
+    /// </param>
+    /// <param name="keyComparer">
+    /// String comparer forwarded to every <see cref="IniSection"/> created by
+    /// <see cref="GetOrAddSection"/>.
+    /// Defaults to <see cref="StringComparer.OrdinalIgnoreCase"/> when <c>null</c>.
+    /// </param>
+    public IniFile(StringComparer? sectionComparer = null, StringComparer? keyComparer = null)
+    {
+        _keyComparer = keyComparer ?? StringComparer.OrdinalIgnoreCase;
+        _sections = new Dictionary<string, IniSection>(sectionComparer ?? StringComparer.OrdinalIgnoreCase);
+    }
+
     /// <summary>Returns the section with the given <paramref name="name"/>, or <c>null</c>.</summary>
     public IniSection? GetSection(string name)
         => _sections.TryGetValue(name, out var s) ? s : null;
@@ -32,7 +50,7 @@ public sealed class IniFile
     {
         if (!_sections.TryGetValue(name, out var section))
         {
-            section = new IniSection(name, Array.Empty<string>());
+            section = new IniSection(name, Array.Empty<string>(), _keyComparer);
             _sections[name] = section;
             _sectionsOrdered.Add(section);
         }

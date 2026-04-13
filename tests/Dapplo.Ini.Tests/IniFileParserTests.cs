@@ -130,4 +130,228 @@ public sealed class IniFileParserTests
         // Only one entry
         Assert.Single(section.Entries);
     }
+
+    // ── IniParserOptions: DuplicateKeyHandling ────────────────────────────────
+
+    [Fact]
+    public void Parse_DuplicateKey_LastWins_ByDefault()
+    {
+        const string content = "[S]\nkey = first\nkey = second";
+        var file = IniFileParser.Parse(content);
+        Assert.Equal("second", file.GetSection("S")!.GetValue("key"));
+    }
+
+    [Fact]
+    public void Parse_DuplicateKey_FirstWins_KeepsFirstValue()
+    {
+        const string content = "[S]\nkey = first\nkey = second";
+        var opts = new IniParserOptions { DuplicateKeyHandling = DuplicateKeyHandling.FirstWins };
+        var file = IniFileParser.Parse(content, opts);
+        Assert.Equal("first", file.GetSection("S")!.GetValue("key"));
+        // Only one entry should exist
+        Assert.Single(file.GetSection("S")!.Entries);
+    }
+
+    [Fact]
+    public void Parse_DuplicateKey_ThrowError_ThrowsInvalidOperationException()
+    {
+        const string content = "[S]\nkey = first\nkey = second";
+        var opts = new IniParserOptions { DuplicateKeyHandling = DuplicateKeyHandling.ThrowError };
+        Assert.Throws<InvalidOperationException>(() => IniFileParser.Parse(content, opts));
+    }
+
+    // ── IniParserOptions: QuotedValues ────────────────────────────────────────
+
+    [Fact]
+    public void Parse_QuotedValues_Disabled_KeepsQuotes()
+    {
+        const string content = "[S]\nkey = \"hello world\"";
+        var file = IniFileParser.Parse(content);
+        Assert.Equal("\"hello world\"", file.GetSection("S")!.GetValue("key"));
+    }
+
+    [Fact]
+    public void Parse_QuotedValues_Enabled_StripsDoubleQuotes()
+    {
+        const string content = "[S]\nkey = \"hello world\"";
+        var opts = new IniParserOptions { QuotedValues = true };
+        var file = IniFileParser.Parse(content, opts);
+        Assert.Equal("hello world", file.GetSection("S")!.GetValue("key"));
+    }
+
+    [Fact]
+    public void Parse_QuotedValues_Enabled_StripsSingleQuotes()
+    {
+        const string content = "[S]\nkey = 'hello world'";
+        var opts = new IniParserOptions { QuotedValues = true };
+        var file = IniFileParser.Parse(content, opts);
+        Assert.Equal("hello world", file.GetSection("S")!.GetValue("key"));
+    }
+
+    [Fact]
+    public void Parse_QuotedValues_Enabled_PreservesInternalWhitespace()
+    {
+        const string content = "[S]\nkey = \"  spaces  \"";
+        var opts = new IniParserOptions { QuotedValues = true };
+        var file = IniFileParser.Parse(content, opts);
+        Assert.Equal("  spaces  ", file.GetSection("S")!.GetValue("key"));
+    }
+
+    [Fact]
+    public void Parse_QuotedValues_Enabled_NoQuotes_ValueUnchanged()
+    {
+        const string content = "[S]\nkey = plain value";
+        var opts = new IniParserOptions { QuotedValues = true };
+        var file = IniFileParser.Parse(content, opts);
+        Assert.Equal("plain value", file.GetSection("S")!.GetValue("key"));
+    }
+
+    // ── IniParserOptions: LineContinuation ────────────────────────────────────
+
+    [Fact]
+    public void Parse_LineContinuation_Disabled_KeepsBackslash()
+    {
+        const string content = "[S]\nkey = first \\\nsecond";
+        var file = IniFileParser.Parse(content);
+        Assert.Equal("first \\", file.GetSection("S")!.GetValue("key"));
+    }
+
+    [Fact]
+    public void Parse_LineContinuation_Enabled_JoinsLines()
+    {
+        const string content = "[S]\nkey = first \\\n      second";
+        var opts = new IniParserOptions { LineContinuation = true };
+        var file = IniFileParser.Parse(content, opts);
+        Assert.Equal("first second", file.GetSection("S")!.GetValue("key"));
+    }
+
+    [Fact]
+    public void Parse_LineContinuation_Enabled_MultipleLines()
+    {
+        const string content = "[S]\nkey = a \\\n      b \\\n      c";
+        var opts = new IniParserOptions { LineContinuation = true };
+        var file = IniFileParser.Parse(content, opts);
+        Assert.Equal("a b c", file.GetSection("S")!.GetValue("key"));
+    }
+
+    // ── IniParserOptions: EscapeSequences ────────────────────────────────────
+
+    [Fact]
+    public void Parse_EscapeSequences_Disabled_KeepsRawBackslash()
+    {
+        const string content = "[S]\nkey = hello\\nworld";
+        var file = IniFileParser.Parse(content);
+        Assert.Equal("hello\\nworld", file.GetSection("S")!.GetValue("key"));
+    }
+
+    [Fact]
+    public void Parse_EscapeSequences_Enabled_DecodesNewline()
+    {
+        const string content = "[S]\nkey = hello\\nworld";
+        var opts = new IniParserOptions { EscapeSequences = true };
+        var file = IniFileParser.Parse(content, opts);
+        Assert.Equal("hello\nworld", file.GetSection("S")!.GetValue("key"));
+    }
+
+    [Fact]
+    public void Parse_EscapeSequences_Enabled_DecodesTab()
+    {
+        const string content = "[S]\nkey = col1\\tcol2";
+        var opts = new IniParserOptions { EscapeSequences = true };
+        var file = IniFileParser.Parse(content, opts);
+        Assert.Equal("col1\tcol2", file.GetSection("S")!.GetValue("key"));
+    }
+
+    [Fact]
+    public void Parse_EscapeSequences_Enabled_DecodesLiteralBackslash()
+    {
+        const string content = "[S]\nkey = path\\\\to\\\\file";
+        var opts = new IniParserOptions { EscapeSequences = true };
+        var file = IniFileParser.Parse(content, opts);
+        Assert.Equal("path\\to\\file", file.GetSection("S")!.GetValue("key"));
+    }
+
+    [Fact]
+    public void Parse_EscapeSequences_Enabled_DecodesHexCharacter()
+    {
+        const string content = "[S]\nkey = \\x41\\x42"; // AB
+        var opts = new IniParserOptions { EscapeSequences = true };
+        var file = IniFileParser.Parse(content, opts);
+        Assert.Equal("AB", file.GetSection("S")!.GetValue("key"));
+    }
+
+    [Fact]
+    public void Parse_EscapeSequences_Enabled_UnknownSequence_LeftUnchanged()
+    {
+        const string content = "[S]\nkey = \\q";
+        var opts = new IniParserOptions { EscapeSequences = true };
+        var file = IniFileParser.Parse(content, opts);
+        Assert.Equal("\\q", file.GetSection("S")!.GetValue("key"));
+    }
+
+    // ── IniParserOptions: CaseSensitiveKeys ───────────────────────────────────
+
+    [Fact]
+    public void Parse_CaseSensitiveKeys_Disabled_LookupIsCaseInsensitive()
+    {
+        const string content = "[S]\nAppName = MyApp";
+        var file = IniFileParser.Parse(content); // default = case-insensitive
+        Assert.Equal("MyApp", file.GetSection("S")!.GetValue("appname"));
+        Assert.Equal("MyApp", file.GetSection("S")!.GetValue("APPNAME"));
+    }
+
+    [Fact]
+    public void Parse_CaseSensitiveKeys_Enabled_LookupIsCaseSensitive()
+    {
+        const string content = "[S]\nAppName = MyApp";
+        var opts = new IniParserOptions { CaseSensitiveKeys = true };
+        var file = IniFileParser.Parse(content, opts);
+        Assert.Equal("MyApp", file.GetSection("S")!.GetValue("AppName"));
+        Assert.Null(file.GetSection("S")!.GetValue("appname"));
+    }
+
+    [Fact]
+    public void Parse_CaseSensitiveKeys_Enabled_TreatsUpperAndLowerAsDistinct()
+    {
+        const string content = "[S]\nkey = lower\nKEY = upper";
+        var opts = new IniParserOptions { CaseSensitiveKeys = true };
+        var file = IniFileParser.Parse(content, opts);
+        var section = file.GetSection("S")!;
+        Assert.Equal(2, section.Entries.Count);
+        Assert.Equal("lower", section.GetValue("key"));
+        Assert.Equal("upper", section.GetValue("KEY"));
+    }
+
+    // ── IniParserOptions: CaseSensitiveSections ───────────────────────────────
+
+    [Fact]
+    public void Parse_CaseSensitiveSections_Disabled_LookupIsCaseInsensitive()
+    {
+        const string content = "[General]\nkey = v";
+        var file = IniFileParser.Parse(content); // default
+        Assert.NotNull(file.GetSection("GENERAL"));
+        Assert.NotNull(file.GetSection("general"));
+    }
+
+    [Fact]
+    public void Parse_CaseSensitiveSections_Enabled_LookupIsCaseSensitive()
+    {
+        const string content = "[General]\nkey = v";
+        var opts = new IniParserOptions { CaseSensitiveSections = true };
+        var file = IniFileParser.Parse(content, opts);
+        Assert.NotNull(file.GetSection("General"));
+        Assert.Null(file.GetSection("GENERAL"));
+        Assert.Null(file.GetSection("general"));
+    }
+
+    [Fact]
+    public void Parse_CaseSensitiveSections_Enabled_TreatsUpperAndLowerAsDistinct()
+    {
+        const string content = "[General]\nkey = v1\n[GENERAL]\nkey = v2";
+        var opts = new IniParserOptions { CaseSensitiveSections = true };
+        var file = IniFileParser.Parse(content, opts);
+        Assert.Equal(2, file.Sections.Count);
+        Assert.Equal("v1", file.GetSection("General")!.GetValue("key"));
+        Assert.Equal("v2", file.GetSection("GENERAL")!.GetValue("key"));
+    }
 }

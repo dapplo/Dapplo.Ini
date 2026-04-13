@@ -55,6 +55,9 @@ public sealed class IniConfigBuilder
     // Global EmptyWhenNull flag — applied to all sections/properties at runtime
     private bool _globalEmptyWhenNull;
 
+    // Parser options (null = use IniParserOptions.Default)
+    private Parsing.IniParserOptions? _parserOptions;
+
     internal IniConfigBuilder(string fileName)
     {
         // Extract just the filename component (in case a full path was passed), then strip
@@ -431,6 +434,131 @@ public sealed class IniConfigBuilder
         return this;
     }
 
+    // ── parser options ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Applies a complete set of parser options in one call, replacing any previously
+    /// configured individual parser settings.
+    /// </summary>
+    /// <param name="options">The options to use; must not be <c>null</c>.</param>
+    public IniConfigBuilder WithParserOptions(Parsing.IniParserOptions options)
+    {
+        _parserOptions = options ?? throw new ArgumentNullException(nameof(options));
+        return this;
+    }
+
+    /// <summary>
+    /// Enables case-sensitive key lookup within sections.
+    /// By default keys are case-insensitive (<c>AppName</c> and <c>appname</c> are the same).
+    /// </summary>
+    public IniConfigBuilder CaseSensitiveKeys()
+    {
+        _parserOptions = new Parsing.IniParserOptions
+        {
+            DuplicateKeyHandling  = (_parserOptions ?? Parsing.IniParserOptions.Default).DuplicateKeyHandling,
+            QuotedValues          = (_parserOptions ?? Parsing.IniParserOptions.Default).QuotedValues,
+            LineContinuation      = (_parserOptions ?? Parsing.IniParserOptions.Default).LineContinuation,
+            EscapeSequences       = (_parserOptions ?? Parsing.IniParserOptions.Default).EscapeSequences,
+            CaseSensitiveKeys     = true,
+            CaseSensitiveSections = (_parserOptions ?? Parsing.IniParserOptions.Default).CaseSensitiveSections,
+        };
+        return this;
+    }
+
+    /// <summary>
+    /// Enables case-sensitive section-name lookup.
+    /// By default section names are case-insensitive.
+    /// </summary>
+    public IniConfigBuilder CaseSensitiveSections()
+    {
+        _parserOptions = new Parsing.IniParserOptions
+        {
+            DuplicateKeyHandling  = (_parserOptions ?? Parsing.IniParserOptions.Default).DuplicateKeyHandling,
+            QuotedValues          = (_parserOptions ?? Parsing.IniParserOptions.Default).QuotedValues,
+            LineContinuation      = (_parserOptions ?? Parsing.IniParserOptions.Default).LineContinuation,
+            EscapeSequences       = (_parserOptions ?? Parsing.IniParserOptions.Default).EscapeSequences,
+            CaseSensitiveKeys     = (_parserOptions ?? Parsing.IniParserOptions.Default).CaseSensitiveKeys,
+            CaseSensitiveSections = true,
+        };
+        return this;
+    }
+
+    /// <summary>
+    /// Enables decoding of C-style escape sequences (<c>\n</c>, <c>\t</c>, <c>\\</c>, etc.)
+    /// in values read from the INI file.
+    /// </summary>
+    public IniConfigBuilder EnableEscapeSequences()
+    {
+        _parserOptions = new Parsing.IniParserOptions
+        {
+            DuplicateKeyHandling  = (_parserOptions ?? Parsing.IniParserOptions.Default).DuplicateKeyHandling,
+            QuotedValues          = (_parserOptions ?? Parsing.IniParserOptions.Default).QuotedValues,
+            LineContinuation      = (_parserOptions ?? Parsing.IniParserOptions.Default).LineContinuation,
+            EscapeSequences       = true,
+            CaseSensitiveKeys     = (_parserOptions ?? Parsing.IniParserOptions.Default).CaseSensitiveKeys,
+            CaseSensitiveSections = (_parserOptions ?? Parsing.IniParserOptions.Default).CaseSensitiveSections,
+        };
+        return this;
+    }
+
+    /// <summary>
+    /// Enables stripping of surrounding double-quotes or single-quotes from values.
+    /// Example: <c>key = "hello"</c> is read as <c>hello</c>.
+    /// </summary>
+    public IniConfigBuilder EnableQuotedValues()
+    {
+        _parserOptions = new Parsing.IniParserOptions
+        {
+            DuplicateKeyHandling  = (_parserOptions ?? Parsing.IniParserOptions.Default).DuplicateKeyHandling,
+            QuotedValues          = true,
+            LineContinuation      = (_parserOptions ?? Parsing.IniParserOptions.Default).LineContinuation,
+            EscapeSequences       = (_parserOptions ?? Parsing.IniParserOptions.Default).EscapeSequences,
+            CaseSensitiveKeys     = (_parserOptions ?? Parsing.IniParserOptions.Default).CaseSensitiveKeys,
+            CaseSensitiveSections = (_parserOptions ?? Parsing.IniParserOptions.Default).CaseSensitiveSections,
+        };
+        return this;
+    }
+
+    /// <summary>
+    /// Enables line continuation: a backslash (<c>\</c>) at the end of a value line joins
+    /// the trimmed content of the following line into a single value.
+    /// </summary>
+    public IniConfigBuilder EnableLineContinuation()
+    {
+        _parserOptions = new Parsing.IniParserOptions
+        {
+            DuplicateKeyHandling  = (_parserOptions ?? Parsing.IniParserOptions.Default).DuplicateKeyHandling,
+            QuotedValues          = (_parserOptions ?? Parsing.IniParserOptions.Default).QuotedValues,
+            LineContinuation      = true,
+            EscapeSequences       = (_parserOptions ?? Parsing.IniParserOptions.Default).EscapeSequences,
+            CaseSensitiveKeys     = (_parserOptions ?? Parsing.IniParserOptions.Default).CaseSensitiveKeys,
+            CaseSensitiveSections = (_parserOptions ?? Parsing.IniParserOptions.Default).CaseSensitiveSections,
+        };
+        return this;
+    }
+
+    /// <summary>
+    /// Configures how duplicate keys within the same section are handled during parsing.
+    /// </summary>
+    /// <param name="handling">
+    /// <see cref="Parsing.DuplicateKeyHandling.LastWins"/> (default), 
+    /// <see cref="Parsing.DuplicateKeyHandling.FirstWins"/>, or
+    /// <see cref="Parsing.DuplicateKeyHandling.ThrowError"/>.
+    /// </param>
+    public IniConfigBuilder WithDuplicateKeyHandling(Parsing.DuplicateKeyHandling handling)
+    {
+        _parserOptions = new Parsing.IniParserOptions
+        {
+            DuplicateKeyHandling  = handling,
+            QuotedValues          = (_parserOptions ?? Parsing.IniParserOptions.Default).QuotedValues,
+            LineContinuation      = (_parserOptions ?? Parsing.IniParserOptions.Default).LineContinuation,
+            EscapeSequences       = (_parserOptions ?? Parsing.IniParserOptions.Default).EscapeSequences,
+            CaseSensitiveKeys     = (_parserOptions ?? Parsing.IniParserOptions.Default).CaseSensitiveKeys,
+            CaseSensitiveSections = (_parserOptions ?? Parsing.IniParserOptions.Default).CaseSensitiveSections,
+        };
+        return this;
+    }
+
     /// <summary>
     /// Registers an <see cref="IIniSection"/> instance under the explicit interface type
     /// <typeparamref name="T"/>. The generated concrete class must be passed; it will be
@@ -588,6 +716,7 @@ public sealed class IniConfigBuilder
         config.MetadataConfig = _metadataConfig;
         config.GlobalEmptyWhenNull = _globalEmptyWhenNull;
         config.AssignmentSeparator = _assignmentSeparator;
+        config.ParserOptions = _parserOptions ?? Parsing.IniParserOptions.Default;
 
         config.SearchPaths.AddRange(_searchPaths);
         config.DefaultFilePaths.AddRange(_defaultFilePaths);
