@@ -151,6 +151,108 @@ complete guide and precedence rules.
 
 ---
 
+## Configuring parser behaviour
+
+Use the dedicated fluent methods to control how the INI file is interpreted during
+load and reload.  These methods all configure an internal `IniParserOptions` instance
+that is forwarded to the parser on every file read.
+
+### Duplicate key handling
+
+```csharp
+using var config = IniConfigRegistry.ForFile("app.ini")
+    .AddSearchPath(".")
+    .WithDuplicateKeyHandling(DuplicateKeyHandling.FirstWins)
+    .RegisterSection<IAppSettings>(new AppSettingsImpl())
+    .Build();
+```
+
+| Method | Behaviour |
+|--------|-----------|
+| `.WithDuplicateKeyHandling(LastWins)` | Last definition wins **(default)** |
+| `.WithDuplicateKeyHandling(FirstWins)` | First definition is kept; later duplicates ignored |
+| `.WithDuplicateKeyHandling(ThrowError)` | Throws `InvalidOperationException` on any duplicate |
+
+### Quoted values
+
+```csharp
+using var config = IniConfigRegistry.ForFile("app.ini")
+    .AddSearchPath(".")
+    .EnableQuotedValues()     // key = "value" → value (quotes stripped)
+    .RegisterSection<IAppSettings>(new AppSettingsImpl())
+    .Build();
+```
+
+### Escape sequences
+
+```csharp
+using var config = IniConfigRegistry.ForFile("app.ini")
+    .AddSearchPath(".")
+    .EnableEscapeSequences()  // key = C:\\Path → C:\Path
+    .RegisterSection<IAppSettings>(new AppSettingsImpl())
+    .Build();
+```
+
+Decoded sequences: `\\`, `\n`, `\r`, `\t`, `\0`, `\"`, `\'`, `\a`, `\b`, `\xHH`.
+
+### Line continuation
+
+```csharp
+using var config = IniConfigRegistry.ForFile("app.ini")
+    .AddSearchPath(".")
+    .EnableLineContinuation()  // trailing \ joins the next line
+    .RegisterSection<IAppSettings>(new AppSettingsImpl())
+    .Build();
+```
+
+### Case-sensitive lookups
+
+```csharp
+using var config = IniConfigRegistry.ForFile("app.ini")
+    .AddSearchPath(".")
+    .CaseSensitiveKeys()       // AppName ≠ appname
+    .CaseSensitiveSections()   // [General] ≠ [GENERAL]
+    .RegisterSection<IAppSettings>(new AppSettingsImpl())
+    .Build();
+```
+
+### Combining all options
+
+```csharp
+using var config = IniConfigRegistry.ForFile("app.ini")
+    .AddSearchPath(".")
+    .EnableEscapeSequences()
+    .EnableQuotedValues()
+    .EnableLineContinuation()
+    .CaseSensitiveKeys()
+    .WithDuplicateKeyHandling(DuplicateKeyHandling.ThrowError)
+    .RegisterSection<IAppSettings>(new AppSettingsImpl())
+    .Build();
+```
+
+Alternatively, build an `IniParserOptions` object and supply it in one call:
+
+```csharp
+var opts = new IniParserOptions
+{
+    EscapeSequences      = true,
+    QuotedValues         = true,
+    CaseSensitiveKeys    = true,
+    DuplicateKeyHandling = DuplicateKeyHandling.ThrowError,
+};
+
+using var config = IniConfigRegistry.ForFile("app.ini")
+    .AddSearchPath(".")
+    .WithParserOptions(opts)
+    .RegisterSection<IAppSettings>(new AppSettingsImpl())
+    .Build();
+```
+
+See [[Parser-Options]] for the complete reference, including tables showing the exact
+effect of each option.
+
+---
+
 ## Deferred loading for plugin scenarios
 
 When plugins need to register their own INI sections before the file is read, use
@@ -190,3 +292,4 @@ config.Load();
 - [[Async-Support]] — `BuildAsync()` and other async APIs
 - [[Runtime-Only-and-Constants]] — constants-file protection and `IsConstant(key)`
 - [[Empty-When-Null]] — `EmptyWhenNull()` builder method and property/section-level equivalents
+- [[Parser-Options]] — `IniParserOptions` — configurable duplicate-key handling, quoted values, escape sequences, line continuation, and case sensitivity
