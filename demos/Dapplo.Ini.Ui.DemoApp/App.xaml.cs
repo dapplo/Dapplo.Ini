@@ -61,7 +61,6 @@ public partial class App : Application
         _config = IniConfigRegistry
             .ForFile("settings.ini")
             .AddSearchPath(settingsDir)
-            .SetWritablePath(settingsDir)
             .RegisterSection(_general)
             .RegisterSection(_network)
             .RegisterSection(_appearance)
