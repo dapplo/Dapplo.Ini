@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- The UI framework targets modern .NET only; UI stacks (WPF, Avalonia) require .NET 6+. -->
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Dapplo.Ini.Ui</RootNamespace>
+    <AssemblyName>Dapplo.Ini.Ui</AssemblyName>
+    <Description>UI configuration framework attributes and interfaces for Dapplo.Ini – enables automatically-generated settings UIs from annotated configuration interfaces.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dapplo.Ini\Dapplo.Ini.csproj" />
+  </ItemGroup>
+
+</Project>

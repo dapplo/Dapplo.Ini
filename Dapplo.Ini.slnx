@@ -2,9 +2,11 @@
   <Folder Name="/src/">
     <Project Path="src/Dapplo.Ini.Generator/Dapplo.Ini.Generator.csproj" />
     <Project Path="src/Dapplo.Ini/Dapplo.Ini.csproj" />
+    <Project Path="src/Dapplo.Ini.Ui/Dapplo.Ini.Ui.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Dapplo.Ini.Tests/Dapplo.Ini.Tests.csproj" />
     <Project Path="tests/Dapplo.Ini.Internationalization.Tests/Dapplo.Ini.Internationalization.Tests.csproj" />
+    <Project Path="tests/Dapplo.Ini.Ui.Tests/Dapplo.Ini.Ui.Tests.csproj" />
   </Folder>
 </Solution>
