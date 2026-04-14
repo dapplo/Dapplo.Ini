@@ -3,6 +3,7 @@
     <Project Path="src/Dapplo.Ini.Generator/Dapplo.Ini.Generator.csproj" />
     <Project Path="src/Dapplo.Ini/Dapplo.Ini.csproj" />
     <Project Path="src/Dapplo.Ini.Ui/Dapplo.Ini.Ui.csproj" />
+    <Project Path="src/Dapplo.Ini.Ui.Generator/Dapplo.Ini.Ui.Generator.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Dapplo.Ini.Tests/Dapplo.Ini.Tests.csproj" />
