@@ -10,4 +10,7 @@
     <Project Path="tests/Dapplo.Ini.Internationalization.Tests/Dapplo.Ini.Internationalization.Tests.csproj" />
     <Project Path="tests/Dapplo.Ini.Ui.Tests/Dapplo.Ini.Ui.Tests.csproj" />
   </Folder>
+  <Folder Name="/demos/">
+    <Project Path="demos/Dapplo.Ini.Ui.DemoApp/Dapplo.Ini.Ui.DemoApp.csproj" />
+  </Folder>
 </Solution>
