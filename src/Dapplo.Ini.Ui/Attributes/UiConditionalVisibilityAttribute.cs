@@ -53,7 +53,7 @@ public sealed class UiConditionalVisibilityAttribute : Attribute
 
     /// <summary>
     /// When <c>true</c>, the visibility logic is inverted: the decorated property is hidden
-    /// when <paramref name="conditionProperty"/> is <c>true</c> and visible when it is
+    /// when <see cref="ConditionProperty"/> is <c>true</c> and visible when it is
     /// <c>false</c>.
     /// </summary>
     public bool Invert { get; set; }

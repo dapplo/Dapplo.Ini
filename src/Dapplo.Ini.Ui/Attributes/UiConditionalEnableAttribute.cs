@@ -60,7 +60,7 @@ public sealed class UiConditionalEnableAttribute : Attribute
 
     /// <summary>
     /// When <c>true</c>, the enable logic is inverted: the control is disabled when
-    /// <paramref name="conditionProperty"/> is <c>true</c> and enabled when it is
+    /// <see cref="ConditionProperty"/> is <c>true</c> and enabled when it is
     /// <c>false</c>.
     /// </summary>
     public bool Invert { get; set; }

@@ -112,7 +112,7 @@ public static class UiMetadataReader
 
         // Derive the default title from the interface name (strip leading 'I').
         var defaultTitle = sectionType.Name.StartsWith("I", StringComparison.Ordinal) && sectionType.Name.Length > 1
-            ? sectionType.Name.Substring(1)
+            ? sectionType.Name[1..]
             : sectionType.Name;
 
         var sectionDefaultChangeMode = changeModeAttr?.ChangeMode ?? UiChangeMode.Immediate;
