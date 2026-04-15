@@ -53,13 +53,13 @@
                 <Button x:Name="MinimizeButton"
                         Style="{DynamicResource TitleBarButtonStyle}"
                         Content="&#x2013;"
-                        ToolTip="Minimise"
+                        ToolTip="Minimize"
                         Click="MinimizeButton_Click"/>
 
                 <Button x:Name="MaximizeRestoreButton"
                         Style="{DynamicResource TitleBarButtonStyle}"
                         Content="&#x25A1;"
-                        ToolTip="Maximise"
+                        ToolTip="Maximize"
                         Click="MaximizeRestoreButton_Click"/>
 
                 <Button x:Name="CloseButton"
@@ -158,7 +158,7 @@
                                    Foreground="{DynamicResource AppForeground}"
                                    Margin="0,4"/>
 
-                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Accent colour"
+                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Accent color"
                                    Foreground="{DynamicResource AppSubtext}"
                                    Margin="0,4,20,4"/>
                         <TextBlock Grid.Row="5" Grid.Column="1" x:Name="AccentColorValue"

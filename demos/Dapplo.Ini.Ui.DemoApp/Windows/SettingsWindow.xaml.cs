@@ -94,7 +94,7 @@ public partial class SettingsWindow : Window
     private void OkButton_Click(object sender, RoutedEventArgs e)
     {
         _manager.Apply();
-        _sessionEnded = true;   // session already concluded — prevent rollback in OnClosing
+        EndSessionOnce();   // properly terminates the session (no rollback — nothing pending after Apply)
         DialogResult = true;    // signals the caller that the user confirmed
     }
 
