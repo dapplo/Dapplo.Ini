@@ -5,6 +5,7 @@ using System.IO;
 using System.Windows;
 using Dapplo.Ini;
 using Dapplo.Ini.Ui.DemoApp.Configuration;
+using Dapplo.Ini.Ui.DemoApp.Theme;
 
 namespace Dapplo.Ini.Ui.DemoApp;
 
@@ -68,6 +69,18 @@ public partial class App : Application
 
         // Load existing settings from disk (if the file exists); missing file is fine.
         _config.Load();
+
+        // Apply the saved theme before showing any window, so the UI is never shown
+        // in the wrong theme even for a single frame.
+        ThemeManager.Apply(_appearance.DarkMode);
+
+        // Switch theme immediately whenever the DarkMode toggle changes — the settings
+        // dialog is still open, so the user can preview the change live.
+        _appearance.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(IAppearanceSettings.DarkMode))
+                ThemeManager.Apply(_appearance.DarkMode);
+        };
 
         var mainWindow = new MainWindow(_general, _network, _appearance);
         MainWindow = mainWindow;

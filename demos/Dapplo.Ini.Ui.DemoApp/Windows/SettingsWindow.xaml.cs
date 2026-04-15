@@ -35,6 +35,10 @@ public partial class SettingsWindow : Window
 {
     private readonly UiSettingsManager _manager = new();
 
+    // Guards against EndSession() being called twice when OK/Cancel sets DialogResult
+    // (which triggers OnClosing) after already ending the session explicitly.
+    private bool _sessionEnded;
+
     /// <summary>
     /// Initialises the settings window and builds all tabs from the provided pages.
     /// </summary>
@@ -75,17 +79,28 @@ public partial class SettingsWindow : Window
         _manager.BeginSession();
     }
 
+    // ── Session helpers ────────────────────────────────────────────────────────
+
+    /// <summary>Ends the session at most once; safe to call from both button handlers and OnClosing.</summary>
+    private void EndSessionOnce()
+    {
+        if (_sessionEnded) return;
+        _sessionEnded = true;
+        _manager.EndSession();
+    }
+
     // ── Event handlers ────────────────────────────────────────────────────────
 
     private void OkButton_Click(object sender, RoutedEventArgs e)
     {
         _manager.Apply();
-        DialogResult = true;   // signals the caller that the user confirmed
+        _sessionEnded = true;   // session already concluded — prevent rollback in OnClosing
+        DialogResult = true;    // signals the caller that the user confirmed
     }
 
     private void CancelButton_Click(object sender, RoutedEventArgs e)
     {
-        _manager.EndSession();  // auto-rolls back pending changes
+        EndSessionOnce();       // rolls back pending changes
         DialogResult = false;
     }
 
@@ -95,10 +110,16 @@ public partial class SettingsWindow : Window
         // Keep the window open so the user can continue editing.
     }
 
-    /// <summary>Roll back on window close (X button, Alt+F4).</summary>
+    /// <summary>
+    /// Titlebar × close button — treated as Cancel (rolls back pending changes).
+    /// </summary>
+    private void TitleBarCloseButton_Click(object sender, RoutedEventArgs e)
+        => Close();
+
+    /// <summary>Roll back on window close (titlebar ×, Alt+F4) unless already handled.</summary>
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
         base.OnClosing(e);
-        _manager.EndSession();
+        EndSessionOnce();
     }
 }

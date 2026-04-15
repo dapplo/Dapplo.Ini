@@ -35,7 +35,25 @@ public partial class MainWindow : Window
         RefreshDisplay();
     }
 
-    // ── Event handlers ────────────────────────────────────────────────────────
+    // ── Titlebar window-chrome button handlers ────────────────────────────────
+
+    private void MinimizeButton_Click(object sender, RoutedEventArgs e)
+        => WindowState = WindowState.Minimized;
+
+    private void MaximizeRestoreButton_Click(object sender, RoutedEventArgs e)
+    {
+        WindowState = WindowState == WindowState.Maximized
+            ? WindowState.Normal
+            : WindowState.Maximized;
+
+        // Update the glyph: □ when normal, ❐ when maximised.
+        MaximizeRestoreButton.Content = WindowState == WindowState.Maximized ? "\u2750" : "\u25A1";
+    }
+
+    private void CloseButton_Click(object sender, RoutedEventArgs e)
+        => Close();
+
+    // ── Settings dialog ────────────────────────────────────────────────────────
 
     private void OpenSettingsButton_Click(object sender, RoutedEventArgs e)
     {
