@@ -74,6 +74,12 @@ public sealed class UiSectionGenerator : IIncrementalGenerator
         public string Name            { get; set; } = "";
         public string TypeFullName    { get; set; } = "";
         public bool   IsValueType     { get; set; }
+        // Reflection-free accessor helpers (set in GetModel)
+        public string TypeGlobalName        { get; set; } = "";   // e.g. "global::System.Boolean"
+        public bool   IsEnum                { get; set; }
+        public bool   IsNullable            { get; set; }
+        public string UnderlyingGlobalName  { get; set; } = "";   // underlying of Nullable<T>, or same as TypeGlobalName
+        public List<string>? EnumMemberNames { get; set; }
         // UiControl
         public string? ControlTypeLiteral { get; set; }          // e.g. "Dapplo.Ini.Ui.Enums.UiControlType.Slider"
         public string? CtrlMinimum    { get; set; }
@@ -110,6 +116,7 @@ public sealed class UiSectionGenerator : IIncrementalGenerator
     {
         public string Namespace            { get; set; } = "";
         public string InterfaceName        { get; set; } = "";
+        public string InterfaceGlobalName  { get; set; } = "";   // e.g. "global::My.Ns.INetworkSettings"
         public string DescriptorClassName  { get; set; } = "";
         // UiPage
         public string? PageTitle           { get; set; }
@@ -216,6 +223,34 @@ public sealed class UiSectionGenerator : IIncrementalGenerator
                 TypeFullName = member.Type.ToDisplayString(),
                 IsValueType  = member.Type.IsValueType,
             };
+
+            // ── Reflection-free accessor metadata ─────────────────────────────
+            {
+                var typeSymbol = member.Type;
+                bool isNullable = false;
+                ITypeSymbol underlying = typeSymbol;
+
+                if (typeSymbol is INamedTypeSymbol namedType && namedType.IsGenericType
+                    && namedType.OriginalDefinition.ToDisplayString() == "System.Nullable<T>")
+                {
+                    isNullable   = true;
+                    underlying   = namedType.TypeArguments[0];
+                }
+
+                pm.TypeGlobalName       = typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                pm.IsNullable           = isNullable;
+                pm.UnderlyingGlobalName = underlying.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                pm.IsEnum               = underlying.TypeKind == TypeKind.Enum;
+
+                if (pm.IsEnum)
+                {
+                    pm.EnumMemberNames = underlying.GetMembers()
+                        .OfType<IFieldSymbol>()
+                        .Where(f => f.IsConst && f.HasConstantValue)
+                        .Select(f => f.Name)
+                        .ToList();
+                }
+            }
 
             // [UiControl]
             var ctrlAttr = member.GetAttributes()
@@ -328,16 +363,17 @@ public sealed class UiSectionGenerator : IIncrementalGenerator
 
         return new SectionUiModel
         {
-            Namespace           = ns,
-            InterfaceName       = interfaceName,
-            DescriptorClassName = $"{strippedName}UiDescriptor",
-            PageTitle           = pageTitle,
-            PageCategory        = pageCategory,
-            PageOrder           = pageOrder,
-            PageIcon            = pageIcon,
-            SectionChangeMode   = sectionChangeMode,
-            InterfaceLabelKey   = interfaceLabelKey,
-            Properties          = properties,
+            Namespace            = ns,
+            InterfaceName        = interfaceName,
+            InterfaceGlobalName  = symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+            DescriptorClassName  = $"{strippedName}UiDescriptor",
+            PageTitle            = pageTitle,
+            PageCategory         = pageCategory,
+            PageOrder            = pageOrder,
+            PageIcon             = pageIcon,
+            SectionChangeMode    = sectionChangeMode,
+            InterfaceLabelKey    = interfaceLabelKey,
+            Properties           = properties,
         };
     }
 
@@ -423,6 +459,53 @@ public sealed class UiSectionGenerator : IIncrementalGenerator
     private static string EscapeString(string? s) =>
         s == null ? "" : s.Replace("\\", "\\\\").Replace("\"", "\\\"");
 
+    /// <summary>
+    /// Builds the setter lambda body for <c>Setter = static (section, v) =&gt; …</c>.
+    /// The lambda performs the same coercions as <c>WpfSettingsRenderer.SetValue</c>
+    /// but without any call-site <c>PropertyInfo</c> usage.
+    /// </summary>
+    private static string BuildSetterExpression(PropertyUiModel pm, string interfaceGlobalName)
+    {
+        var cast     = $"(({interfaceGlobalName})section).{pm.Name}";
+        var uGlobal  = pm.UnderlyingGlobalName;
+        var tGlobal  = pm.TypeGlobalName;
+
+        // bool (possibly nullable)
+        if (uGlobal == "global::System.Boolean" || uGlobal == "bool")
+        {
+            const string parse = "global::System.Boolean.Parse(global::System.Convert.ToString(v) ?? \"false\")";
+            if (pm.IsNullable)
+                return $"static (section, v) => {cast} = v == null ? (bool?)null : v is bool __b ? __b : {parse}";
+            return $"static (section, v) => {cast} = v is bool __b ? __b : {parse}";
+        }
+
+        // string — use Convert.ToString to avoid nullable mismatch warnings between
+        // string and string? when #nullable enable is active in the generated file.
+        if (uGlobal == "global::System.String" || uGlobal == "string")
+            return $"static (section, v) => {cast} = global::System.Convert.ToString(v) ?? string.Empty";
+
+        // enum
+        if (pm.IsEnum)
+        {
+            var enumParse = $"({uGlobal})global::System.Enum.Parse(typeof({uGlobal}), global::System.Convert.ToString(v)!)";
+            if (pm.IsNullable)
+                return $"static (section, v) => {cast} = v == null ? ({uGlobal}?)null : v is {uGlobal} __e ? __e : {enumParse}";
+            return $"static (section, v) => {cast} = v is {uGlobal} __e ? __e : {enumParse}";
+        }
+
+        // numeric / other value type
+        if (pm.IsValueType)
+        {
+            var numConvert = $"({uGlobal})global::System.Convert.ChangeType(v!, typeof({uGlobal}))";
+            if (pm.IsNullable)
+                return $"static (section, v) => {cast} = v == null ? ({uGlobal}?)null : v is {uGlobal} __n ? __n : {numConvert}";
+            return $"static (section, v) => {cast} = v is {uGlobal} __n ? __n : {numConvert}";
+        }
+
+        // fallback: reference types — cast directly
+        return $"static (section, v) => {cast} = ({tGlobal})v!";
+    }
+
     // ── Code emission ─────────────────────────────────────────────────────────
 
     private static string Emit(SectionUiModel m)
@@ -499,6 +582,15 @@ public sealed class UiSectionGenerator : IIncrementalGenerator
                 sb.AppendLine($"{i4}            EnableConditionProperty = \"{EscapeString(p.EnableConditionProperty)}\",");
                 if (p.InvertEnable)
                     sb.AppendLine($"{i4}            InvertEnable = true,");
+            }
+            // ── Reflection-free accessors ─────────────────────────────────────
+            sb.AppendLine($"{i4}            PropertyType = typeof({p.TypeGlobalName}),");
+            sb.AppendLine($"{i4}            Getter = static section => (({m.InterfaceGlobalName})section).{p.Name},");
+            sb.AppendLine($"{i4}            Setter = {BuildSetterExpression(p, m.InterfaceGlobalName)},");
+            if (p.EnumMemberNames != null && p.EnumMemberNames.Count > 0)
+            {
+                var names = string.Join(", ", p.EnumMemberNames.Select(n => $"\"{EscapeString(n)}\""));
+                sb.AppendLine($"{i4}            EnumNames = new[] {{ {names} }},");
             }
             sb.AppendLine($"{i4}        }},");
         }

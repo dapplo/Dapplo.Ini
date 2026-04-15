@@ -2,7 +2,6 @@
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
 using System.ComponentModel;
-using System.Reflection;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -44,8 +43,10 @@ namespace Dapplo.Ini.Ui.DemoApp.Renderer;
 ///   </item>
 ///   <item>
 ///     <description>
-///       Value changes are written back to the section via reflection.  When the section
-///       implements <see cref="INotifyPropertyChanged"/> the renderer subscribes to
+///       Value changes are written back to the section via the compiled
+///       <see cref="UiPropertyMetadata.Setter"/> delegate — no <c>PropertyInfo</c>
+///       reflection at the call site.  When the section implements
+///       <see cref="INotifyPropertyChanged"/> the renderer subscribes to
 ///       <c>PropertyChanged</c> and re-evaluates all conditional visibility / enable
 ///       rules automatically.
 ///     </description>
@@ -55,36 +56,6 @@ namespace Dapplo.Ini.Ui.DemoApp.Renderer;
 /// </remarks>
 public static class WpfSettingsRenderer
 {
-    // ── Reflection helpers ────────────────────────────────────────────────────
-
-    private static PropertyInfo? GetProp(UiPageMetadata page, string name)
-        => page.SectionType.GetProperty(name);
-
-    private static object? GetValue(UiPageMetadata page, IIniSection section, string name)
-        => GetProp(page, name)?.GetValue(section);
-
-    /// <summary>
-    /// Converts <paramref name="rawValue"/> to the target property type and writes it
-    /// back to the section.  Conversion errors are silently swallowed in this demo.
-    /// </summary>
-    private static void SetValue(UiPageMetadata page, IIniSection section, string name, object? rawValue)
-    {
-        var pi = GetProp(page, name);
-        if (pi == null) return;
-        try
-        {
-            var target = Nullable.GetUnderlyingType(pi.PropertyType) ?? pi.PropertyType;
-            object? converted = rawValue == null ? null
-                : target.IsEnum ? Enum.Parse(target, rawValue.ToString()!)
-                : Convert.ChangeType(rawValue, target);
-            pi.SetValue(section, converted);
-        }
-        catch
-        {
-            // Swallow conversion failures gracefully in the demo.
-        }
-    }
-
     // ── Public API ────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -110,6 +81,12 @@ public static class WpfSettingsRenderer
 
         var outerPanel = new StackPanel { Margin = new Thickness(12) };
         scrollViewer.Content = outerPanel;
+
+        // Build a name→getter lookup for fast condition-property resolution.
+        // Both source-generated and UiMetadataReader-created metadata always populate Getter.
+        var gettersByName = page.Properties
+            .Where(p => p.Getter != null)
+            .ToDictionary(p => p.PropertyName, p => p.Getter!);
 
         // Collect every (row element, metadata) pair so that condition evaluation can
         // show/hide or enable/disable them later.
@@ -147,11 +124,11 @@ public static class WpfSettingsRenderer
             {
                 // Capture for the closure
                 var capturedRows = rows;
-                var capturedPage = page;
+                var capturedGetters = gettersByName;
                 var capturedSection = section;
-                void Reevaluate() => EvaluateAllConditions(capturedRows, capturedPage, capturedSection);
+                void Reevaluate() => EvaluateAllConditions(capturedRows, capturedGetters, capturedSection);
 
-                var row = BuildRow(prop, page, section, Reevaluate);
+                var row = BuildRow(prop, section, Reevaluate);
                 targetPanel.Children.Add(row);
                 rows.Add((row, prop));
             }
@@ -160,10 +137,10 @@ public static class WpfSettingsRenderer
         // Subscribe to section's INotifyPropertyChanged (if supported) so conditions
         // are re-evaluated reactively when the section fires PropertyChanged.
         if (section is INotifyPropertyChanged npc)
-            npc.PropertyChanged += (_, _) => EvaluateAllConditions(rows, page, section);
+            npc.PropertyChanged += (_, _) => EvaluateAllConditions(rows, gettersByName, section);
 
         // Run initial condition pass so controls start in the correct visible/enabled state.
-        EvaluateAllConditions(rows, page, section);
+        EvaluateAllConditions(rows, gettersByName, section);
 
         return scrollViewer;
     }
@@ -172,7 +149,7 @@ public static class WpfSettingsRenderer
 
     private static void EvaluateAllConditions(
         List<(FrameworkElement Element, UiPropertyMetadata Meta)> rows,
-        UiPageMetadata page,
+        Dictionary<string, Func<IIniSection, object?>> gettersByName,
         IIniSection section)
     {
         foreach (var (element, meta) in rows)
@@ -180,7 +157,12 @@ public static class WpfSettingsRenderer
             // ── Visibility condition ──────────────────────────────────────────
             if (meta.VisibilityConditionProperty != null)
             {
-                var condVal = GetValue(page, section, meta.VisibilityConditionProperty) is true;
+                bool condVal = false;
+                if (gettersByName.TryGetValue(meta.VisibilityConditionProperty, out var getter))
+                {
+                    try { condVal = getter(section) is true; }
+                    catch { /* getter failure → treat condition as false (control stays hidden) */ }
+                }
                 if (meta.InvertVisibility) condVal = !condVal;
                 element.Visibility = condVal ? Visibility.Visible : Visibility.Collapsed;
             }
@@ -188,7 +170,12 @@ public static class WpfSettingsRenderer
             // ── Enable condition ──────────────────────────────────────────────
             if (meta.EnableConditionProperty != null)
             {
-                var condVal = GetValue(page, section, meta.EnableConditionProperty) is true;
+                bool condVal = false;
+                if (gettersByName.TryGetValue(meta.EnableConditionProperty, out var getter))
+                {
+                    try { condVal = getter(section) is true; }
+                    catch { /* getter failure → treat condition as false (control stays disabled) */ }
+                }
                 if (meta.InvertEnable) condVal = !condVal;
                 // Disable all interactive children in the row (skip label).
                 SetChildrenEnabled(element, condVal);
@@ -215,13 +202,11 @@ public static class WpfSettingsRenderer
 
     private static FrameworkElement BuildRow(
         UiPropertyMetadata meta,
-        UiPageMetadata page,
         IIniSection section,
         Action reevaluate)
     {
         var labelText = meta.LabelKey != null ? SplitCamelCase(meta.LabelKey) : SplitCamelCase(meta.PropertyName);
-        var currentValue = GetValue(page, section, meta.PropertyName);
-        var propInfo = GetProp(page, meta.PropertyName);
+        var currentValue = meta.Getter?.Invoke(section);
 
         // CheckBox is self-labelled: no extra label column needed.
         if (meta.ControlType == UiControlType.CheckBox)
@@ -232,16 +217,8 @@ public static class WpfSettingsRenderer
                 IsChecked = currentValue is true,
                 Margin = new Thickness(0, 6, 0, 0),
             };
-            cb.Checked += (_, _) =>
-            {
-                SetValue(page, section, meta.PropertyName, true);
-                reevaluate();
-            };
-            cb.Unchecked += (_, _) =>
-            {
-                SetValue(page, section, meta.PropertyName, false);
-                reevaluate();
-            };
+            cb.Checked   += (_, _) => { meta.Setter?.Invoke(section, true);  reevaluate(); };
+            cb.Unchecked += (_, _) => { meta.Setter?.Invoke(section, false); reevaluate(); };
             return cb;
         }
 
@@ -262,12 +239,12 @@ public static class WpfSettingsRenderer
 
         FrameworkElement control = meta.ControlType switch
         {
-            UiControlType.DropDown     => BuildComboBox(meta, propInfo, currentValue, page, section, reevaluate),
-            UiControlType.Slider       => BuildSlider(meta, currentValue, page, section, reevaluate),
-            UiControlType.UpDown       => BuildUpDown(meta, currentValue, page, section, reevaluate),
-            UiControlType.FolderPicker => BuildFolderPicker(meta, currentValue, page, section, reevaluate),
-            UiControlType.FilePicker   => BuildFilePicker(meta, currentValue, page, section, reevaluate),
-            _                          => BuildTextBox(meta, currentValue, page, section, reevaluate),
+            UiControlType.DropDown     => BuildComboBox(meta, currentValue, section, reevaluate),
+            UiControlType.Slider       => BuildSlider(meta, currentValue, section, reevaluate),
+            UiControlType.UpDown       => BuildUpDown(meta, currentValue, section, reevaluate),
+            UiControlType.FolderPicker => BuildFolderPicker(meta, currentValue, section, reevaluate),
+            UiControlType.FilePicker   => BuildFilePicker(meta, currentValue, section, reevaluate),
+            _                          => BuildTextBox(meta, currentValue, section, reevaluate),
         };
         Grid.SetColumn(control, 1);
         grid.Children.Add(control);
@@ -279,7 +256,7 @@ public static class WpfSettingsRenderer
 
     private static TextBox BuildTextBox(
         UiPropertyMetadata meta, object? value,
-        UiPageMetadata page, IIniSection section, Action reevaluate)
+        IIniSection section, Action reevaluate)
     {
         var tb = new TextBox
         {
@@ -291,21 +268,22 @@ public static class WpfSettingsRenderer
 
         tb.TextChanged += (_, _) =>
         {
-            SetValue(page, section, meta.PropertyName, tb.Text);
+            meta.Setter?.Invoke(section, tb.Text);
             reevaluate();
         };
         return tb;
     }
 
     private static ComboBox BuildComboBox(
-        UiPropertyMetadata meta, PropertyInfo? propInfo, object? value,
-        UiPageMetadata page, IIniSection section, Action reevaluate)
+        UiPropertyMetadata meta, object? value,
+        IIniSection section, Action reevaluate)
     {
         var cb = new ComboBox { VerticalAlignment = VerticalAlignment.Center };
 
-        // Automatically populate items from enum type.
-        if (propInfo?.PropertyType.IsEnum == true)
-            cb.ItemsSource = Enum.GetNames(propInfo.PropertyType);
+        // EnumNames is populated at compile time by the source generator, or at
+        // startup by UiMetadataReader — no PropertyInfo reflection needed here.
+        if (meta.EnumNames != null)
+            cb.ItemsSource = meta.EnumNames;
 
         cb.SelectedItem = value?.ToString();
 
@@ -313,7 +291,7 @@ public static class WpfSettingsRenderer
         {
             if (cb.SelectedItem is string selected)
             {
-                SetValue(page, section, meta.PropertyName, selected);
+                meta.Setter?.Invoke(section, selected);
                 reevaluate();
             }
         };
@@ -322,7 +300,7 @@ public static class WpfSettingsRenderer
 
     private static FrameworkElement BuildSlider(
         UiPropertyMetadata meta, object? value,
-        UiPageMetadata page, IIniSection section, Action reevaluate)
+        IIniSection section, Action reevaluate)
     {
         var ctrl = meta.ControlAttribute;
         double min  = ctrl?.Minimum ?? 0;
@@ -356,7 +334,7 @@ public static class WpfSettingsRenderer
         {
             var newVal = (int)Math.Round(e.NewValue, ctrl?.DecimalPlaces ?? 0);
             valueDisplay.Text = FormatValue(newVal, ctrl?.Unit);
-            SetValue(page, section, meta.PropertyName, newVal);
+            meta.Setter?.Invoke(section, newVal);
             reevaluate();
         };
 
@@ -367,7 +345,7 @@ public static class WpfSettingsRenderer
 
     private static FrameworkElement BuildUpDown(
         UiPropertyMetadata meta, object? value,
-        UiPageMetadata page, IIniSection section, Action reevaluate)
+        IIniSection section, Action reevaluate)
     {
         var ctrl = meta.ControlAttribute;
         double min  = ctrl?.Minimum ?? double.MinValue;
@@ -394,7 +372,7 @@ public static class WpfSettingsRenderer
         {
             if (double.TryParse(tb.Text, out var v))
             {
-                SetValue(page, section, meta.PropertyName, (int)Math.Clamp(v, min, max));
+                meta.Setter?.Invoke(section, (int)Math.Clamp(v, min, max));
                 reevaluate();
             }
         }
@@ -429,13 +407,13 @@ public static class WpfSettingsRenderer
 
     private static FrameworkElement BuildFolderPicker(
         UiPropertyMetadata meta, object? value,
-        UiPageMetadata page, IIniSection section, Action reevaluate)
+        IIniSection section, Action reevaluate)
     {
         var panel = new StackPanel { Orientation = Orientation.Horizontal };
         var tb = new TextBox { Text = value?.ToString() ?? "", Width = 200, VerticalAlignment = VerticalAlignment.Center };
         var btn = new Button { Content = "Browse…", Margin = new Thickness(6, 0, 0, 0) };
 
-        tb.TextChanged += (_, _) => { SetValue(page, section, meta.PropertyName, tb.Text); reevaluate(); };
+        tb.TextChanged += (_, _) => { meta.Setter?.Invoke(section, tb.Text); reevaluate(); };
 
         btn.Click += (_, _) =>
         {
@@ -455,13 +433,13 @@ public static class WpfSettingsRenderer
 
     private static FrameworkElement BuildFilePicker(
         UiPropertyMetadata meta, object? value,
-        UiPageMetadata page, IIniSection section, Action reevaluate)
+        IIniSection section, Action reevaluate)
     {
         var panel = new StackPanel { Orientation = Orientation.Horizontal };
         var tb = new TextBox { Text = value?.ToString() ?? "", Width = 200, VerticalAlignment = VerticalAlignment.Center };
         var btn = new Button { Content = "Browse…", Margin = new Thickness(6, 0, 0, 0) };
 
-        tb.TextChanged += (_, _) => { SetValue(page, section, meta.PropertyName, tb.Text); reevaluate(); };
+        tb.TextChanged += (_, _) => { meta.Setter?.Invoke(section, tb.Text); reevaluate(); };
 
         btn.Click += (_, _) =>
         {

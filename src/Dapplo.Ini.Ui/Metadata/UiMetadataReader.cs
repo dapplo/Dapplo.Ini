@@ -2,6 +2,7 @@
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
 using System.Reflection;
+using Dapplo.Ini.Interfaces;
 using Dapplo.Ini.Ui.Attributes;
 using Dapplo.Ini.Ui.Enums;
 
@@ -50,6 +51,45 @@ public sealed class UiPropertyMetadata
 
     /// <summary>Gets whether the enable condition is inverted.</summary>
     public bool InvertEnable { get; init; }
+
+    // ── Reflection-free accessors ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Gets the CLR <see cref="Type"/> of this property.
+    /// Set by the source generator (<c>typeof(T)</c>) or by
+    /// <see cref="UiMetadataReader"/> at runtime.
+    /// </summary>
+    public Type? PropertyType { get; init; }
+
+    /// <summary>
+    /// Gets a compiled getter that reads this property's value from the section
+    /// without calling <c>PropertyInfo.GetValue</c> at the call site.
+    /// Source-generated descriptors always supply this delegate.
+    /// <see cref="UiMetadataReader"/>-created descriptors also supply it, but
+    /// the reflection is hidden inside the lambda closure.
+    /// </summary>
+    public Func<IIniSection, object?>? Getter { get; init; }
+
+    /// <summary>
+    /// Gets a compiled setter that writes an untyped value to this property
+    /// without calling <c>PropertyInfo.SetValue</c> at the call site.
+    /// The setter performs the most common implicit conversions:
+    /// string → enum via <see cref="Enum.Parse(Type, string)"/>,
+    /// numeric coercion via <see cref="Convert.ChangeType(object, Type)"/>.
+    /// Source-generated descriptors always supply this delegate.
+    /// <see cref="UiMetadataReader"/>-created descriptors also supply it, but
+    /// the reflection is hidden inside the lambda closure.
+    /// </summary>
+    public Action<IIniSection, object?>? Setter { get; init; }
+
+    /// <summary>
+    /// Gets the names of the enum members when <see cref="ControlType"/> is
+    /// <see cref="UiControlType.DropDown"/>, or <c>null</c> for non-enum types.
+    /// Source-generated descriptors emit the member names as a compile-time
+    /// string array.  <see cref="UiMetadataReader"/> populates this via
+    /// <see cref="Enum.GetNames(Type)"/> at startup.
+    /// </summary>
+    public string[]? EnumNames { get; init; }
 }
 
 /// <summary>
@@ -130,6 +170,15 @@ public static class UiMetadataReader
 
             var controlType = controlAttr?.ControlType ?? InferControlType(prop.PropertyType);
 
+            // Pre-compute the enum names and hide all subsequent reflection inside the
+            // getter/setter closures so renderers don't need to use PropertyInfo directly.
+            var underlying = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+            var enumNames = underlying.IsEnum ? Enum.GetNames(underlying) : null;
+
+            // Capture prop in a local so each closure gets its own copy.
+            var capturedProp = prop;
+            var capturedUnderlying = underlying;
+
             props.Add(new UiPropertyMetadata
             {
                 PropertyName = prop.Name,
@@ -145,6 +194,30 @@ public static class UiMetadataReader
                 InvertVisibility = visibilityAttr?.Invert ?? false,
                 EnableConditionProperty = enableAttr?.ConditionProperty,
                 InvertEnable = enableAttr?.Invert ?? false,
+                // Reflection-free accessor API: reflection is hidden inside these lambdas.
+                PropertyType = prop.PropertyType,
+                EnumNames = enumNames,
+                Getter = section =>
+                {
+                    try { return capturedProp.GetValue(section); }
+                    catch { return null; }
+                },
+                Setter = (section, rawValue) =>
+                {
+                    try
+                    {
+                        object? converted = rawValue == null ? null
+                            : capturedUnderlying.IsEnum
+                                ? Enum.Parse(capturedUnderlying, rawValue.ToString()!)
+                                : Convert.ChangeType(rawValue, capturedUnderlying);
+                        capturedProp.SetValue(section, converted);
+                    }
+                    catch
+                    {
+                        // Swallow conversion failures — the UI is responsible for
+                        // supplying valid values; the fallback keeps the app stable.
+                    }
+                },
             });
         }
 
