@@ -85,12 +85,12 @@ public static class IniFileParser
                 continue;
             }
 
-            // Key=value pair
-            var equalsIndex = trimmed.IndexOf('=');
-            if (equalsIndex > 0)
+            // Key=value pair (assignment delimiter is configurable, defaults to '=' and ':')
+            var assignmentIndex = FindAssignmentIndex(trimmed, options.AssignmentDelimiters);
+            if (assignmentIndex > 0)
             {
-                var key   = trimmed.Slice(0, equalsIndex).TrimEnd().ToString();
-                var value = trimmed.Slice(equalsIndex + 1).TrimStart().ToString();
+                var key   = trimmed.Slice(0, assignmentIndex).TrimEnd().ToString();
+                var value = trimmed.Slice(assignmentIndex + 1).TrimStart().ToString();
 
                 // Line continuation: if value ends with '\', join the next line(s)
                 if (options.LineContinuation)
@@ -315,4 +315,19 @@ public static class IniFileParser
 
     private static bool IsHexDigit(char c)
         => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+
+    private static int FindAssignmentIndex(ReadOnlySpan<char> line, string delimiters)
+    {
+        if (string.IsNullOrEmpty(delimiters))
+            delimiters = "=:";
+
+        var result = -1;
+        foreach (var delimiter in delimiters)
+        {
+            var index = line.IndexOf(delimiter);
+            if (index > 0 && (result < 0 || index < result))
+                result = index;
+        }
+        return result;
+    }
 }

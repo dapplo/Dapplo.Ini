@@ -107,6 +107,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         public bool IgnoreDefaults { get; set; }
         // True when [IniValue(IgnoreConstants=true)] — property is never set from constants files.
         public bool IgnoreConstants { get; set; }
+        public string? WriterQuoteValues { get; set; }
+        public string? WriterEscapeSequences { get; set; }
+        public string? WriterComments { get; set; }
         // Validation attributes from System.ComponentModel.DataAnnotations
         public bool IsRequired { get; set; }
         public string? RequiredErrorMessage { get; set; }
@@ -151,6 +154,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         public bool SectionIgnoresDefaults { get; set; }
         // True when [IniSection(IgnoreConstants=true)] — section is never populated from constants files
         public bool SectionIgnoresConstants { get; set; }
+        public string? SectionWriterQuoteValues { get; set; }
+        public string? SectionWriterEscapeSequences { get; set; }
+        public string? SectionWriterComments { get; set; }
         // True when the section interface extends INotifyPropertyChanged / INotifyPropertyChanging
         public bool ImplementsINotifyPropertyChanged { get; set; }
         public bool ImplementsINotifyPropertyChanging { get; set; }
@@ -212,6 +218,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         bool sectionEmptyWhenNull = false;
         bool sectionIgnoresDefaults = false;
         bool sectionIgnoresConstants = false;
+        string? sectionWriterQuoteValues = null;
+        string? sectionWriterEscapeSequences = null;
+        string? sectionWriterComments = null;
         if (iniSectionAttr != null)
             foreach (var na in iniSectionAttr.NamedArguments)
             {
@@ -223,6 +232,12 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                     sectionIgnoresDefaults = true;
                 if (na.Key == "IgnoreConstants" && na.Value.Value is true)
                     sectionIgnoresConstants = true;
+                if (na.Key == "QuoteValues" && na.Value.Value != null)
+                    sectionWriterQuoteValues = GetEnumValueName(na.Value);
+                if (na.Key == "EscapeSequences" && na.Value.Value != null)
+                    sectionWriterEscapeSequences = GetEnumValueName(na.Value);
+                if (na.Key == "WriteComments" && na.Value.Value != null)
+                    sectionWriterComments = GetEnumValueName(na.Value);
             }
 
         // Fall back to [Description("...")] on the interface if [IniSection] doesn't specify Description
@@ -318,6 +333,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                         case "EmptyWhenNull":           prop.EmptyWhenNull = na.Value.Value is true; break;
                         case "IgnoreDefaults":          prop.IgnoreDefaults = na.Value.Value is true; break;
                         case "IgnoreConstants":         prop.IgnoreConstants = na.Value.Value is true; break;
+                        case "QuoteValues":             prop.WriterQuoteValues = GetEnumValueName(na.Value); break;
+                        case "EscapeSequences":         prop.WriterEscapeSequences = GetEnumValueName(na.Value); break;
+                        case "WriteComments":           prop.WriterComments = GetEnumValueName(na.Value); break;
                     }
                 }
             }
@@ -443,6 +461,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             SectionEmptyWhenNull        = sectionEmptyWhenNull,
             SectionIgnoresDefaults      = sectionIgnoresDefaults,
             SectionIgnoresConstants     = sectionIgnoresConstants,
+            SectionWriterQuoteValues    = sectionWriterQuoteValues,
+            SectionWriterEscapeSequences = sectionWriterEscapeSequences,
+            SectionWriterComments       = sectionWriterComments,
             ImplementsINotifyPropertyChanged  = implementsINotifyPropertyChanged,
             ImplementsINotifyPropertyChanging = implementsINotifyPropertyChanging,
             // All properties are included so the generated class satisfies the interface contract.
@@ -938,6 +959,53 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         sb.AppendLine("        }");
         sb.AppendLine();
 
+        // ── GetSectionWriterOptions ────────────────────────────────────────────
+        bool hasSectionWriterOverrides =
+            (m.SectionWriterQuoteValues != null && m.SectionWriterQuoteValues != "Default")
+            || (m.SectionWriterEscapeSequences != null && m.SectionWriterEscapeSequences != "Default")
+            || (m.SectionWriterComments != null && m.SectionWriterComments != "Default");
+        if (hasSectionWriterOverrides)
+        {
+            sb.AppendLine("        public override Dapplo.Ini.Parsing.IniWriterOptionsOverride? GetSectionWriterOptions()");
+            sb.AppendLine("            => new Dapplo.Ini.Parsing.IniWriterOptionsOverride");
+            sb.AppendLine("            {");
+            if (m.SectionWriterQuoteValues != null && m.SectionWriterQuoteValues != "Default")
+                sb.AppendLine($"                QuoteStyle = Dapplo.Ini.Parsing.IniValueQuoteStyle.{m.SectionWriterQuoteValues},");
+            if (m.SectionWriterEscapeSequences != null && m.SectionWriterEscapeSequences != "Default")
+                sb.AppendLine($"                EscapeSequences = Dapplo.Ini.Parsing.IniBooleanOption.{m.SectionWriterEscapeSequences},");
+            if (m.SectionWriterComments != null && m.SectionWriterComments != "Default")
+                sb.AppendLine($"                WriteComments = Dapplo.Ini.Parsing.IniBooleanOption.{m.SectionWriterComments},");
+            sb.AppendLine("            };");
+            sb.AppendLine();
+        }
+
+        // ── GetPropertyWriterOptions ───────────────────────────────────────────
+        var writerOverrideProps = m.Properties.Where(p =>
+            !p.IsIgnored && !p.IsReadOnly && !p.IsRuntimeOnly &&
+            ((p.WriterQuoteValues != null && p.WriterQuoteValues != "Default")
+             || (p.WriterEscapeSequences != null && p.WriterEscapeSequences != "Default")
+             || (p.WriterComments != null && p.WriterComments != "Default"))).ToList();
+        if (writerOverrideProps.Count > 0)
+        {
+            sb.AppendLine("        public override Dapplo.Ini.Parsing.IniWriterOptionsOverride? GetPropertyWriterOptions(string key)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            switch (key.ToLowerInvariant())");
+            sb.AppendLine("            {");
+            foreach (var p in writerOverrideProps)
+            {
+                string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
+                var assignments = BuildWriterOverrideAssignments(p.WriterQuoteValues, p.WriterEscapeSequences, p.WriterComments);
+                if (p.IsSubKeyDictionary)
+                    sb.AppendLine($"                case var __pwo when __pwo.StartsWith(\"{EscapeString(keyName)}.\"): return new Dapplo.Ini.Parsing.IniWriterOptionsOverride {{ {assignments} }};");
+                else
+                    sb.AppendLine($"                case \"{EscapeString(keyName)}\": return new Dapplo.Ini.Parsing.IniWriterOptionsOverride {{ {assignments} }};");
+            }
+            sb.AppendLine("                default: return null;");
+            sb.AppendLine("            }");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+        }
+
         // ── SectionIgnoresDefaults / SectionIgnoresConstants ───────────────────
         if (m.SectionIgnoresDefaults)
         {
@@ -1207,6 +1275,38 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
 
     private static string EscapeString(string s)
         => s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "\\r").Replace("\n", "\\n");
+
+    private static string BuildWriterOverrideAssignments(string? quoteValues, string? escapeSequences, string? writeComments)
+    {
+        var parts = new List<string>();
+        if (quoteValues != null && quoteValues != "Default")
+            parts.Add($"QuoteStyle = Dapplo.Ini.Parsing.IniValueQuoteStyle.{quoteValues}");
+        if (escapeSequences != null && escapeSequences != "Default")
+            parts.Add($"EscapeSequences = Dapplo.Ini.Parsing.IniBooleanOption.{escapeSequences}");
+        if (writeComments != null && writeComments != "Default")
+            parts.Add($"WriteComments = Dapplo.Ini.Parsing.IniBooleanOption.{writeComments}");
+        return string.Join(", ", parts);
+    }
+
+    private static string? GetEnumValueName(TypedConstant constant)
+    {
+        if (constant.Value == null)
+            return null;
+
+        if (constant.Type is not INamedTypeSymbol enumType || enumType.TypeKind != TypeKind.Enum)
+            return constant.Value.ToString();
+
+        var value = System.Convert.ToInt64(constant.Value);
+        foreach (var member in enumType.GetMembers().OfType<IFieldSymbol>())
+        {
+            if (!member.HasConstantValue || member.ConstantValue == null)
+                continue;
+
+            if (System.Convert.ToInt64(member.ConstantValue) == value)
+                return member.Name;
+        }
+        return constant.Value.ToString();
+    }
 
     /// <summary>
     /// Formats the <paramref name="value"/> from a <c>[DefaultValue(...)]</c> constructor argument

@@ -6,6 +6,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Runtime.Serialization;
 using Dapplo.Ini.Attributes;
 using Dapplo.Ini.Interfaces;
+using Dapplo.Ini.Parsing;
 
 namespace Dapplo.Ini.Tests;
 
@@ -555,4 +556,19 @@ public interface IMixedIgnoreSettings : IIniSection
     /// <summary>This property is NEVER loaded from constants files (and therefore never locked).</summary>
     [IniValue(DefaultValue = "compiled-c", IgnoreConstants = true)]
     string? ValueC { get; set; }
+}
+
+// ── Writer behavior sample interface ──────────────────────────────────────────
+
+[IniSection("WriteBehaviorSection", QuoteValues = IniValueQuoteStyle.Double, WriteComments = IniBooleanOption.Disabled)]
+public interface IWriteBehaviorSettings : IIniSection
+{
+    [IniValue(DefaultValue = "plain", Description = "name description")]
+    string? Name { get; set; }
+
+    [IniValue(DefaultValue = "C:\\Temp\\App", EscapeSequences = IniBooleanOption.Enabled)]
+    string? Path { get; set; }
+
+    [IniValue(DefaultValue = "spaced", QuoteValues = IniValueQuoteStyle.Single)]
+    string? SingleQuoted { get; set; }
 }

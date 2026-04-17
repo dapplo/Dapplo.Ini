@@ -57,6 +57,8 @@ public sealed class IniConfigBuilder
 
     // Parser options (null = use IniParserOptions.Default)
     private Parsing.IniParserOptions? _parserOptions;
+    // Writer options (null = use IniWriterOptions.Default)
+    private Parsing.IniWriterOptions? _writerOptions;
 
     internal IniConfigBuilder(string fileName)
     {
@@ -406,10 +408,7 @@ public sealed class IniConfigBuilder
         return this;
     }
 
-    // ── key=value separator ───────────────────────────────────────────────────
-
-    // The separator used between keys and values when writing the INI file.
-    private string _assignmentSeparator = " = ";
+    // ── writer options ─────────────────────────────────────────────────────────
 
     /// <summary>
     /// Sets the separator string written between each key and its value in the saved INI file.
@@ -430,7 +429,47 @@ public sealed class IniConfigBuilder
     {
         if (string.IsNullOrEmpty(separator))
             throw new ArgumentException("Separator must not be null or empty.", nameof(separator));
-        _assignmentSeparator = separator;
+        MutateWriterOptions(o => o.AssignmentSeparator = separator);
+        return this;
+    }
+
+    /// <summary>
+    /// Applies a complete set of writer options in one call, replacing any previously
+    /// configured individual writer settings.
+    /// </summary>
+    /// <param name="options">The options to use; must not be <c>null</c>.</param>
+    public IniConfigBuilder WithWriterOptions(Parsing.IniWriterOptions options)
+    {
+        _writerOptions = options ?? throw new ArgumentNullException(nameof(options));
+        return this;
+    }
+
+    /// <summary>
+    /// Enables C-style escape sequence output when writing values.
+    /// </summary>
+    public IniConfigBuilder EnableEscapeSequencesOnWrite()
+    {
+        MutateWriterOptions(o => o.EscapeSequences = true);
+        return this;
+    }
+
+    /// <summary>
+    /// Configures value quoting style when writing.
+    /// </summary>
+    public IniConfigBuilder QuoteValuesOnWrite(Parsing.IniValueQuoteStyle quoteStyle = Parsing.IniValueQuoteStyle.Double)
+    {
+        if (quoteStyle == Parsing.IniValueQuoteStyle.Default)
+            quoteStyle = Parsing.IniValueQuoteStyle.Double;
+        MutateWriterOptions(o => o.QuoteStyle = quoteStyle);
+        return this;
+    }
+
+    /// <summary>
+    /// Disables writing section and property comments to the saved INI file.
+    /// </summary>
+    public IniConfigBuilder SkipCommentsOnWrite()
+    {
+        MutateWriterOptions(o => o.WriteComments = false);
         return this;
     }
 
@@ -512,6 +551,18 @@ public sealed class IniConfigBuilder
     }
 
     /// <summary>
+    /// Sets the parser assignment delimiter characters.
+    /// Defaults to <c>"=:"</c>.
+    /// </summary>
+    public IniConfigBuilder AssignmentDelimiters(string delimiters)
+    {
+        if (string.IsNullOrEmpty(delimiters))
+            throw new ArgumentException("Delimiters must not be null or empty.", nameof(delimiters));
+        MutateParserOptions(o => o.AssignmentDelimiters = delimiters);
+        return this;
+    }
+
+    /// <summary>
     /// Returns a new copy of the current parser options (or a copy of the defaults when no
     /// custom options have been set yet), applies <paramref name="mutate"/> to it, and
     /// stores the result back.  This allows individual convenience methods to layer changes
@@ -522,6 +573,7 @@ public sealed class IniConfigBuilder
         var current = _parserOptions ?? Parsing.IniParserOptions.Default;
         var copy = new Parsing.IniParserOptions
         {
+            AssignmentDelimiters   = current.AssignmentDelimiters,
             DuplicateKeyHandling  = current.DuplicateKeyHandling,
             QuotedValues          = current.QuotedValues,
             LineContinuation      = current.LineContinuation,
@@ -531,6 +583,18 @@ public sealed class IniConfigBuilder
         };
         mutate(copy);
         _parserOptions = copy;
+    }
+
+    /// <summary>
+    /// Returns a new copy of the current writer options (or a copy of defaults when no
+    /// custom writer options have been set yet), applies <paramref name="mutate"/>, and
+    /// stores the result back.
+    /// </summary>
+    private void MutateWriterOptions(Action<Parsing.IniWriterOptions> mutate)
+    {
+        var copy = (_writerOptions ?? Parsing.IniWriterOptions.Default).Clone();
+        mutate(copy);
+        _writerOptions = copy;
     }
 
     /// <summary>
@@ -689,7 +753,7 @@ public sealed class IniConfigBuilder
         config.UnknownKeyHandler = _unknownKeyCallback;
         config.MetadataConfig = _metadataConfig;
         config.GlobalEmptyWhenNull = _globalEmptyWhenNull;
-        config.AssignmentSeparator = _assignmentSeparator;
+        config.WriterOptions = (_writerOptions ?? Parsing.IniWriterOptions.Default).Clone();
         config.ParserOptions = _parserOptions ?? Parsing.IniParserOptions.Default;
 
         config.SearchPaths.AddRange(_searchPaths);

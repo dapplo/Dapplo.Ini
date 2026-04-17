@@ -18,6 +18,11 @@ public sealed class IniEntry
     /// <summary>Comment lines (without the leading ';' or '#') that appeared above this entry.</summary>
     public IReadOnlyList<string> Comments { get; }
 
+    /// <summary>
+    /// Optional writer overrides for this specific key.
+    /// </summary>
+    public IniWriterOptionsOverride? WriterOptionsOverride { get; set; }
+
     public IniEntry(string key, string? value, IReadOnlyList<string> comments)
     {
         Key = key;
