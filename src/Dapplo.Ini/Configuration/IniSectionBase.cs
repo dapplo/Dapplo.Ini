@@ -78,8 +78,7 @@ public abstract class IniSectionBase : IIniSection
         var value = GetValueCore(key);
         if (value is T typed) return typed;
         return default;
-    }
-
+}
     /// <inheritdoc/>
     public void SetRawValue(string key, string? value)
     {

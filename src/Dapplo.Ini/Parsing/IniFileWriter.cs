@@ -107,11 +107,34 @@ public static class IniFileWriter
     {
         return options.QuoteStyle switch
         {
-            IniValueQuoteStyle.Single => $"'{value.Replace("'", "\\'")}'",
-            IniValueQuoteStyle.Double => $"\"{value.Replace("\"", "\\\"")}\"",
-            IniValueQuoteStyle.Auto when NeedsQuoting(value, options.AssignmentSeparator) => $"\"{value.Replace("\"", "\\\"")}\"",
+            IniValueQuoteStyle.Single => $"'{EscapeUnescapedQuote(value, '\'')}'",
+            IniValueQuoteStyle.Double => $"\"{EscapeUnescapedQuote(value, '\"')}\"",
+            IniValueQuoteStyle.Auto when NeedsQuoting(value, options.AssignmentSeparator) => $"\"{EscapeUnescapedQuote(value, '\"')}\"",
             _ => value
         };
+    }
+
+    private static string EscapeUnescapedQuote(string value, char quoteChar)
+    {
+        if (string.IsNullOrEmpty(value))
+            return value;
+
+        var sb = new StringBuilder(value.Length + 8);
+        for (var i = 0; i < value.Length; i++)
+        {
+            var c = value[i];
+            if (c == quoteChar)
+            {
+                var backslashes = 0;
+                for (var j = i - 1; j >= 0 && value[j] == '\\'; j--)
+                    backslashes++;
+
+                if (backslashes % 2 == 0)
+                    sb.Append('\\');
+            }
+            sb.Append(c);
+        }
+        return sb.ToString();
     }
 
     private static bool NeedsQuoting(string value, string assignmentSeparator)
@@ -148,8 +171,6 @@ public static class IniFileWriter
                 case '\r': sb.Append(@"\r"); break;
                 case '\t': sb.Append(@"\t"); break;
                 case '\0': sb.Append(@"\0"); break;
-                case '"': sb.Append("\\\""); break;
-                case '\'': sb.Append("\\'"); break;
                 case '\a': sb.Append(@"\a"); break;
                 case '\b': sb.Append(@"\b"); break;
                 default: sb.Append(c); break;

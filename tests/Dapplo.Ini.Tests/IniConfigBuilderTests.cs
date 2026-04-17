@@ -15,8 +15,7 @@ public sealed class IniConfigBuilderTests : IDisposable
         _tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tempDir);
         IniConfigRegistry.Clear();
-    }
-
+}
     public void Dispose()
     {
         IniConfigRegistry.Clear();
