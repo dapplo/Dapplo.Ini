@@ -14,6 +14,44 @@ await config.SaveAsync(cancellationToken);
 
 ---
 
+## Configuring write behavior
+
+Use `IniWriterOptions` (file-level) or convenience methods on `IniConfigBuilder`:
+
+```csharp
+using var config = IniConfigRegistry.ForFile("app.ini")
+    .AddSearchPath(AppContext.BaseDirectory)
+    .WithWriterOptions(new IniWriterOptions
+    {
+        AssignmentSeparator = " = ",
+        QuoteStyle = IniValueQuoteStyle.Double,
+        EscapeSequences = true,
+        WriteComments = false
+    })
+    .RegisterSection<IAppSettings>(new AppSettingsImpl())
+    .Build();
+```
+
+Convenience methods:
+
+- `AssignmentSeparator(...)`
+- `EnableEscapeSequencesOnWrite()`
+- `QuoteValuesOnWrite(...)`
+- `SkipCommentsOnWrite()`
+
+You can also override write behavior per section/property via attributes:
+
+```csharp
+[IniSection("Server", QuoteValues = IniValueQuoteStyle.Double, WriteComments = IniBooleanOption.Disabled)]
+public interface IServerSettings : IIniSection
+{
+    [IniValue(EscapeSequences = IniBooleanOption.Enabled)]
+    string? Path { get; set; }
+}
+```
+
+---
+
 ## IBeforeSave hook
 
 Implement `IBeforeSave<TSelf>` (or the non-generic `IBeforeSave`) to run logic before

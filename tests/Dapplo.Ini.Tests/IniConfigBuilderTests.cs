@@ -15,8 +15,7 @@ public sealed class IniConfigBuilderTests : IDisposable
         _tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tempDir);
         IniConfigRegistry.Clear();
-    }
-
+}
     public void Dispose()
     {
         IniConfigRegistry.Clear();
@@ -603,6 +602,92 @@ public sealed class IniConfigBuilderTests : IDisposable
     }
 
     [Fact]
+    public void AssignmentDelimiters_CustomPipe_CanParseCustomDelimiter()
+    {
+        WriteIni("pipe-delim.ini", "[General]\nAppName|PipeApp\nMaxRetries|8");
+
+        var section = new GeneralSettingsImpl();
+        IniConfigRegistry.ForFile("pipe-delim.ini")
+            .AddSearchPath(_tempDir)
+            .AssignmentDelimiters("|")
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        Assert.Equal("PipeApp", section.AppName);
+        Assert.Equal(8, section.MaxRetries);
+    }
+
+    [Fact]
+    public void SkipCommentsOnWrite_DoesNotWriteSectionOrPropertyComments()
+    {
+        var section = new GeneralSettingsImpl();
+        var savePath = Path.Combine(_tempDir, "skip-comments.ini");
+
+        var config = IniConfigRegistry.ForFile("skip-comments.ini")
+            .AddSearchPath(_tempDir)
+            .SkipCommentsOnWrite()
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        section.AppName = "NoComments";
+        config.Save();
+
+        var written = File.ReadAllText(savePath);
+        Assert.DoesNotContain("; General application settings", written);
+        Assert.DoesNotContain("; Application name", written);
+        Assert.Contains("AppName = NoComments", written);
+    }
+
+    [Fact]
+    public void WriterOverrides_FromSectionAndPropertyAttributes_AreApplied()
+    {
+        var section = new WriteBehaviorSettingsImpl();
+        var savePath = Path.Combine(_tempDir, "writer-overrides.ini");
+
+        var config = IniConfigRegistry.ForFile("writer-overrides.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IWriteBehaviorSettings>(section)
+            .Build();
+
+        section.Name = "value with spaces";
+        section.Path = @"C:\Program Files\App";
+        section.SingleQuoted = "single quoted";
+        config.Save();
+
+        var written = File.ReadAllText(savePath);
+        Assert.Contains("[WriteBehaviorSection]", written);
+        Assert.Contains("Name = \"value with spaces\"", written);
+        Assert.Contains("Path = \"C:\\\\Program Files\\\\App\"", written);
+        Assert.Contains("SingleQuoted = 'single quoted'", written);
+        Assert.DoesNotContain("; name description", written);
+    }
+
+    [Fact]
+    public void WithWriterOptions_AppliesQuoteEscapeAndCommentBehavior()
+    {
+        var section = new GeneralSettingsImpl();
+        var savePath = Path.Combine(_tempDir, "writer-options-api.ini");
+
+        var config = IniConfigRegistry.ForFile("writer-options-api.ini")
+            .AddSearchPath(_tempDir)
+            .WithWriterOptions(new Dapplo.Ini.Parsing.IniWriterOptions
+            {
+                QuoteStyle = Dapplo.Ini.Parsing.IniValueQuoteStyle.Double,
+                EscapeSequences = true,
+                WriteComments = false
+            })
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+
+        section.AppName = @"C:\Program Files\App";
+        config.Save();
+
+        var written = File.ReadAllText(savePath);
+        Assert.Contains("AppName = \"C:\\\\Program Files\\\\App\"", written);
+        Assert.DoesNotContain("; General application settings", written);
+    }
+
+    [Fact]
     public void PauseAutoSave_PreventsSaveWhilePropertiesAreBeingChanged()
     {
         WriteIni("pause-autosave.ini", "[General]\nAppName = Original\nMaxRetries = 1");
@@ -635,4 +720,3 @@ public sealed class IniConfigBuilderTests : IDisposable
         Assert.Equal(42, section.MaxRetries);
     }
 }
-

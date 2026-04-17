@@ -160,6 +160,23 @@ public sealed class IniFileParserTests
         Assert.Throws<InvalidOperationException>(() => IniFileParser.Parse(content, opts));
     }
 
+    [Fact]
+    public void Parse_AssignmentDelimiter_Colon_IsAcceptedByDefault()
+    {
+        const string content = "[S]\nkey: value";
+        var file = IniFileParser.Parse(content);
+        Assert.Equal("value", file.GetSection("S")!.GetValue("key"));
+    }
+
+    [Fact]
+    public void Parse_AssignmentDelimiter_CustomDelimiter_IsConfigurable()
+    {
+        const string content = "[S]\nkey|value";
+        var opts = new IniParserOptions { AssignmentDelimiters = "|" };
+        var file = IniFileParser.Parse(content, opts);
+        Assert.Equal("value", file.GetSection("S")!.GetValue("key"));
+    }
+
     // ── IniParserOptions: QuotedValues ────────────────────────────────────────
 
     [Fact]
@@ -353,5 +370,20 @@ public sealed class IniFileParserTests
         Assert.Equal(2, file.Sections.Count);
         Assert.Equal("v1", file.GetSection("General")!.GetValue("key"));
         Assert.Equal("v2", file.GetSection("GENERAL")!.GetValue("key"));
+    }
+
+    [Fact]
+    public void WriteToString_WithWriterOptions_CanSkipCommentsAndQuoteValues()
+    {
+        var file = IniFileParser.Parse(SampleIni);
+        var output = IniFileWriter.WriteToString(file, new IniWriterOptions
+        {
+            WriteComments = false,
+            QuoteStyle = IniValueQuoteStyle.Double,
+            EscapeSequences = true
+        });
+
+        Assert.DoesNotContain("; ", output);
+        Assert.Contains("AppName = \"MyApp\"", output);
     }
 }

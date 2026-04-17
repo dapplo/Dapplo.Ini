@@ -1,6 +1,8 @@
 // Copyright (c) Dapplo. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
+using Dapplo.Ini.Parsing;
+
 namespace Dapplo.Ini.Attributes;
 
 /// <summary>
@@ -106,6 +108,21 @@ public sealed class IniSectionAttribute : Attribute
     /// </para>
     /// </remarks>
     public bool EmptyWhenNull { get; set; }
+
+    /// <summary>
+    /// Optional section-level override for value quoting when writing.
+    /// </summary>
+    public IniValueQuoteStyle QuoteValues { get; set; } = IniValueQuoteStyle.Default;
+
+    /// <summary>
+    /// Optional section-level override for escape-sequence output when writing.
+    /// </summary>
+    public IniBooleanOption EscapeSequences { get; set; } = IniBooleanOption.Default;
+
+    /// <summary>
+    /// Optional section-level override for writing comments.
+    /// </summary>
+    public IniBooleanOption WriteComments { get; set; } = IniBooleanOption.Default;
 
     /// <summary>
     /// Initialises a new instance of <see cref="IniSectionAttribute"/>.

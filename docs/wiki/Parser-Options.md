@@ -18,6 +18,7 @@ using var config = IniConfigRegistry.ForFile("app.ini")
     .EnableEscapeSequences()          // decode \n, \t, \\, \xHH, …
     .EnableQuotedValues()             // strip surrounding "…" / '…'
     .EnableLineContinuation()         // join lines ending with \
+    .AssignmentDelimiters("=:")       // accept '=' and ':'
     .CaseSensitiveKeys()              // AppName ≠ appname
     .WithDuplicateKeyHandling(DuplicateKeyHandling.FirstWins)
     .RegisterSection<IAppSettings>(new AppSettingsImpl())
@@ -29,6 +30,7 @@ Or supply a pre-built `IniParserOptions` object:
 ```csharp
 var opts = new IniParserOptions
 {
+    AssignmentDelimiters = "=:",
     EscapeSequences = true,
     QuotedValues    = true,
 };
@@ -43,6 +45,30 @@ using var config = IniConfigRegistry.ForFile("app.ini")
 ---
 
 ## Options reference
+
+### `AssignmentDelimiters`
+
+Controls which characters are treated as key/value assignment delimiters.
+Default is `=:` (both equals and colon are accepted).
+
+```ini
+[Database]
+Host = server
+Port: 5432
+```
+
+```csharp
+var opts = new IniParserOptions { AssignmentDelimiters = "=:" };
+var file = IniFileParser.Parse(content, opts);
+```
+
+Builder shorthand:
+
+```csharp
+.AssignmentDelimiters("=:")
+```
+
+---
 
 ### `DuplicateKeyHandling`
 

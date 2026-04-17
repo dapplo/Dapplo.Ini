@@ -78,8 +78,7 @@ public abstract class IniSectionBase : IIniSection
         var value = GetValueCore(key);
         if (value is T typed) return typed;
         return default;
-    }
-
+}
     /// <inheritdoc/>
     public void SetRawValue(string key, string? value)
     {
@@ -236,6 +235,18 @@ public abstract class IniSectionBase : IIniSection
     /// <param name="key">The INI key name (case-insensitive).</param>
     public virtual string? GetPropertyDescription(string key) => null;
 
+    /// <summary>
+    /// Returns optional writer overrides for this section.
+    /// Source-generated subclasses override this from <c>[IniSection]</c> writer settings.
+    /// </summary>
+    public virtual Parsing.IniWriterOptionsOverride? GetSectionWriterOptions() => null;
+
+    /// <summary>
+    /// Returns optional writer overrides for the property identified by <paramref name="key"/>.
+    /// Source-generated subclasses override this from <c>[IniValue]</c> writer settings.
+    /// </summary>
+    public virtual Parsing.IniWriterOptionsOverride? GetPropertyWriterOptions(string key) => null;
+
     // ── Converter helpers (used by generated code) ────────────────────────────
 
     /// <summary>
@@ -280,4 +291,3 @@ public abstract class IniSectionBase : IIniSection
         return converter?.ConvertToString(value);
     }
 }
-
