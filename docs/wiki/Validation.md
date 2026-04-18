@@ -127,6 +127,37 @@ public interface IServerSettings : IIniSection, IAfterLoad<IServerSettings>, IBe
 Use this pattern when you want to **fix** values. Use `IDataValidation<TSelf>`
 when you want to **surface validation errors** to bindings/UI.
 
+### Clamp immediately while the app is running
+
+If you want the old "custom setter" behaviour (coerce value right after assignment
+and push the corrected value back to the UI), subscribe to
+`INotifyPropertyChanged` and clamp there:
+
+```csharp
+[IniSection("Server")]
+public interface IServerSettings : IIniSection, INotifyPropertyChanged
+{
+    [IniValue(DefaultValue = "8080")]
+    int Port { get; set; }
+}
+
+var settings = new ServerSettingsImpl();
+((INotifyPropertyChanged)settings).PropertyChanged += (_, e) =>
+{
+    if (e.PropertyName != nameof(IServerSettings.Port))
+        return;
+
+    const int minPort = 1;
+    const int maxPort = 65535;
+    var clamped = Math.Clamp(settings.Port, minPort, maxPort);
+    if (clamped != settings.Port)
+        settings.Port = clamped; // fires PropertyChanged again with corrected value
+};
+```
+
+Use this for **live coercion** while users edit values; keep `OnAfterLoad` /
+`OnBeforeSave` as a safety net for values coming from files or other code paths.
+
 ---
 
 ## Combining DataAnnotations and custom rules
