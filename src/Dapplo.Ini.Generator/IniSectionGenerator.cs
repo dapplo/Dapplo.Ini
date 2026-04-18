@@ -652,14 +652,22 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             sb.AppendLine($"        public {p.TypeFullName} {p.Name}");
             sb.AppendLine("        {");
 
-            // The getter always returns the committed backing field.
+            // The getter always starts from the committed backing field.
+            // A partial "On{Prop}Get(ref value)" hook can transform the outgoing value.
             // During a transaction the setter only writes to the Tx field,
             // so the backing field still holds the pre-transaction value until Commit().
-            sb.AppendLine($"            get => {fieldName};");
+            sb.AppendLine("            get");
+            sb.AppendLine("            {");
+            sb.AppendLine($"                var __value = {fieldName};");
+            sb.AppendLine($"                On{p.Name}Get(ref __value);");
+            sb.AppendLine("                return __value;");
+            sb.AppendLine("            }");
 
             // setter
             sb.AppendLine("            set");
             sb.AppendLine("            {");
+            sb.AppendLine("                var __value = value;");
+            sb.AppendLine($"                On{p.Name}Set(ref __value);");
 
             // Determine which events this property should emit.
             // Events are generated at interface level; per-property attributes can suppress them.
@@ -670,7 +678,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             // This prevents redundant events and stops infinite loops in WPF bindings.
             if (emitChanging || emitChanged)
             {
-                sb.AppendLine($"                if (EqualityComparer<{p.TypeFullName}>.Default.Equals({fieldName}, value)) return;");
+                sb.AppendLine($"                if (EqualityComparer<{p.TypeFullName}>.Default.Equals({fieldName}, __value)) return;");
             }
             if (emitChanging)
             {
@@ -680,7 +688,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             if (p.IsIgnored || p.IsRuntimeOnly)
             {
                 // [IgnoreDataMember] / RuntimeOnly — only update the backing field; no INI interaction.
-                sb.AppendLine($"                {fieldName} = value;");
+                sb.AppendLine($"                {fieldName} = __value;");
             }
             else
             {
@@ -691,25 +699,25 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                     // The key in the INI file is "PropertyName.dictionaryKey".
                     if (usesTx)
                     {
-                        sb.AppendLine($"                {txFieldName} = value;");
-                        sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = value; {fieldName}HasRawEntries = true; if (value != null) foreach (var __kvp in value) SetRawValue($\"{keyNameForSet}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value)); }}");
+                        sb.AppendLine($"                {txFieldName} = __value;");
+                        sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = __value; {fieldName}HasRawEntries = true; if (__value != null) foreach (var __kvp in __value) SetRawValue($\"{keyNameForSet}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value)); }}");
                     }
                     else
                     {
-                        sb.AppendLine($"                {fieldName} = value;");
+                        sb.AppendLine($"                {fieldName} = __value;");
                         sb.AppendLine($"                {fieldName}HasRawEntries = true;");
-                        sb.AppendLine($"                if (value != null) foreach (var __kvp in value) SetRawValue($\"{keyNameForSet}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value));");
+                        sb.AppendLine($"                if (__value != null) foreach (var __kvp in __value) SetRawValue($\"{keyNameForSet}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value));");
                     }
                 }
                 else if (usesTx)
                 {
-                    sb.AppendLine($"                {txFieldName} = value;");
-                    sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = value; SetRawValue(\"{keyNameForSet}\", ConvertToRaw(value)); }}");
+                    sb.AppendLine($"                {txFieldName} = __value;");
+                    sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = __value; SetRawValue(\"{keyNameForSet}\", ConvertToRaw(__value)); }}");
                 }
                 else
                 {
-                    sb.AppendLine($"                {fieldName} = value;");
-                    sb.AppendLine($"                SetRawValue(\"{keyNameForSet}\", ConvertToRaw(value));");
+                    sb.AppendLine($"                {fieldName} = __value;");
+                    sb.AppendLine($"                SetRawValue(\"{keyNameForSet}\", ConvertToRaw(__value));");
                 }
             }
 
@@ -725,6 +733,17 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             }
             sb.AppendLine("            }");
             sb.AppendLine("        }");
+            sb.AppendLine();
+        }
+
+        // ── Per-property partial get/set hooks ─────────────────────────────
+        // Consumers can implement these in a separate partial class file to
+        // coerce values (set hook) or transform values on read (get hook).
+        // If not implemented, calls are removed by the compiler.
+        foreach (var p in m.Properties)
+        {
+            sb.AppendLine($"        partial void On{p.Name}Set(ref {p.TypeFullName} value);");
+            sb.AppendLine($"        partial void On{p.Name}Get(ref {p.TypeFullName} value);");
             sb.AppendLine();
         }
 

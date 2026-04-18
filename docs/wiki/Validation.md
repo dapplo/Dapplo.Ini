@@ -130,8 +130,8 @@ when you want to **surface validation errors** to bindings/UI.
 ### Clamp immediately while the app is running
 
 If you want the old "custom setter" behaviour (coerce value right after assignment
-and push the corrected value back to the UI), subscribe to
-`INotifyPropertyChanged` and clamp there:
+and push the corrected value back to the UI), implement the generated partial
+setter hook in the section's partial class:
 
 ```csharp
 [IniSection("Server")]
@@ -141,19 +141,19 @@ public interface IServerSettings : IIniSection, INotifyPropertyChanged
     int Port { get; set; }
 }
 
-var settings = new ServerSettingsImpl();
-((INotifyPropertyChanged)settings).PropertyChanged += (_, e) =>
+public partial class ServerSettingsImpl
 {
-    if (e.PropertyName != nameof(IServerSettings.Port))
-        return;
-
-    const int minPort = 1;
-    const int maxPort = 65535;
-    var clamped = Math.Clamp(settings.Port, minPort, maxPort);
-    if (clamped != settings.Port)
-        settings.Port = clamped; // fires PropertyChanged again with corrected value
-};
+    partial void OnPortSet(ref int value)
+        => value = Math.Clamp(value, 1, 65535);
+}
 ```
+
+`On<Property>Set(ref T value)` is called inside the generated property setter
+*before* equality checks, persistence updates, validation, and
+`INotifyPropertyChanged` events.
+
+An optional `On<Property>Get(ref T value)` hook is also available when you need
+to transform the value on reads.
 
 Use this for **live coercion** while users edit values; keep `OnAfterLoad` /
 `OnBeforeSave` as a safety net for values coming from files or other code paths.
