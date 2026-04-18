@@ -97,6 +97,38 @@ public interface IServerSettings : IIniSection, IDataValidation<IServerSettings>
 
 ---
 
+## Keep values in range (auto-correct / clamp)
+
+`IDataValidation<TSelf>` reports errors, but it does **not** change the value.
+If you want to actively keep a property in range (for example clamp a port to
+`1..65535`), use lifecycle hooks to normalise values:
+
+```csharp
+[IniSection("Server")]
+public interface IServerSettings : IIniSection, IAfterLoad<IServerSettings>, IBeforeSave<IServerSettings>
+{
+    private const int MinPort = 1;
+    private const int MaxPort = 65535;
+
+    [IniValue(DefaultValue = "8080")]
+    int Port { get; set; }
+
+    static new void OnAfterLoad(IServerSettings self)
+        => self.Port = Math.Clamp(self.Port, MinPort, MaxPort);
+
+    static new bool OnBeforeSave(IServerSettings self)
+    {
+        self.Port = Math.Clamp(self.Port, MinPort, MaxPort);
+        return true;
+    }
+}
+```
+
+Use this pattern when you want to **fix** values. Use `IDataValidation<TSelf>`
+when you want to **surface validation errors** to bindings/UI.
+
+---
+
 ## Combining DataAnnotations and custom rules
 
 Both rule sets are **merged**: generated attribute rules are checked first,
