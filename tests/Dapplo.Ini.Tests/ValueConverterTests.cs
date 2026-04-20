@@ -29,6 +29,16 @@ public sealed class ValueConverterTests
     }
 
     [Theory]
+    [InlineData("42", (byte)42)]
+    [InlineData("255", byte.MaxValue)]
+    [InlineData(null, (byte)0)]
+    public void ByteConverter_FromString(string? raw, byte expected)
+    {
+        var converter = new ByteConverter();
+        Assert.Equal(expected, converter.ConvertFromString(raw));
+    }
+
+    [Theory]
     [InlineData("42", 42)]
     [InlineData("-1", -1)]
     [InlineData(null, 0)]
@@ -61,6 +71,15 @@ public sealed class ValueConverterTests
         var converter = new DateTimeConverter();
         var raw = converter.ConvertToString(dt);
         Assert.Equal(dt, converter.ConvertFromString(raw));
+    }
+
+    [Fact]
+    public void DateTimeOffsetConverter_RoundTrip()
+    {
+        var dto = new DateTimeOffset(2025, 6, 15, 12, 0, 0, TimeSpan.FromHours(2));
+        var converter = new DateTimeOffsetConverter();
+        var raw = converter.ConvertToString(dto);
+        Assert.Equal(dto, converter.ConvertFromString(raw));
     }
 
     [Fact]
@@ -113,8 +132,10 @@ public sealed class ValueConverterTests
     {
         Assert.IsType<Int32Converter>(ValueConverterRegistry.GetConverter(typeof(int)));
         Assert.IsType<BoolConverter>(ValueConverterRegistry.GetConverter(typeof(bool)));
+        Assert.IsType<ByteConverter>(ValueConverterRegistry.GetConverter(typeof(byte)));
         Assert.IsType<StringConverter>(ValueConverterRegistry.GetConverter(typeof(string)));
         Assert.IsType<DoubleConverter>(ValueConverterRegistry.GetConverter(typeof(double)));
+        Assert.IsType<DateTimeOffsetConverter>(ValueConverterRegistry.GetConverter(typeof(DateTimeOffset)));
     }
 
     [Fact]

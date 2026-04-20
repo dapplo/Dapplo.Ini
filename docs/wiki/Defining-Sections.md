@@ -103,6 +103,7 @@ For the following three capabilities there is no standard .NET attribute; use
 | `EmptyWhenNull = true` | When absent from the file, returns `string.Empty`, an empty list, an empty array, or an empty dictionary instead of `null`. See [[Empty-When-Null]]. |
 | `IgnoreDefaults = true` | Values from defaults files are never applied to this property. Compiled defaults and the user file still apply. See [[Ignore-Defaults-and-Constants]]. |
 | `IgnoreConstants = true` | Values from constants files are never applied to this property. The key is never locked by an admin constants file. See [[Ignore-Defaults-and-Constants]]. |
+| `ListDelimiter = '|'` | Overrides the delimiter for list-like values (`List<T>`, `IList<T>`, `ICollection<T>`, `IEnumerable<T>`, `IReadOnlyList<T>`, `IReadOnlyCollection<T>`, `T[]`). Default is `,`. |
 
 ```csharp
 [IniSection("AppState")]
@@ -117,6 +118,11 @@ public interface IAppStateSettings : IIniSection
     [DefaultValue("unauthenticated")]
     [IniValue(RuntimeOnly = true)]
     string? CurrentUser { get; set; }
+
+    // Custom list delimiter for this property only
+    [DefaultValue("alpha|beta|gamma")]
+    [IniValue(ListDelimiter = '|')]
+    List<string>? Tags { get; set; }
 }
 ```
 

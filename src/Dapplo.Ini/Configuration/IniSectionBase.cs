@@ -279,6 +279,36 @@ public abstract class IniSectionBase : IIniSection
     }
 
     /// <summary>
+    /// Converts a raw INI string to <typeparamref name="T"/> using the registered converter,
+    /// overriding the list delimiter for list-like properties.
+    /// </summary>
+    /// <remarks>
+    /// The <paramref name="listDelimiter"/> is only applied to list-like types (for example
+    /// <c>List&lt;T&gt;</c>, <c>IList&lt;T&gt;</c>, and <c>T[]</c>). For other types, normal converter
+    /// lookup is used.
+    /// </remarks>
+#if NET
+    [RequiresDynamicCode("Enum, list, and array types may require dynamic converter creation. Register typed converters for full AOT compatibility.")]
+    [RequiresUnreferencedCode("Enum, list, and array types may require unreferenced-code access via runtime converter creation. Register typed converters for full trim compatibility.")]
+#endif
+    protected T? ConvertFromRaw<T>(string? raw, char listDelimiter, T? defaultValue = default)
+    {
+        var converter = GetConverter(typeof(T), listDelimiter);
+        if (converter == null) return defaultValue;
+        try
+        {
+            var result = converter.ConvertFromString(raw);
+            return result is T typed ? typed : defaultValue;
+        }
+        catch (Exception ex)
+        {
+            if (_currentKey != null)
+                ConversionFailedCallback?.Invoke(SectionName, _currentKey, raw, ex);
+            return defaultValue;
+        }
+    }
+
+    /// <summary>
     /// Converts a typed value to its raw INI string representation.
     /// </summary>
 #if NET
@@ -289,5 +319,60 @@ public abstract class IniSectionBase : IIniSection
     {
         var converter = ValueConverterRegistry.GetConverter(typeof(T));
         return converter?.ConvertToString(value);
+    }
+
+    /// <summary>
+    /// Converts a typed value to its raw INI string representation, overriding the list
+    /// delimiter for list-like properties.
+    /// </summary>
+    /// <remarks>
+    /// The <paramref name="listDelimiter"/> is only applied to list-like types (for example
+    /// <c>List&lt;T&gt;</c>, <c>IList&lt;T&gt;</c>, and <c>T[]</c>). For other types, normal converter
+    /// lookup is used.
+    /// </remarks>
+#if NET
+    [RequiresDynamicCode("Enum, list, and array types may require dynamic converter creation. Register typed converters for full AOT compatibility.")]
+    [RequiresUnreferencedCode("Enum, list, and array types may require unreferenced-code access via runtime converter creation. Register typed converters for full trim compatibility.")]
+#endif
+    protected static string? ConvertToRaw<T>(T? value, char listDelimiter)
+    {
+        var converter = GetConverter(typeof(T), listDelimiter);
+        return converter?.ConvertToString(value);
+    }
+
+#if NET
+    [RequiresDynamicCode("Creates list/array converters with runtime type arguments.")]
+    [RequiresUnreferencedCode("Creates list/array converters using runtime type metadata.")]
+#endif
+    private static IValueConverter? GetConverter(Type type, char listDelimiter)
+    {
+        if (type.IsArray)
+        {
+            var elementType = type.GetElementType()!;
+            var elementConverter = ValueConverterRegistry.GetConverter(elementType);
+            if (elementConverter == null) return null;
+            var arrayConverterType = typeof(ArrayConverter<>).MakeGenericType(elementType);
+            return (IValueConverter)Activator.CreateInstance(arrayConverterType, elementConverter, listDelimiter)!;
+        }
+
+        if (type.IsGenericType)
+        {
+            var genericDef = type.GetGenericTypeDefinition();
+            if (genericDef == typeof(List<>) ||
+                genericDef == typeof(IList<>) ||
+                genericDef == typeof(ICollection<>) ||
+                genericDef == typeof(IEnumerable<>) ||
+                genericDef == typeof(IReadOnlyList<>) ||
+                genericDef == typeof(IReadOnlyCollection<>))
+            {
+                var elementType = type.GetGenericArguments()[0];
+                var elementConverter = ValueConverterRegistry.GetConverter(elementType);
+                if (elementConverter == null) return null;
+                var listConverterType = typeof(ListConverter<>).MakeGenericType(elementType);
+                return (IValueConverter)Activator.CreateInstance(listConverterType, elementConverter, listDelimiter)!;
+            }
+        }
+
+        return ValueConverterRegistry.GetConverter(type);
     }
 }

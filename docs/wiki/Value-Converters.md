@@ -11,6 +11,7 @@ pluggable `IValueConverter<T>` implementations.
 |-----------|----------------|
 | `string` | `StringConverter` |
 | `bool` | `BoolConverter` |
+| `byte` | `ByteConverter` |
 | `int` | `Int32Converter` |
 | `long` | `Int64Converter` |
 | `uint` | `UInt32Converter` |
@@ -19,11 +20,23 @@ pluggable `IValueConverter<T>` implementations.
 | `float` | `FloatConverter` |
 | `decimal` | `DecimalConverter` |
 | `DateTime` | `DateTimeConverter` (ISO 8601 round-trip) |
+| `DateTimeOffset` | `DateTimeOffsetConverter` (ISO 8601 round-trip) |
 | `TimeSpan` | `TimeSpanConverter` (constant "c" format) |
 | `Guid` | `GuidConverter` |
 | `Uri` | `UriConverter` |
 | Any `enum` | `EnumConverter` (auto-registered on first use) |
 | `Nullable<T>` | Wraps the inner converter |
+
+---
+
+## Per-property list delimiter
+
+For list-like property types (`List<T>`, `IList<T>`, `ICollection<T>`, `IEnumerable<T>`, `IReadOnlyList<T>`, `IReadOnlyCollection<T>`, `T[]`), you can override the default comma delimiter per property:
+
+```csharp
+[IniValue(DefaultValue = "one|two|three", ListDelimiter = '|')]
+List<string>? Items { get; set; }
+```
 
 ---
 

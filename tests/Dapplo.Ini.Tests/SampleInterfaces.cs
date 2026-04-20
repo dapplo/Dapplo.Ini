@@ -261,6 +261,14 @@ public interface ICollectionSettings : IIniSection
     [IniValue(DefaultValue = "red,green,blue")]
     string[]? StringArray { get; set; }
 
+    /// <summary>List of strings with a custom <c>|</c> delimiter.</summary>
+    [IniValue(DefaultValue = "left|middle|right", ListDelimiter = '|')]
+    List<string>? PipeStringList { get; set; }
+
+    /// <summary>Array of integers with a custom <c>;</c> delimiter.</summary>
+    [IniValue(DefaultValue = "1;2;3", ListDelimiter = ';')]
+    int[]? SemicolonIntArray { get; set; }
+
     /// <summary>Dictionary mapping string keys to integer values. Stored as sub-keys in the INI file:
     /// <c>StringIntDictionary.x = 10</c>, <c>StringIntDictionary.y = 20</c>.
     /// The <see cref="Attributes.IniValueAttribute.DefaultValue"/> uses the inline format <c>key=value,...</c>.</summary>
