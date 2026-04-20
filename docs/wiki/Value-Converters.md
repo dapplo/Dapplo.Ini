@@ -11,6 +11,7 @@ pluggable `IValueConverter<T>` implementations.
 |-----------|----------------|
 | `string` | `StringConverter` |
 | `bool` | `BoolConverter` |
+| `byte` | `ByteConverter` |
 | `int` | `Int32Converter` |
 | `long` | `Int64Converter` |
 | `uint` | `UInt32Converter` |
@@ -19,6 +20,7 @@ pluggable `IValueConverter<T>` implementations.
 | `float` | `FloatConverter` |
 | `decimal` | `DecimalConverter` |
 | `DateTime` | `DateTimeConverter` (ISO 8601 round-trip) |
+| `DateTimeOffset` | `DateTimeOffsetConverter` (ISO 8601 round-trip) |
 | `TimeSpan` | `TimeSpanConverter` (constant "c" format) |
 | `Guid` | `GuidConverter` |
 | `Uri` | `UriConverter` |
