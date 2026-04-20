@@ -1151,18 +1151,15 @@ public sealed class IniConfig : IDisposable
                 foreach (var rawKvp in sectionBase.GetAllRawValues())
                 {
                     var propDesc = sectionBase.GetPropertyDescription(rawKvp.Key);
-                    if (propDesc != null)
+                    if (propDesc == null)
                     {
                         var keySeparatorIndex = rawKvp.Key.IndexOf('.');
                         if (keySeparatorIndex > 0)
                         {
                             var prefixKey = rawKvp.Key.Substring(0, keySeparatorIndex);
-                            var probeDescription = sectionBase.GetPropertyDescription($"{prefixKey}.__dapplo_desc_probe__");
-                            if (string.Equals(probeDescription, propDesc, StringComparison.Ordinal)
-                                && !describedSubKeyDictionaries.Add(prefixKey))
-                            {
+                            propDesc = sectionBase.GetPropertyDescription(prefixKey);
+                            if (propDesc != null && !describedSubKeyDictionaries.Add(prefixKey))
                                 propDesc = null;
-                            }
                         }
                     }
                     var propComments = propDesc != null

@@ -987,7 +987,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 if (p.IsIgnored || p.IsReadOnly || p.IsRuntimeOnly || p.Description == null) continue;
                 string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
                 if (p.IsSubKeyDictionary)
-                    sb.AppendLine($"                case var __pd when __pd.StartsWith(\"{EscapeString(keyName)}.\"):  return \"{EscapeString(p.Description)}\";");
+                    sb.AppendLine($"                case \"{EscapeString(keyName)}\": return \"{EscapeString(p.Description)}\";");
                 else
                     sb.AppendLine($"                case \"{EscapeString(keyName)}\": return \"{EscapeString(p.Description)}\";");
             }
