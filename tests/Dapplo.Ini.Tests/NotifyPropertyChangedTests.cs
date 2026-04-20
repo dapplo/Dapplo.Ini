@@ -140,6 +140,43 @@ public sealed class NotifyPropertyChangedTests
         Assert.False(section is INotifyPropertyChanged,
             "Generated class for a non-INotifyPropertyChanged interface must not implement INPC.");
     }
+
+    [Fact]
+    public void PartialSetHook_CanCoerceValueBeforeStorage_AndRaiseSingleChangedEvent()
+    {
+        var section = new RuntimeCoercionSettingsImpl();
+        section.ResetToDefaults();
+
+        var changedNames = new List<string>();
+        section.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName != null) changedNames.Add(e.PropertyName);
+        };
+
+        section.Port = 70000;
+
+        Assert.Equal(65535, section.Port);
+        Assert.Equal(1, changedNames.Count(n => n == nameof(IRuntimeCoercionSettings.Port)));
+    }
+
+    [Fact]
+    public void PartialSetHook_EqualityCheckUsesCoercedValue()
+    {
+        var section = new RuntimeCoercionSettingsImpl();
+        section.ResetToDefaults();
+        section.Port = 65535;
+
+        int eventCount = 0;
+        section.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(IRuntimeCoercionSettings.Port))
+                eventCount++;
+        };
+
+        // Coerces to 65535, which equals the current value, so no event should fire.
+        section.Port = 70000;
+        Assert.Equal(0, eventCount);
+    }
 }
 
 // ── Sample interfaces for NPC suppression tests ──────────────────────────────
@@ -162,4 +199,16 @@ public interface INpcBothEventsSettings
     /// <summary>PropertyChanging is suppressed for this property.</summary>
     [IniValue(DefaultValue = "noChanging", SuppressPropertyChanging = true)]
     string? NoChangingValue { get; set; }
+}
+
+[IniSection("RuntimeCoercion")]
+public interface IRuntimeCoercionSettings : IIniSection, INotifyPropertyChanged
+{
+    [IniValue(DefaultValue = "8080")]
+    int Port { get; set; }
+}
+
+public partial class RuntimeCoercionSettingsImpl
+{
+    partial void OnPortSet(ref int value) => value = Math.Clamp(value, 1, 65535);
 }

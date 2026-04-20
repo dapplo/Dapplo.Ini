@@ -17,6 +17,12 @@ public sealed class IniParserOptions
     public static readonly IniParserOptions Default = new IniParserOptions();
 
     /// <summary>
+    /// Characters that are treated as assignment delimiters between key and value.
+    /// Defaults to <c>"=:"</c>, so both <c>key = value</c> and <c>key: value</c> are accepted.
+    /// </summary>
+    public string AssignmentDelimiters { get; set; } = "=:";
+
+    /// <summary>
     /// Determines how duplicate keys within the same section are handled.
     /// Defaults to <see cref="DuplicateKeyHandling.LastWins"/>.
     /// </summary>

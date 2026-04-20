@@ -22,7 +22,7 @@ AnotherKey=another value
 | Element | Syntax |
 |---------|--------|
 | **Section header** | `[SectionName]` |
-| **Key-value pair** | `key = value` or `key=value` (whitespace around `=` is trimmed) |
+| **Key-value pair** | `key = value`, `key=value`, or `key: value` (assignment delimiters are configurable via `IniParserOptions.AssignmentDelimiters`) |
 | **Comment** | A line starting with `;` or `#` |
 | **Blank line** | Ignored — resets pending comments so they aren't attached to the next key |
 
@@ -165,6 +165,9 @@ When the framework writes an INI file it outputs:
 1. A `;` comment line before each **section** that has a `Description`.
 2. A `;` comment line before each **key** that has a `Description`.
 3. A blank line between sections.
+
+Comments can be disabled globally (`SkipCommentsOnWrite()` / `IniWriterOptions.WriteComments = false`)
+or per section/property via `[IniSection(WriteComments = ...)]` and `[IniValue(WriteComments = ...)]`.
 
 ```ini
 ; General application settings

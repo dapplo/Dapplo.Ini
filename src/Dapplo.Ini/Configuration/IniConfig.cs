@@ -70,11 +70,12 @@ public sealed class IniConfig : IDisposable
     internal bool GlobalEmptyWhenNull;
 
     /// <summary>
-    /// The separator string written between each key and value when saving the INI file.
-    /// Defaults to <c>" = "</c> (spaces around the equals sign).
-    /// Set via <see cref="IniConfigBuilder.AssignmentSeparator"/>.
+    /// Writer options that control how INI files are written on save.
+    /// Set via <see cref="IniConfigBuilder.WithWriterOptions"/> or convenience methods on
+    /// <see cref="IniConfigBuilder"/>.
+    /// Defaults to <see cref="Parsing.IniWriterOptions.Default"/>.
     /// </summary>
-    internal string AssignmentSeparator = " = ";
+    internal Parsing.IniWriterOptions WriterOptions = Parsing.IniWriterOptions.Default;
 
     /// <summary>
     /// Parser options that control how INI files are interpreted on load/reload.
@@ -279,7 +280,7 @@ public sealed class IniConfig : IDisposable
                     if (ShouldLockFile) ReleaseFileLock();
                     try
                     {
-                        IniFileWriter.WriteFile(LoadedFromPath!, iniFile, Encoding);
+                        IniFileWriter.WriteFile(LoadedFromPath!, iniFile, Encoding, WriterOptions);
                     }
                     finally
                     {
@@ -364,7 +365,7 @@ public sealed class IniConfig : IDisposable
                     if (ShouldLockFile) ReleaseFileLock();
                     try
                     {
-                        await IniFileWriter.WriteFileAsync(LoadedFromPath!, iniFile, Encoding, cancellationToken).ConfigureAwait(false);
+                        await IniFileWriter.WriteFileAsync(LoadedFromPath!, iniFile, Encoding, WriterOptions, cancellationToken).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -1130,7 +1131,7 @@ public sealed class IniConfig : IDisposable
     internal IniFile BuildIniFile()
     {
         var iniFile = new Parsing.IniFile();
-        iniFile.AssignmentSeparator = AssignmentSeparator;
+        iniFile.AssignmentSeparator = WriterOptions.AssignmentSeparator;
         foreach (var kvp in Sections)
         {
             var section = kvp.Value;
@@ -1140,16 +1141,34 @@ public sealed class IniConfig : IDisposable
                 var sectionComments = sectionDesc != null
                     ? (IReadOnlyList<string>)new[] { sectionDesc }
                     : Array.Empty<string>();
-                var iniSection = new Parsing.IniSection(section.SectionName, sectionComments);
+                var iniSection = new Parsing.IniSection(section.SectionName, sectionComments)
+                {
+                    WriterOptionsOverride = sectionBase.GetSectionWriterOptions()
+                };
                 iniFile.AddSection(iniSection);
+                var describedSubKeyDictionaries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
                 foreach (var rawKvp in sectionBase.GetAllRawValues())
                 {
                     var propDesc = sectionBase.GetPropertyDescription(rawKvp.Key);
+                    if (propDesc == null)
+                    {
+                        var keySeparatorIndex = rawKvp.Key.IndexOf('.');
+                        if (keySeparatorIndex > 0)
+                        {
+                            var prefixKey = rawKvp.Key.Substring(0, keySeparatorIndex);
+                            propDesc = sectionBase.GetPropertyDescription(prefixKey);
+                            if (propDesc != null && !describedSubKeyDictionaries.Add(prefixKey))
+                                propDesc = null;
+                        }
+                    }
                     var propComments = propDesc != null
                         ? (IReadOnlyList<string>)new[] { propDesc }
                         : Array.Empty<string>();
-                    iniSection.SetEntry(new Parsing.IniEntry(rawKvp.Key, rawKvp.Value, propComments));
+                    iniSection.SetEntry(new Parsing.IniEntry(rawKvp.Key, rawKvp.Value, propComments)
+                    {
+                        WriterOptionsOverride = sectionBase.GetPropertyWriterOptions(rawKvp.Key)
+                    });
                 }
             }
             else

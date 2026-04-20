@@ -57,6 +57,19 @@ public sealed class BoolConverter : ValueConverterBase<bool>
     }
 }
 
+/// <summary>Converts <see cref="byte"/>.</summary>
+public sealed class ByteConverter : ValueConverterBase<byte>
+{
+    public override byte ConvertFromString(string? raw, byte defaultValue = default)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return defaultValue;
+        return byte.Parse(raw!.Trim(), CultureInfo.InvariantCulture);
+    }
+
+    public override string? ConvertToString(byte value)
+        => value.ToString(CultureInfo.InvariantCulture);
+}
+
 /// <summary>Converts <see cref="int"/>.</summary>
 public sealed class Int32Converter : ValueConverterBase<int>
 {
@@ -160,6 +173,21 @@ public sealed class DateTimeConverter : ValueConverterBase<DateTime>
     }
 
     public override string? ConvertToString(DateTime value)
+        => value.ToString(Format, CultureInfo.InvariantCulture);
+}
+
+/// <summary>Converts <see cref="DateTimeOffset"/> using ISO-8601 round-trip format.</summary>
+public sealed class DateTimeOffsetConverter : ValueConverterBase<DateTimeOffset>
+{
+    private const string Format = "O"; // round-trip ISO 8601
+
+    public override DateTimeOffset ConvertFromString(string? raw, DateTimeOffset defaultValue = default)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return defaultValue;
+        return DateTimeOffset.Parse(raw!.Trim(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+    }
+
+    public override string? ConvertToString(DateTimeOffset value)
         => value.ToString(Format, CultureInfo.InvariantCulture);
 }
 

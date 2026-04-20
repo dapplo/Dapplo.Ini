@@ -97,6 +97,69 @@ public interface IServerSettings : IIniSection, IDataValidation<IServerSettings>
 
 ---
 
+## Keep values in range (auto-correct / clamp)
+
+`IDataValidation<TSelf>` reports errors, but it does **not** change the value.
+If you want to actively keep a property in range (for example clamp a port to
+`1..65535`), use lifecycle hooks to normalise values:
+
+```csharp
+[IniSection("Server")]
+public interface IServerSettings : IIniSection, IAfterLoad<IServerSettings>, IBeforeSave<IServerSettings>
+{
+    private const int MinPort = 1;
+    private const int MaxPort = 65535;
+
+    [IniValue(DefaultValue = "8080")]
+    int Port { get; set; }
+
+    static new void OnAfterLoad(IServerSettings self)
+        => self.Port = Math.Clamp(self.Port, MinPort, MaxPort);
+
+    static new bool OnBeforeSave(IServerSettings self)
+    {
+        self.Port = Math.Clamp(self.Port, MinPort, MaxPort);
+        return true;
+    }
+}
+```
+
+Use this pattern when you want to **fix** values. Use `IDataValidation<TSelf>`
+when you want to **surface validation errors** to bindings/UI.
+
+### Clamp immediately while the app is running
+
+If you want the old "custom setter" behaviour (coerce value right after assignment
+and push the corrected value back to the UI), implement the generated partial
+setter hook in the section's partial class:
+
+```csharp
+[IniSection("Server")]
+public interface IServerSettings : IIniSection, INotifyPropertyChanged
+{
+    [IniValue(DefaultValue = "8080")]
+    int Port { get; set; }
+}
+
+public partial class ServerSettingsImpl
+{
+    partial void OnPortSet(ref int value)
+        => value = Math.Clamp(value, 1, 65535);
+}
+```
+
+`On<Property>Set(ref T value)` is called inside the generated property setter
+*before* equality checks, persistence updates, validation, and
+`INotifyPropertyChanged` events.
+
+An optional `On<Property>Get(ref T value)` hook is also available when you need
+to transform the value on reads.
+
+Use this for **live coercion** while users edit values; keep `OnAfterLoad` /
+`OnBeforeSave` as a safety net for values coming from files or other code paths.
+
+---
+
 ## Combining DataAnnotations and custom rules
 
 Both rule sets are **merged**: generated attribute rules are checked first,

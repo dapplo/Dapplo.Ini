@@ -47,6 +47,8 @@ public sealed class CollectionTests : IDisposable
         Assert.Equal(new List<string> { "A", "B", "C" }, section.StringList);
         Assert.Equal(new List<int> { 1, 2, 3 }, section.IntList);
         Assert.Equal(new[] { "red", "green", "blue" }, section.StringArray);
+        Assert.Equal(new List<string> { "left", "middle", "right" }, section.PipeStringList);
+        Assert.Equal(new[] { 1, 2, 3 }, section.SemicolonIntArray);
     }
 
     [Fact]
@@ -124,6 +126,21 @@ public sealed class CollectionTests : IDisposable
     }
 
     [Fact]
+    public void Build_WithFile_LoadsCustomDelimitedListAndArrayProperties()
+    {
+        WriteIni("colcustom.ini", "[Collections]\nPipeStringList = one|two|three\nSemicolonIntArray = 10;20;30");
+
+        var section = new CollectionSettingsImpl();
+        IniConfigRegistry.ForFile("colcustom.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<ICollectionSettings>(section)
+            .Build();
+
+        Assert.Equal(new List<string> { "one", "two", "three" }, section.PipeStringList);
+        Assert.Equal(new[] { 10, 20, 30 }, section.SemicolonIntArray);
+    }
+
+    [Fact]
     public void Build_WithFile_LoadsDictionaryProperty()
     {
         // Dictionary<string, int> uses sub-key notation: "PropertyName.key = value"
@@ -192,6 +209,36 @@ public sealed class CollectionTests : IDisposable
             .Build();
 
         Assert.Equal(new[] { "w", "x", "y", "z" }, section2.StringArray);
+    }
+
+    [Fact]
+    public void SaveAndReload_RoundTrips_CustomDelimitedListAndArray()
+    {
+        var path = WriteIni("savecustom.ini", "[Collections]\n");
+
+        var section = new CollectionSettingsImpl();
+        var config = IniConfigRegistry.ForFile("savecustom.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<ICollectionSettings>(section)
+            .Build();
+
+        section.PipeStringList = new List<string> { "north", "south", "east" };
+        section.SemicolonIntArray = new[] { 7, 8, 9 };
+        config.Save();
+
+        var written = File.ReadAllText(path);
+        Assert.Contains("PipeStringList = north|south|east", written);
+        Assert.Contains("SemicolonIntArray = 7;8;9", written);
+
+        IniConfigRegistry.Unregister("savecustom.ini");
+        var section2 = new CollectionSettingsImpl();
+        IniConfigRegistry.ForFile("savecustom.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<ICollectionSettings>(section2)
+            .Build();
+
+        Assert.Equal(new List<string> { "north", "south", "east" }, section2.PipeStringList);
+        Assert.Equal(new[] { 7, 8, 9 }, section2.SemicolonIntArray);
     }
 
     [Fact]

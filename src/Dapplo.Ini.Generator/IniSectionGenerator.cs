@@ -107,6 +107,13 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         public bool IgnoreDefaults { get; set; }
         // True when [IniValue(IgnoreConstants=true)] — property is never set from constants files.
         public bool IgnoreConstants { get; set; }
+        // True when property type is list-like (List<T>, IList<T>, ICollection<T>, IEnumerable<T>,
+        // IReadOnlyList<T>, IReadOnlyCollection<T>, or T[]). Supports per-property ListDelimiter.
+        public bool IsListLike { get; set; }
+        public char ListDelimiter { get; set; } = ',';
+        public string? WriterQuoteValues { get; set; }
+        public string? WriterEscapeSequences { get; set; }
+        public string? WriterComments { get; set; }
         // Validation attributes from System.ComponentModel.DataAnnotations
         public bool IsRequired { get; set; }
         public string? RequiredErrorMessage { get; set; }
@@ -151,6 +158,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         public bool SectionIgnoresDefaults { get; set; }
         // True when [IniSection(IgnoreConstants=true)] — section is never populated from constants files
         public bool SectionIgnoresConstants { get; set; }
+        public string? SectionWriterQuoteValues { get; set; }
+        public string? SectionWriterEscapeSequences { get; set; }
+        public string? SectionWriterComments { get; set; }
         // True when the section interface extends INotifyPropertyChanged / INotifyPropertyChanging
         public bool ImplementsINotifyPropertyChanged { get; set; }
         public bool ImplementsINotifyPropertyChanging { get; set; }
@@ -212,6 +222,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         bool sectionEmptyWhenNull = false;
         bool sectionIgnoresDefaults = false;
         bool sectionIgnoresConstants = false;
+        string? sectionWriterQuoteValues = null;
+        string? sectionWriterEscapeSequences = null;
+        string? sectionWriterComments = null;
         if (iniSectionAttr != null)
             foreach (var na in iniSectionAttr.NamedArguments)
             {
@@ -223,6 +236,12 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                     sectionIgnoresDefaults = true;
                 if (na.Key == "IgnoreConstants" && na.Value.Value is true)
                     sectionIgnoresConstants = true;
+                if (na.Key == "QuoteValues" && na.Value.Value != null)
+                    sectionWriterQuoteValues = GetEnumValueName(na.Value);
+                if (na.Key == "EscapeSequences" && na.Value.Value != null)
+                    sectionWriterEscapeSequences = GetEnumValueName(na.Value);
+                if (na.Key == "WriteComments" && na.Value.Value != null)
+                    sectionWriterComments = GetEnumValueName(na.Value);
             }
 
         // Fall back to [Description("...")] on the interface if [IniSection] doesn't specify Description
@@ -285,6 +304,11 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
 
             // Detect string-keyed dictionaries: Dictionary<string, TV> and IDictionary<string, TV>.
             // These use dotted sub-key notation in the INI file instead of a packed single value.
+            if (member.Type is IArrayTypeSymbol)
+            {
+                prop.IsListLike = true;
+            }
+
             if (member.Type is INamedTypeSymbol namedMemberType && namedMemberType.IsGenericType)
             {
                 var originalDefStr = namedMemberType.OriginalDefinition.ToDisplayString();
@@ -295,6 +319,17 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 {
                     prop.IsSubKeyDictionary = true;
                     prop.DictionaryValueTypeFullName = namedMemberType.TypeArguments[1].ToDisplayString();
+                }
+
+                if (namedMemberType.TypeArguments.Length == 1 &&
+                    (originalDefStr == "System.Collections.Generic.List<T>" ||
+                     originalDefStr == "System.Collections.Generic.IList<T>" ||
+                     originalDefStr == "System.Collections.Generic.ICollection<T>" ||
+                     originalDefStr == "System.Collections.Generic.IEnumerable<T>" ||
+                     originalDefStr == "System.Collections.Generic.IReadOnlyList<T>" ||
+                     originalDefStr == "System.Collections.Generic.IReadOnlyCollection<T>"))
+                {
+                    prop.IsListLike = true;
                 }
             }
 
@@ -318,6 +353,10 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                         case "EmptyWhenNull":           prop.EmptyWhenNull = na.Value.Value is true; break;
                         case "IgnoreDefaults":          prop.IgnoreDefaults = na.Value.Value is true; break;
                         case "IgnoreConstants":         prop.IgnoreConstants = na.Value.Value is true; break;
+                        case "ListDelimiter":           if (na.Value.Value is char c) prop.ListDelimiter = c; break;
+                        case "QuoteValues":             prop.WriterQuoteValues = GetEnumValueName(na.Value); break;
+                        case "EscapeSequences":         prop.WriterEscapeSequences = GetEnumValueName(na.Value); break;
+                        case "WriteComments":           prop.WriterComments = GetEnumValueName(na.Value); break;
                     }
                 }
             }
@@ -443,6 +482,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             SectionEmptyWhenNull        = sectionEmptyWhenNull,
             SectionIgnoresDefaults      = sectionIgnoresDefaults,
             SectionIgnoresConstants     = sectionIgnoresConstants,
+            SectionWriterQuoteValues    = sectionWriterQuoteValues,
+            SectionWriterEscapeSequences = sectionWriterEscapeSequences,
+            SectionWriterComments       = sectionWriterComments,
             ImplementsINotifyPropertyChanged  = implementsINotifyPropertyChanged,
             ImplementsINotifyPropertyChanging = implementsINotifyPropertyChanging,
             // All properties are included so the generated class satisfies the interface contract.
@@ -631,14 +673,22 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             sb.AppendLine($"        public {p.TypeFullName} {p.Name}");
             sb.AppendLine("        {");
 
-            // The getter always returns the committed backing field.
+            // The getter always starts from the committed backing field.
+            // A partial "On{Prop}Get(ref value)" hook can transform the outgoing value.
             // During a transaction the setter only writes to the Tx field,
             // so the backing field still holds the pre-transaction value until Commit().
-            sb.AppendLine($"            get => {fieldName};");
+            sb.AppendLine("            get");
+            sb.AppendLine("            {");
+            sb.AppendLine($"                var __value = {fieldName};");
+            sb.AppendLine($"                On{p.Name}Get(ref __value);");
+            sb.AppendLine("                return __value;");
+            sb.AppendLine("            }");
 
             // setter
             sb.AppendLine("            set");
             sb.AppendLine("            {");
+            sb.AppendLine("                var __value = value;");
+            sb.AppendLine($"                On{p.Name}Set(ref __value);");
 
             // Determine which events this property should emit.
             // Events are generated at interface level; per-property attributes can suppress them.
@@ -649,7 +699,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             // This prevents redundant events and stops infinite loops in WPF bindings.
             if (emitChanging || emitChanged)
             {
-                sb.AppendLine($"                if (EqualityComparer<{p.TypeFullName}>.Default.Equals({fieldName}, value)) return;");
+                sb.AppendLine($"                if (EqualityComparer<{p.TypeFullName}>.Default.Equals({fieldName}, __value)) return;");
             }
             if (emitChanging)
             {
@@ -659,7 +709,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             if (p.IsIgnored || p.IsRuntimeOnly)
             {
                 // [IgnoreDataMember] / RuntimeOnly — only update the backing field; no INI interaction.
-                sb.AppendLine($"                {fieldName} = value;");
+                sb.AppendLine($"                {fieldName} = __value;");
             }
             else
             {
@@ -670,25 +720,27 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                     // The key in the INI file is "PropertyName.dictionaryKey".
                     if (usesTx)
                     {
-                        sb.AppendLine($"                {txFieldName} = value;");
-                        sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = value; {fieldName}HasRawEntries = true; if (value != null) foreach (var __kvp in value) SetRawValue($\"{keyNameForSet}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value)); }}");
+                        sb.AppendLine($"                {txFieldName} = __value;");
+                        sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = __value; {fieldName}HasRawEntries = true; if (__value != null) foreach (var __kvp in __value) SetRawValue($\"{keyNameForSet}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value)); }}");
                     }
                     else
                     {
-                        sb.AppendLine($"                {fieldName} = value;");
+                        sb.AppendLine($"                {fieldName} = __value;");
                         sb.AppendLine($"                {fieldName}HasRawEntries = true;");
-                        sb.AppendLine($"                if (value != null) foreach (var __kvp in value) SetRawValue($\"{keyNameForSet}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value));");
+                        sb.AppendLine($"                if (__value != null) foreach (var __kvp in __value) SetRawValue($\"{keyNameForSet}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value));");
                     }
                 }
                 else if (usesTx)
                 {
-                    sb.AppendLine($"                {txFieldName} = value;");
-                    sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = value; SetRawValue(\"{keyNameForSet}\", ConvertToRaw(value)); }}");
+                    var convertToRawValue = BuildConvertToRawCall(p, "__value");
+                    sb.AppendLine($"                {txFieldName} = __value;");
+                    sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = __value; SetRawValue(\"{keyNameForSet}\", {convertToRawValue}); }}");
                 }
                 else
                 {
-                    sb.AppendLine($"                {fieldName} = value;");
-                    sb.AppendLine($"                SetRawValue(\"{keyNameForSet}\", ConvertToRaw(value));");
+                    var convertToRawValue = BuildConvertToRawCall(p, "__value");
+                    sb.AppendLine($"                {fieldName} = __value;");
+                    sb.AppendLine($"                SetRawValue(\"{keyNameForSet}\", {convertToRawValue});");
                 }
             }
 
@@ -704,6 +756,17 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             }
             sb.AppendLine("            }");
             sb.AppendLine("        }");
+            sb.AppendLine();
+        }
+
+        // ── Per-property partial get/set hooks ─────────────────────────────
+        // Consumers can implement these in a separate partial class file to
+        // coerce values (set hook) or transform values on read (get hook).
+        // If not implemented, calls are removed by the compiler.
+        foreach (var p in m.Properties)
+        {
+            sb.AppendLine($"        partial void On{p.Name}Set(ref {p.TypeFullName} value);");
+            sb.AppendLine($"        partial void On{p.Name}Get(ref {p.TypeFullName} value);");
             sb.AppendLine();
         }
 
@@ -726,19 +789,19 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             {
                 // Sub-key dictionaries parse their default the same way (inline format for the
                 // default string is fine — only the INI file storage uses sub-key notation).
-                sb.AppendLine($"            {fieldName} = ConvertFromRaw<{p.TypeFullName}>(\"{EscapeString(p.DefaultValue)}\");");
+                sb.AppendLine($"            {fieldName} = {BuildConvertFromRawCall(p, $"\"{EscapeString(p.DefaultValue)}\"")};");
             }
             else if (p.EmptyWhenNull)
             {
                 // EmptyWhenNull with no DefaultValue: produce an empty instance (e.g. string.Empty,
                 // empty List<T>, empty T[], empty Dictionary<K,V>) rather than null/default.
-                sb.AppendLine($"            {fieldName} = ConvertFromRaw<{p.TypeFullName}>(\"\");");
+                sb.AppendLine($"            {fieldName} = {BuildConvertFromRawCall(p, "\"\"")};");
             }
             else if (!p.IsValueType)
             {
                 // Reference-type property without compile-time EmptyWhenNull: honour the runtime
                 // GlobalEmptyWhenNull flag set by IniConfig (from IniConfigBuilder.EmptyWhenNull()).
-                sb.AppendLine($"            {fieldName} = ConvertFromRaw<{p.TypeFullName}>(GlobalEmptyWhenNull ? \"\" : null);");
+                sb.AppendLine($"            {fieldName} = {BuildConvertFromRawCall(p, "GlobalEmptyWhenNull ? \"\" : null")};");
             }
             else
             {
@@ -782,7 +845,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                     rawArg = "GlobalEmptyWhenNull ? rawValue ?? \"\" : rawValue";
                 else
                     rawArg = "rawValue";
-                sb.AppendLine($"                    {fieldName} = ConvertFromRaw<{p.TypeFullName}>({rawArg});");
+                sb.AppendLine($"                    {fieldName} = {BuildConvertFromRawCall(p, rawArg)};");
                 sb.AppendLine("                    break;");
             }
         }
@@ -829,7 +892,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             }
             else
             {
-                sb.AppendLine($"            yield return new KeyValuePair<string, string?>(\"{EscapeString(keyName)}\", ConvertToRaw({fieldName}));");
+                sb.AppendLine($"            yield return new KeyValuePair<string, string?>(\"{EscapeString(keyName)}\", {BuildConvertToRawCall(p, fieldName)});");
             }
         }
         sb.AppendLine("        }");
@@ -924,7 +987,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 if (p.IsIgnored || p.IsReadOnly || p.IsRuntimeOnly || p.Description == null) continue;
                 string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
                 if (p.IsSubKeyDictionary)
-                    sb.AppendLine($"                case var __pd when __pd.StartsWith(\"{EscapeString(keyName)}.\"):  return \"{EscapeString(p.Description)}\";");
+                    sb.AppendLine($"                case \"{EscapeString(keyName)}\": return \"{EscapeString(p.Description)}\";");
                 else
                     sb.AppendLine($"                case \"{EscapeString(keyName)}\": return \"{EscapeString(p.Description)}\";");
             }
@@ -937,6 +1000,53 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         }
         sb.AppendLine("        }");
         sb.AppendLine();
+
+        // ── GetSectionWriterOptions ────────────────────────────────────────────
+        bool hasSectionWriterOverrides =
+            (m.SectionWriterQuoteValues != null && m.SectionWriterQuoteValues != "Default")
+            || (m.SectionWriterEscapeSequences != null && m.SectionWriterEscapeSequences != "Default")
+            || (m.SectionWriterComments != null && m.SectionWriterComments != "Default");
+        if (hasSectionWriterOverrides)
+        {
+            sb.AppendLine("        public override Dapplo.Ini.Parsing.IniWriterOptionsOverride? GetSectionWriterOptions()");
+            sb.AppendLine("            => new Dapplo.Ini.Parsing.IniWriterOptionsOverride");
+            sb.AppendLine("            {");
+            if (m.SectionWriterQuoteValues != null && m.SectionWriterQuoteValues != "Default")
+                sb.AppendLine($"                QuoteStyle = Dapplo.Ini.Parsing.IniValueQuoteStyle.{m.SectionWriterQuoteValues},");
+            if (m.SectionWriterEscapeSequences != null && m.SectionWriterEscapeSequences != "Default")
+                sb.AppendLine($"                EscapeSequences = Dapplo.Ini.Parsing.IniBooleanOption.{m.SectionWriterEscapeSequences},");
+            if (m.SectionWriterComments != null && m.SectionWriterComments != "Default")
+                sb.AppendLine($"                WriteComments = Dapplo.Ini.Parsing.IniBooleanOption.{m.SectionWriterComments},");
+            sb.AppendLine("            };");
+            sb.AppendLine();
+        }
+
+        // ── GetPropertyWriterOptions ───────────────────────────────────────────
+        var writerOverrideProps = m.Properties.Where(p =>
+            !p.IsIgnored && !p.IsReadOnly && !p.IsRuntimeOnly &&
+            ((p.WriterQuoteValues != null && p.WriterQuoteValues != "Default")
+             || (p.WriterEscapeSequences != null && p.WriterEscapeSequences != "Default")
+             || (p.WriterComments != null && p.WriterComments != "Default"))).ToList();
+        if (writerOverrideProps.Count > 0)
+        {
+            sb.AppendLine("        public override Dapplo.Ini.Parsing.IniWriterOptionsOverride? GetPropertyWriterOptions(string key)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            switch (key.ToLowerInvariant())");
+            sb.AppendLine("            {");
+            foreach (var p in writerOverrideProps)
+            {
+                string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
+                var assignments = BuildWriterOverrideAssignments(p.WriterQuoteValues, p.WriterEscapeSequences, p.WriterComments);
+                if (p.IsSubKeyDictionary)
+                    sb.AppendLine($"                case var __pwo when __pwo.StartsWith(\"{EscapeString(keyName)}.\"): return new Dapplo.Ini.Parsing.IniWriterOptionsOverride {{ {assignments} }};");
+                else
+                    sb.AppendLine($"                case \"{EscapeString(keyName)}\": return new Dapplo.Ini.Parsing.IniWriterOptionsOverride {{ {assignments} }};");
+            }
+            sb.AppendLine("                default: return null;");
+            sb.AppendLine("            }");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+        }
 
         // ── SectionIgnoresDefaults / SectionIgnoresConstants ───────────────────
         if (m.SectionIgnoresDefaults)
@@ -1207,6 +1317,68 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
 
     private static string EscapeString(string s)
         => s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "\\r").Replace("\n", "\\n");
+
+    private static string EscapeCharLiteral(char c)
+        => c switch
+        {
+            '\'' => "\\'",
+            '\\' => "\\\\",
+            '\0' => "\\0",
+            '\a' => "\\a",
+            '\b' => "\\b",
+            '\f' => "\\f",
+            '\n' => "\\n",
+            '\r' => "\\r",
+            '\t' => "\\t",
+            '\v' => "\\v",
+            _ => c.ToString()
+        };
+
+    private static string BuildConvertFromRawCall(PropertyModel p, string rawExpression)
+    {
+        if (p.IsListLike)
+            return $"ConvertFromRaw<{p.TypeFullName}>({rawExpression}, '{EscapeCharLiteral(p.ListDelimiter)}')";
+        return $"ConvertFromRaw<{p.TypeFullName}>({rawExpression})";
+    }
+
+    private static string BuildConvertToRawCall(PropertyModel p, string valueExpression)
+    {
+        if (p.IsListLike)
+            return $"ConvertToRaw({valueExpression}, '{EscapeCharLiteral(p.ListDelimiter)}')";
+        return $"ConvertToRaw({valueExpression})";
+    }
+
+    private static string BuildWriterOverrideAssignments(string? quoteValues, string? escapeSequences, string? writeComments)
+    {
+        var parts = new List<string>();
+        if (quoteValues != null && quoteValues != "Default")
+            parts.Add($"QuoteStyle = Dapplo.Ini.Parsing.IniValueQuoteStyle.{quoteValues}");
+        if (escapeSequences != null && escapeSequences != "Default")
+            parts.Add($"EscapeSequences = Dapplo.Ini.Parsing.IniBooleanOption.{escapeSequences}");
+        if (writeComments != null && writeComments != "Default")
+            parts.Add($"WriteComments = Dapplo.Ini.Parsing.IniBooleanOption.{writeComments}");
+        return string.Join(", ", parts);
+    }
+
+    private static string? GetEnumValueName(TypedConstant constant)
+    {
+        if (constant.Value == null)
+            return null;
+
+        if (constant.Type is not INamedTypeSymbol enumType || enumType.TypeKind != TypeKind.Enum)
+            return constant.Value.ToString();
+
+        var value = System.Convert.ToInt64(constant.Value);
+        foreach (var member in enumType.GetMembers().OfType<IFieldSymbol>())
+        {
+            if (!member.HasConstantValue || member.ConstantValue == null)
+                continue;
+
+            if (System.Convert.ToInt64(member.ConstantValue) == value)
+                return member.Name;
+        }
+        return constant.Value.ToString();
+    }
 
     /// <summary>
     /// Formats the <paramref name="value"/> from a <c>[DefaultValue(...)]</c> constructor argument

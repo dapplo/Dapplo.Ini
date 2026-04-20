@@ -6,6 +6,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Runtime.Serialization;
 using Dapplo.Ini.Attributes;
 using Dapplo.Ini.Interfaces;
+using Dapplo.Ini.Parsing;
 
 namespace Dapplo.Ini.Tests;
 
@@ -260,11 +261,26 @@ public interface ICollectionSettings : IIniSection
     [IniValue(DefaultValue = "red,green,blue")]
     string[]? StringArray { get; set; }
 
+    /// <summary>List of strings with a custom <c>|</c> delimiter.</summary>
+    [IniValue(DefaultValue = "left|middle|right", ListDelimiter = '|')]
+    List<string>? PipeStringList { get; set; }
+
+    /// <summary>Array of integers with a custom <c>;</c> delimiter.</summary>
+    [IniValue(DefaultValue = "1;2;3", ListDelimiter = ';')]
+    int[]? SemicolonIntArray { get; set; }
+
     /// <summary>Dictionary mapping string keys to integer values. Stored as sub-keys in the INI file:
     /// <c>StringIntDictionary.x = 10</c>, <c>StringIntDictionary.y = 20</c>.
     /// The <see cref="Attributes.IniValueAttribute.DefaultValue"/> uses the inline format <c>key=value,...</c>.</summary>
     [IniValue(DefaultValue = "x=10,y=20")]
     Dictionary<string, int>? StringIntDictionary { get; set; }
+}
+
+[IniSection("DescribedCollections")]
+public interface IDescribedCollectionSettings : IIniSection
+{
+    [IniValue(DefaultValue = "x=10,y=20", Description = "Dictionary values")]
+    Dictionary<string, int>? Values { get; set; }
 }
 
 
@@ -555,4 +571,19 @@ public interface IMixedIgnoreSettings : IIniSection
     /// <summary>This property is NEVER loaded from constants files (and therefore never locked).</summary>
     [IniValue(DefaultValue = "compiled-c", IgnoreConstants = true)]
     string? ValueC { get; set; }
+}
+
+// ── Writer behavior sample interface ──────────────────────────────────────────
+
+[IniSection("WriteBehaviorSection", QuoteValues = IniValueQuoteStyle.Double, WriteComments = IniBooleanOption.Disabled)]
+public interface IWriteBehaviorSettings : IIniSection
+{
+    [IniValue(DefaultValue = "plain", Description = "name description")]
+    string? Name { get; set; }
+
+    [IniValue(DefaultValue = "C:\\Temp\\App", EscapeSequences = IniBooleanOption.Enabled)]
+    string? Path { get; set; }
+
+    [IniValue(DefaultValue = "spaced", QuoteValues = IniValueQuoteStyle.Single)]
+    string? SingleQuoted { get; set; }
 }

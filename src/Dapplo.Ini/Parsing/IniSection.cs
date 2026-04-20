@@ -16,6 +16,11 @@ public sealed class IniSection
     /// <summary>Comment lines that appeared above the section header.</summary>
     public IReadOnlyList<string> Comments { get; }
 
+    /// <summary>
+    /// Optional writer overrides for this section.
+    /// </summary>
+    public IniWriterOptionsOverride? WriterOptionsOverride { get; set; }
+
     /// <summary>The entries in declaration order (preserves file order).</summary>
     public IReadOnlyList<IniEntry> Entries => _entriesOrdered;
 

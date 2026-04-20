@@ -38,6 +38,7 @@ public static class ValueConverterRegistry
         // Register all built-in converters
         Register(new StringConverter());
         Register(new BoolConverter());
+        Register(new ByteConverter());
         Register(new Int32Converter());
         Register(new Int64Converter());
         Register(new UInt32Converter());
@@ -46,6 +47,7 @@ public static class ValueConverterRegistry
         Register(new FloatConverter());
         Register(new DecimalConverter());
         Register(new DateTimeConverter());
+        Register(new DateTimeOffsetConverter());
         Register(new TimeSpanConverter());
         Register(new GuidConverter());
         Register(new UriConverter());
