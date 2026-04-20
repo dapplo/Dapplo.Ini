@@ -29,6 +29,17 @@ pluggable `IValueConverter<T>` implementations.
 
 ---
 
+## Per-property list delimiter
+
+For list-like property types (`List<T>`, `IList<T>`, `ICollection<T>`, `IEnumerable<T>`, `IReadOnlyList<T>`, `IReadOnlyCollection<T>`, `T[]`), you can override the default comma delimiter per property:
+
+```csharp
+[IniValue(DefaultValue = "one|two|three", ListDelimiter = '|')]
+List<string>? Items { get; set; }
+```
+
+---
+
 ## Adding a custom converter
 
 ```csharp

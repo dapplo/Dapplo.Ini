@@ -181,6 +181,15 @@ public sealed class IniValueAttribute : Attribute
     public bool EmptyWhenNull { get; set; }
 
     /// <summary>
+    /// Delimiter used for list-like values on this property (for example
+    /// <c>List&lt;T&gt;</c>, <c>IList&lt;T&gt;</c>, and <c>T[]</c>).
+    /// </summary>
+    /// <remarks>
+    /// The default delimiter is <c>,</c>. This setting is ignored for non-list property types.
+    /// </remarks>
+    public char ListDelimiter { get; set; } = ',';
+
+    /// <summary>
     /// Optional property-level override for value quoting when writing.
     /// </summary>
     public IniValueQuoteStyle QuoteValues { get; set; } = IniValueQuoteStyle.Default;
