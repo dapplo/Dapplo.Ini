@@ -276,6 +276,13 @@ public interface ICollectionSettings : IIniSection
     Dictionary<string, int>? StringIntDictionary { get; set; }
 }
 
+[IniSection("DescribedCollections")]
+public interface IDescribedCollectionSettings : IIniSection
+{
+    [IniValue(DefaultValue = "x=10,y=20", Description = "Dictionary values")]
+    Dictionary<string, int>? Values { get; set; }
+}
+
 
 /// <summary>
 /// Section that uses the generic IUnknownKey&lt;TSelf&gt; pattern to handle a renamed key.

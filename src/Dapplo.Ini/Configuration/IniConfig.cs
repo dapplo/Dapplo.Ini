@@ -1146,10 +1146,22 @@ public sealed class IniConfig : IDisposable
                     WriterOptionsOverride = sectionBase.GetSectionWriterOptions()
                 };
                 iniFile.AddSection(iniSection);
+                var describedSubKeyDictionaries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
                 foreach (var rawKvp in sectionBase.GetAllRawValues())
                 {
                     var propDesc = sectionBase.GetPropertyDescription(rawKvp.Key);
+                    if (propDesc == null)
+                    {
+                        var keySeparatorIndex = rawKvp.Key.IndexOf('.');
+                        if (keySeparatorIndex > 0)
+                        {
+                            var prefixKey = rawKvp.Key.Substring(0, keySeparatorIndex);
+                            propDesc = sectionBase.GetPropertyDescription(prefixKey);
+                            if (propDesc != null && !describedSubKeyDictionaries.Add(prefixKey))
+                                propDesc = null;
+                        }
+                    }
                     var propComments = propDesc != null
                         ? (IReadOnlyList<string>)new[] { propDesc }
                         : Array.Empty<string>();
