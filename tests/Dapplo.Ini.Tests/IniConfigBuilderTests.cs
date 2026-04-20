@@ -316,6 +316,27 @@ public sealed class IniConfigBuilderTests : IDisposable
         Assert.Contains("; Application name", written);
     }
 
+    [Fact]
+    public void Save_WritesDictionaryDescriptionOnlyOnce_InIniFile()
+    {
+        var section = new DescribedCollectionSettingsImpl
+        {
+            Values = new Dictionary<string, int> { ["first"] = 1, ["second"] = 2, ["third"] = 3 }
+        };
+        var config = IniConfigRegistry.ForFile("dictionary-comments.ini")
+            .AddSearchPath(_tempDir)
+            .SetWritablePath(Path.Combine(_tempDir, "dictionary-comments.ini"))
+            .RegisterSection<IDescribedCollectionSettings>(section)
+            .Build();
+
+        config.Save();
+
+        var written = File.ReadAllText(Path.Combine(_tempDir, "dictionary-comments.ini"));
+
+        Assert.Equal(1, written.Split("; Dictionary values").Length - 1);
+        Assert.True(written.IndexOf("Values.", StringComparison.OrdinalIgnoreCase) >= 0);
+    }
+
     // ── AddAppDataPath tests ───────────────────────────────────────────────────
 
     [Fact]
