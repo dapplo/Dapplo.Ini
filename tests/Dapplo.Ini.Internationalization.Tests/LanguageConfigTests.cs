@@ -244,6 +244,50 @@ public sealed class LanguageConfigTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => config.GetSection<IMainLanguage>());
     }
 
+    [Fact]
+    public void GetSection_ByNameAndModule_ReturnsRegisteredSection()
+    {
+        var main = new MainLanguageImpl();
+        var plugin = new PluginLanguageImpl();
+        using var config = LanguageConfigBuilder.ForBasename("testapp")
+            .AddSearchPath(LangDir)
+            .WithBaseLanguage("en-US")
+            .RegisterSection<IMainLanguage>(main)
+            .RegisterSection<IPluginLanguage>(plugin)
+            .Build();
+
+        Assert.Same(main, config.GetSection("MainLanguage"));
+        Assert.Same(plugin, config.GetSectionByModule("core"));
+        Assert.Equal("Plugin Module", config["core", "PluginTitle"]);
+        Assert.Null(config.GetSection("missing"));
+        Assert.Null(config["missing", "PluginTitle"]);
+        Assert.Same(main, LanguageConfigRegistry.GetSection("testapp", "MainLanguage"));
+        Assert.Same(plugin, LanguageConfigRegistry.GetSectionByModule("testapp", "core"));
+    }
+
+    [Fact]
+    public void Format_FormatsTranslation()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "app.en-US.ini"), "[MainLanguage]\nWelcomeMessage=Hello, {0}!");
+            var section = new MainLanguageImpl();
+            using var config = LanguageConfigBuilder.ForBasename("app")
+                .AddSearchPath(tempDir)
+                .WithBaseLanguage("en-US")
+                .RegisterSection<IMainLanguage>(section)
+                .Build();
+
+            Assert.Equal("Hello, world!", ((LanguageSectionBase)section).Format("WelcomeMessage", "world"));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     // ── GetAvailableLanguages ─────────────────────────────────────────────────
 
     [Fact]
@@ -267,6 +311,38 @@ public sealed class LanguageConfigTests : IDisposable
         foreach (var (ietf, nativeName) in langs)
         {
             Assert.False(string.IsNullOrEmpty(nativeName), $"NativeName should not be empty for '{ietf}'");
+        }
+
+        [Fact]
+        public void MultipleSearchPaths_UsePriorityAndDiscoverCustomLanguageTags()
+        {
+            var firstDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            var secondDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(firstDir);
+            Directory.CreateDirectory(secondDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(firstDir, "app.en-US.ini"), "[MainLanguage]\nWelcomeMessage=First");
+                File.WriteAllText(Path.Combine(secondDir, "app.en-US.ini"), "[MainLanguage]\nWelcomeMessage=Second");
+                File.WriteAllText(Path.Combine(secondDir, "app.de-x-franconia.ini"), "[MainLanguage]\nWelcomeMessage=Servus");
+
+                var section = new MainLanguageImpl();
+                using var config = LanguageConfigBuilder.ForBasename("app")
+                    .AddSearchPath(firstDir)
+                    .AddSearchPath(secondDir)
+                    .WithBaseLanguage("en-US")
+                    .RegisterSection<IMainLanguage>(section)
+                    .Build();
+
+                Assert.Equal("First", section.WelcomeMessage);
+                Assert.Contains(config.GetAvailableLanguages(),
+                    language => language.Ietf == "de-x-franconia" && language.NativeName == "de-x-franconia");
+            }
+            finally
+            {
+                Directory.Delete(firstDir, recursive: true);
+                Directory.Delete(secondDir, recursive: true);
+            }
         }
     }
 
