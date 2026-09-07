@@ -312,40 +312,39 @@ public sealed class LanguageConfigTests : IDisposable
         {
             Assert.False(string.IsNullOrEmpty(nativeName), $"NativeName should not be empty for '{ietf}'");
         }
-
-        [Fact]
-        public void MultipleSearchPaths_UsePriorityAndDiscoverCustomLanguageTags()
-        {
-            var firstDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-            var secondDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(firstDir);
-            Directory.CreateDirectory(secondDir);
-            try
-            {
-                File.WriteAllText(Path.Combine(firstDir, "app.en-US.ini"), "[MainLanguage]\nWelcomeMessage=First");
-                File.WriteAllText(Path.Combine(secondDir, "app.en-US.ini"), "[MainLanguage]\nWelcomeMessage=Second");
-                File.WriteAllText(Path.Combine(secondDir, "app.de-x-franconia.ini"), "[MainLanguage]\nWelcomeMessage=Servus");
-
-                var section = new MainLanguageImpl();
-                using var config = LanguageConfigBuilder.ForBasename("app")
-                    .AddSearchPath(firstDir)
-                    .AddSearchPath(secondDir)
-                    .WithBaseLanguage("en-US")
-                    .RegisterSection<IMainLanguage>(section)
-                    .Build();
-
-                Assert.Equal("First", section.WelcomeMessage);
-                Assert.Contains(config.GetAvailableLanguages(),
-                    language => language.Ietf == "de-x-franconia" && language.NativeName == "de-x-franconia");
-            }
-            finally
-            {
-                Directory.Delete(firstDir, recursive: true);
-                Directory.Delete(secondDir, recursive: true);
-            }
-        }
     }
 
+    [Fact]
+    public void MultipleSearchPaths_UsePriorityAndDiscoverCustomLanguageTags()
+    {
+        var firstDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var secondDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(firstDir);
+        Directory.CreateDirectory(secondDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(firstDir, "app.en-US.ini"), "[MainLanguage]\nWelcomeMessage=First");
+            File.WriteAllText(Path.Combine(secondDir, "app.en-US.ini"), "[MainLanguage]\nWelcomeMessage=Second");
+            File.WriteAllText(Path.Combine(secondDir, "app.de-x-franconia.ini"), "[MainLanguage]\nWelcomeMessage=Servus");
+
+            var section = new MainLanguageImpl();
+            using var config = LanguageConfigBuilder.ForBasename("app")
+                .AddSearchPath(firstDir)
+                .AddSearchPath(secondDir)
+                .WithBaseLanguage("en-US")
+                .RegisterSection<IMainLanguage>(section)
+                .Build();
+
+            Assert.Equal("First", section.WelcomeMessage);
+            Assert.Contains(config.GetAvailableLanguages(),
+                language => language.Ietf == "de-x-franconia" && language.NativeName == "de-x-franconia");
+        }
+        finally
+        {
+            Directory.Delete(firstDir, recursive: true);
+            Directory.Delete(secondDir, recursive: true);
+        }
+    }
     // ── LanguageChanged event ─────────────────────────────────────────────────
 
     [Fact]
