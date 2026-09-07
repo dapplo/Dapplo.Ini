@@ -537,7 +537,13 @@ public sealed class LanguageConfig : IDisposable
         try
         {
             culture = CultureInfo.GetCultureInfo(ietf);
-            return true;
+            if (string.Equals(culture.Name, ietf, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            culture = null;
+            return false;
         }
         catch
         {
