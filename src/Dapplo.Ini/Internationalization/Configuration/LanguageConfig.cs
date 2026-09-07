@@ -57,7 +57,7 @@ public sealed class LanguageConfig : IDisposable
     // Default directories used for sections that don't specify their own.
     private readonly IReadOnlyList<string> _searchPaths;
 
-    // Maps section type \u2192 (section instance, directory for its language files)
+    // Maps section type \u2192 (section instance, directories for its language files)
     private readonly Dictionary<Type, (LanguageSectionBase Section, IReadOnlyList<string> Directories)> _sections = new();
 
     // File watchers keyed by directory
@@ -164,7 +164,7 @@ public sealed class LanguageConfig : IDisposable
     /// <param name="section">The generated concrete section instance.</param>
     /// <param name="path">
     /// Optional search path for this section's language files.
-    /// When <c>null</c> the default search path of this <see cref="LanguageConfig"/> is used.
+    /// When <c>null</c> the default search paths of this <see cref="LanguageConfig"/> are used.
     /// </param>
     /// <returns>The <paramref name="section"/> instance (for fluent chaining).</returns>
     /// <exception cref="ArgumentException">
