@@ -23,7 +23,7 @@ namespace Dapplo.Ini.Internationalization.Configuration;
 public sealed class LanguageConfigBuilder
 {
     private readonly string _basename;
-    private string? _defaultDirectory;
+    private readonly List<string> _searchPaths = new();
     private string? _baseLanguage;
     private string? _currentLanguage;
     private bool _useFallback;
@@ -71,7 +71,7 @@ public sealed class LanguageConfigBuilder
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("Search path must not be empty.", nameof(path));
 
-        _defaultDirectory = path;
+        _searchPaths.Add(path);
         return this;
     }
 
@@ -141,7 +141,7 @@ public sealed class LanguageConfigBuilder
     /// <param name="section">The generated concrete section instance.</param>
     /// <param name="path">
     /// Optional override search path for this section's language files.
-    /// When <c>null</c> the default path set by <see cref="AddSearchPath"/> is used.
+    /// When <c>null</c> the search paths added with <see cref="AddSearchPath"/> are used.
     /// </param>
     /// <exception cref="ArgumentException">
     /// Thrown when <paramref name="section"/> does not derive from <see cref="LanguageSectionBase"/>.
@@ -213,7 +213,7 @@ public sealed class LanguageConfigBuilder
             _currentLanguage ?? _baseLanguage!,
             effectiveFallback,
             _monitorFiles,
-            _defaultDirectory,
+            _searchPaths,
             sections,
             _listeners);
 

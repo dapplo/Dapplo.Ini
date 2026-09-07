@@ -54,11 +54,11 @@ public sealed class LanguageConfig : IDisposable
     private string _currentLanguage;
     private readonly string? _fallbackLanguage;   // null = use _baseLanguage as fallback
 
-    // Default directory used for sections that don't specify their own.
-    private readonly string? _defaultDirectory;
+    // Default directories used for sections that don't specify their own.
+    private readonly IReadOnlyList<string> _searchPaths;
 
-    // Maps section type \u2192 (section instance, directory for its language files)
-    private readonly Dictionary<Type, (LanguageSectionBase Section, string Directory)> _sections = new();
+    // Maps section type \u2192 (section instance, directories for its language files)
+    private readonly Dictionary<Type, (LanguageSectionBase Section, IReadOnlyList<string> Directories)> _sections = new();
 
     // File watchers keyed by directory
     private readonly Dictionary<string, FileSystemWatcher> _watchers = new(StringComparer.OrdinalIgnoreCase);
@@ -87,7 +87,7 @@ public sealed class LanguageConfig : IDisposable
         string currentLanguage,
         string? fallbackLanguage,
         bool monitorFiles,
-        string? defaultDirectory,
+        IEnumerable<string> searchPaths,
         IEnumerable<(Type Type, LanguageSectionBase Section, string? Directory)> sections,
         IEnumerable<IIniConfigListener>? listeners = null)
     {
@@ -96,10 +96,10 @@ public sealed class LanguageConfig : IDisposable
         _currentLanguage = currentLanguage;
         _fallbackLanguage = fallbackLanguage;
         _monitorFiles = monitorFiles;
-        _defaultDirectory = defaultDirectory;
+        _searchPaths = searchPaths.ToList();
 
         foreach (var (type, section, dir) in sections)
-            _sections[type] = (section, dir ?? defaultDirectory ?? string.Empty);
+            _sections[type] = (section, dir is null ? _searchPaths : [dir]);
 
         if (listeners != null)
             _listeners.AddRange(listeners);
@@ -138,6 +138,20 @@ public sealed class LanguageConfig : IDisposable
             $"Language section '{typeof(T).Name}' has not been registered.");
     }
 
+    /// <summary>Returns the section with the specified section name, or <c>null</c> when not registered.</summary>
+    public LanguageSectionBase? GetSection(string sectionName)
+        => _sections.Values.Select(entry => entry.Section)
+            .FirstOrDefault(section => string.Equals(section.SectionName, sectionName, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Returns the section with the specified module name, or <c>null</c> when not registered.</summary>
+    public LanguageSectionBase? GetSectionByModule(string moduleName)
+        => _sections.Values.Select(entry => entry.Section)
+            .FirstOrDefault(section => string.Equals(section.ModuleName, moduleName, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Returns a translation by section name or module name and key.</summary>
+    public string? this[string moduleOrSection, string key]
+        => (GetSection(moduleOrSection) ?? GetSectionByModule(moduleOrSection))?[key];
+
     /// <summary>
     /// Registers a language section without loading any values from disk.
     /// </summary>
@@ -150,7 +164,7 @@ public sealed class LanguageConfig : IDisposable
     /// <param name="section">The generated concrete section instance.</param>
     /// <param name="path">
     /// Optional search path for this section's language files.
-    /// When <c>null</c> the default search path of this <see cref="LanguageConfig"/> is used.
+    /// When <c>null</c> the default search paths of this <see cref="LanguageConfig"/> are used.
     /// </param>
     /// <returns>The <paramref name="section"/> instance (for fluent chaining).</returns>
     /// <exception cref="ArgumentException">
@@ -164,7 +178,7 @@ public sealed class LanguageConfig : IDisposable
                 $"Section must be a generated language section (must derive from {nameof(LanguageSectionBase)}).",
                 nameof(section));
 
-        _sections[typeof(T)] = (baseSection, path ?? _defaultDirectory ?? string.Empty);
+        _sections[typeof(T)] = (baseSection, path is null ? _searchPaths : [path]);
         return section;
     }
 
@@ -276,9 +290,8 @@ public sealed class LanguageConfig : IDisposable
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var result = new List<(string Ietf, string NativeName)>();
 
-        foreach (var entry in _sections.Values)
+        foreach (var dir in _sections.Values.SelectMany(entry => entry.Directories).Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            var dir = entry.Directory;
             if (!Directory.Exists(dir)) continue;
 
             foreach (var file in Directory.EnumerateFiles(dir, "*.ini"))
@@ -286,9 +299,7 @@ public sealed class LanguageConfig : IDisposable
                 var ietf = ExtractIetfFromFileName(file);
                 if (ietf == null || !seen.Add(ietf)) continue;
 
-                if (!TryGetCultureInfo(ietf, out var ci)) continue;
-
-                result.Add((ietf, ci!.NativeName));
+                result.Add((ietf, TryGetCultureInfo(ietf, out var ci) ? ci!.NativeName : ietf));
             }
         }
 
@@ -301,7 +312,7 @@ public sealed class LanguageConfig : IDisposable
     {
         foreach (var kvp in _sections)
         {
-            if (string.IsNullOrEmpty(kvp.Value.Directory))
+            if (kvp.Value.Directories.Count == 0)
                 throw new InvalidOperationException(
                     $"No search path configured for language section '{kvp.Key.Name}'. " +
                     "Specify a path via RegisterSection() or LanguageConfigBuilder.AddSearchPath().");
@@ -317,22 +328,22 @@ public sealed class LanguageConfig : IDisposable
         foreach (var kvp in _sections)
         {
             var section = kvp.Value.Section;
-            var dir = kvp.Value.Directory;
+            var directories = kvp.Value.Directories;
 
             section.ClearTranslations();
 
             // 1. Load fallback/base language first
-            LoadIetfIntoSection(section, dir, fallback);
+            LoadIetfIntoSection(section, directories, fallback);
 
             if (!string.Equals(language, fallback, StringComparison.OrdinalIgnoreCase))
             {
                 // 2. Progressive fallback: parent culture (e.g. "fr" before "fr-FR")
                 var hyphen = language.IndexOf('-');
                 if (hyphen > 0)
-                    LoadIetfIntoSection(section, dir, language.Substring(0, hyphen));
+                    LoadIetfIntoSection(section, directories, language.Substring(0, hyphen));
 
                 // 3. Most-specific language (overrides all previous)
-                LoadIetfIntoSection(section, dir, language);
+                LoadIetfIntoSection(section, directories, language);
             }
         }
     }
@@ -344,19 +355,19 @@ public sealed class LanguageConfig : IDisposable
         foreach (var kvp in _sections)
         {
             var section = kvp.Value.Section;
-            var dir = kvp.Value.Directory;
+            var directories = kvp.Value.Directories;
 
             section.ClearTranslations();
 
-            await LoadIetfIntoSectionAsync(section, dir, fallback, cancellationToken).ConfigureAwait(false);
+            await LoadIetfIntoSectionAsync(section, directories, fallback, cancellationToken).ConfigureAwait(false);
 
             if (!string.Equals(language, fallback, StringComparison.OrdinalIgnoreCase))
             {
                 var hyphen = language.IndexOf('-');
                 if (hyphen > 0)
-                    await LoadIetfIntoSectionAsync(section, dir, language.Substring(0, hyphen), cancellationToken).ConfigureAwait(false);
+                    await LoadIetfIntoSectionAsync(section, directories, language.Substring(0, hyphen), cancellationToken).ConfigureAwait(false);
 
-                await LoadIetfIntoSectionAsync(section, dir, language, cancellationToken).ConfigureAwait(false);
+                await LoadIetfIntoSectionAsync(section, directories, language, cancellationToken).ConfigureAwait(false);
             }
         }
     }
@@ -366,9 +377,9 @@ public sealed class LanguageConfig : IDisposable
     /// Uses <see cref="LanguageSectionBase.ModuleName"/> to select the file and
     /// <see cref="LanguageSectionBase.SectionName"/> to select the section within that file.
     /// </summary>
-    private void LoadIetfIntoSection(LanguageSectionBase section, string directory, string ietf)
+    private void LoadIetfIntoSection(LanguageSectionBase section, IReadOnlyList<string> directories, string ietf)
     {
-        var filePath = ResolveLanguageFilePath(directory, section.ModuleName, ietf);
+        var filePath = ResolveLanguageFilePath(directories, section.ModuleName, ietf);
         if (filePath == null)
         {
             var fileName = section.ModuleName != null
@@ -384,9 +395,9 @@ public sealed class LanguageConfig : IDisposable
     }
 
     private async Task LoadIetfIntoSectionAsync(
-        LanguageSectionBase section, string directory, string ietf, CancellationToken cancellationToken)
+        LanguageSectionBase section, IReadOnlyList<string> directories, string ietf, CancellationToken cancellationToken)
     {
-        var filePath = ResolveLanguageFilePath(directory, section.ModuleName, ietf);
+        var filePath = ResolveLanguageFilePath(directories, section.ModuleName, ietf);
         if (filePath == null)
         {
             var fileName = section.ModuleName != null
@@ -411,20 +422,26 @@ public sealed class LanguageConfig : IDisposable
     /// Returns the path of the language file for the given IETF tag, or <c>null</c>
     /// when no matching file exists.
     /// </summary>
-    /// <param name="directory">Search directory.</param>
+    /// <param name="directories">Search directories, in priority order.</param>
     /// <param name="moduleName">
     /// Optional module name: when set the file is <c>{basename}.{moduleName}.{ietf}.ini</c>;
     /// when <c>null</c> the file is <c>{basename}.{ietf}.ini</c>.
     /// </param>
     /// <param name="ietf">IETF language tag.</param>
-    private string? ResolveLanguageFilePath(string directory, string? moduleName, string ietf)
+    private string? ResolveLanguageFilePath(IEnumerable<string> directories, string? moduleName, string ietf)
     {
         var fileName = moduleName != null
             ? $"{_basename}.{moduleName}.{ietf}.ini"
             : $"{_basename}.{ietf}.ini";
 
-        var path = Path.Combine(directory, fileName);
-        return File.Exists(path) ? path : null;
+        foreach (var directory in directories)
+        {
+            var path = Path.Combine(directory, fileName);
+            if (File.Exists(path))
+                return path;
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -535,7 +552,7 @@ public sealed class LanguageConfig : IDisposable
     {
         var directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var kvp in _sections)
-            directories.Add(kvp.Value.Directory);
+            directories.UnionWith(kvp.Value.Directories);
 
         _debounceTimer = new System.Threading.Timer(_ =>
         {

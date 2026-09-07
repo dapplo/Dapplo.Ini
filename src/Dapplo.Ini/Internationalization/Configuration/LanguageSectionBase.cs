@@ -87,6 +87,10 @@ public abstract class LanguageSectionBase : ILanguageSection, IReadOnlyDictionar
     /// </summary>
     public string this[string key] => GetTranslation(NormalizeKey(key), key);
 
+    /// <summary>Formats the translation for <paramref name="key"/> using the supplied arguments.</summary>
+    public string Format(string key, params object[] args)
+        => string.Format(this[key], args);
+
     /// <inheritdoc/>
     public IEnumerable<string> Keys
         => _translations.Keys;
@@ -113,4 +117,3 @@ public abstract class LanguageSectionBase : ILanguageSection, IReadOnlyDictionar
     System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
         => _translations.GetEnumerator();
 }
-

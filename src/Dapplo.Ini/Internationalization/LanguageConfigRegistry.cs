@@ -142,6 +142,22 @@ public static class LanguageConfigRegistry
     public static T GetSection<T>() where T : class
         => Get().GetSection<T>();
 
+    /// <summary>Returns the named section from the configuration registered for <paramref name="basename"/>.</summary>
+    public static LanguageSectionBase? GetSection(string basename, string sectionName)
+        => Get(basename).GetSection(sectionName);
+
+    /// <summary>Returns the section with the specified module from the configuration registered for <paramref name="basename"/>.</summary>
+    public static LanguageSectionBase? GetSectionByModule(string basename, string moduleName)
+        => Get(basename).GetSectionByModule(moduleName);
+
+    /// <summary>Returns the named section from the single registered language configuration.</summary>
+    public static LanguageSectionBase? GetSection(string sectionName)
+        => Get().GetSection(sectionName);
+
+    /// <summary>Returns the section with the specified module from the single registered language configuration.</summary>
+    public static LanguageSectionBase? GetSectionByModule(string moduleName)
+        => Get().GetSectionByModule(moduleName);
+
     /// <summary>
     /// Attempts to return the <see cref="LanguageConfig"/> registered for <paramref name="basename"/>.
     /// Returns <c>false</c> when not found.
