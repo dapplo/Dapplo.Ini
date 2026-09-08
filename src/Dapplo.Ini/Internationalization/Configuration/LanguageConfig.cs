@@ -329,22 +329,23 @@ public sealed class LanguageConfig : IDisposable
         {
             var section = kvp.Value.Section;
             var directories = kvp.Value.Directories;
-
-            section.ClearTranslations();
+            var newTranslations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
             // 1. Load fallback/base language first
-            LoadIetfIntoSection(section, directories, fallback);
+            LoadIetfIntoDictionary(newTranslations, section.ModuleName, section.SectionName, directories, fallback);
 
             if (!string.Equals(language, fallback, StringComparison.OrdinalIgnoreCase))
             {
                 // 2. Progressive fallback: parent culture (e.g. "fr" before "fr-FR")
                 var hyphen = language.IndexOf('-');
                 if (hyphen > 0)
-                    LoadIetfIntoSection(section, directories, language.Substring(0, hyphen));
+                    LoadIetfIntoDictionary(newTranslations, section.ModuleName, section.SectionName, directories, language.Substring(0, hyphen));
 
                 // 3. Most-specific language (overrides all previous)
-                LoadIetfIntoSection(section, directories, language);
+                LoadIetfIntoDictionary(newTranslations, section.ModuleName, section.SectionName, directories, language);
             }
+
+            section.UpdateTranslations(newTranslations);
         }
     }
 
@@ -356,52 +357,54 @@ public sealed class LanguageConfig : IDisposable
         {
             var section = kvp.Value.Section;
             var directories = kvp.Value.Directories;
+            var newTranslations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            section.ClearTranslations();
-
-            await LoadIetfIntoSectionAsync(section, directories, fallback, cancellationToken).ConfigureAwait(false);
+            await LoadIetfIntoDictionaryAsync(newTranslations, section.ModuleName, section.SectionName, directories, fallback, cancellationToken).ConfigureAwait(false);
 
             if (!string.Equals(language, fallback, StringComparison.OrdinalIgnoreCase))
             {
                 var hyphen = language.IndexOf('-');
                 if (hyphen > 0)
-                    await LoadIetfIntoSectionAsync(section, directories, language.Substring(0, hyphen), cancellationToken).ConfigureAwait(false);
+                    await LoadIetfIntoDictionaryAsync(newTranslations, section.ModuleName, section.SectionName, directories, language.Substring(0, hyphen), cancellationToken).ConfigureAwait(false);
 
-                await LoadIetfIntoSectionAsync(section, directories, language, cancellationToken).ConfigureAwait(false);
+                await LoadIetfIntoDictionaryAsync(newTranslations, section.ModuleName, section.SectionName, directories, language, cancellationToken).ConfigureAwait(false);
             }
+
+            section.UpdateTranslations(newTranslations);
         }
     }
 
     /// <summary>
-    /// Loads translations for one IETF tag into a section.
-    /// Uses <see cref="LanguageSectionBase.ModuleName"/> to select the file and
-    /// <see cref="LanguageSectionBase.SectionName"/> to select the section within that file.
+    /// Loads translations for one IETF tag into the target dictionary.
+    /// Uses <paramref name="moduleName"/> to select the file and
+    /// <paramref name="sectionName"/> to select the section within that file.
     /// </summary>
-    private void LoadIetfIntoSection(LanguageSectionBase section, IReadOnlyList<string> directories, string ietf)
+    private void LoadIetfIntoDictionary(
+        IDictionary<string, string> target, string? moduleName, string sectionName, IReadOnlyList<string> directories, string ietf)
     {
-        var filePath = ResolveLanguageFilePath(directories, section.ModuleName, ietf);
+        var filePath = ResolveLanguageFilePath(directories, moduleName, ietf);
         if (filePath == null)
         {
-            var fileName = section.ModuleName != null
-                ? $"{_basename}.{section.ModuleName}.{ietf}.ini"
+            var fileName = moduleName != null
+                ? $"{_basename}.{moduleName}.{ietf}.ini"
                 : $"{_basename}.{ietf}.ini";
             NotifyListeners(l => l.OnFileNotFound(fileName));
             return;
         }
 
         var content = File.ReadAllText(filePath, Encoding.UTF8);
-        ParseAndApply(section, content, section.SectionName);
+        ParseAndApply(target, content, sectionName);
         NotifyListeners(l => l.OnFileLoaded(filePath));
     }
 
-    private async Task LoadIetfIntoSectionAsync(
-        LanguageSectionBase section, IReadOnlyList<string> directories, string ietf, CancellationToken cancellationToken)
+    private async Task LoadIetfIntoDictionaryAsync(
+        IDictionary<string, string> target, string? moduleName, string sectionName, IReadOnlyList<string> directories, string ietf, CancellationToken cancellationToken)
     {
-        var filePath = ResolveLanguageFilePath(directories, section.ModuleName, ietf);
+        var filePath = ResolveLanguageFilePath(directories, moduleName, ietf);
         if (filePath == null)
         {
-            var fileName = section.ModuleName != null
-                ? $"{_basename}.{section.ModuleName}.{ietf}.ini"
+            var fileName = moduleName != null
+                ? $"{_basename}.{moduleName}.{ietf}.ini"
                 : $"{_basename}.{ietf}.ini";
             NotifyListeners(l => l.OnFileNotFound(fileName));
             return;
@@ -414,7 +417,7 @@ public sealed class LanguageConfig : IDisposable
         using var reader = new StreamReader(filePath, Encoding.UTF8);
         content = await reader.ReadToEndAsync().ConfigureAwait(false);
 #endif
-        ParseAndApply(section, content, section.SectionName);
+        ParseAndApply(target, content, sectionName);
         NotifyListeners(l => l.OnFileLoaded(filePath));
     }
 
@@ -445,16 +448,16 @@ public sealed class LanguageConfig : IDisposable
     }
 
     /// <summary>
-    /// Parses a full <c>.ini</c> file and applies matching key=value entries to the section.
+    /// Parses a full <c>.ini</c> file and applies matching key=value entries to the target dictionary.
     /// Only keys inside the <c>[<paramref name="sectionName"/>]</c> block are read.
     /// Keys outside any section header (or in a different section) are silently ignored.
     /// </summary>
-    /// <param name="section">Target section.</param>
+    /// <param name="target">Target dictionary.</param>
     /// <param name="content">Raw file content.</param>
     /// <param name="sectionName">
     /// The section header to match. Only keys inside this section are loaded.
     /// </param>
-    private static void ParseAndApply(LanguageSectionBase section, string content, string sectionName)
+    private static void ParseAndApply(IDictionary<string, string> target, string content, string sectionName)
     {
         bool inScope = false;  // keys outside sections are never in scope
 
@@ -489,7 +492,7 @@ public sealed class LanguageConfig : IDisposable
             var rawValue = line.Slice(eq + 1).ToString();
             var value = UnescapeValue(rawValue);
 
-            section.SetTranslation(normalizedKey, value);
+            target[normalizedKey] = value;
         }
     }
 
