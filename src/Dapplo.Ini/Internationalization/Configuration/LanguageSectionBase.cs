@@ -47,6 +47,24 @@ public abstract class LanguageSectionBase : ILanguageSection, IReadOnlyDictionar
     /// <summary>Removes all currently loaded translations.</summary>
     internal void ClearTranslations() => _translations.Clear();
 
+    /// <summary>
+    /// Called by <see cref="LanguageConfig"/> after all translations for this section have been
+    /// (re)loaded for a given language. Source-generated subclasses whose interface extends
+    /// <see cref="System.ComponentModel.INotifyPropertyChanged"/> override this to raise
+    /// <c>PropertyChanged</c> for every generated property, so that data-bound UI controls
+    /// (e.g. WPF, AvaloniaUI) automatically refresh when the language changes.
+    /// </summary>
+    internal void NotifyTranslationsReloaded() => OnTranslationsReloaded();
+
+    /// <summary>
+    /// Override to raise <c>PropertyChanged</c> for all generated properties. The default
+    /// implementation does nothing, since not every section interface implements
+    /// <see cref="System.ComponentModel.INotifyPropertyChanged"/>.
+    /// </summary>
+    protected virtual void OnTranslationsReloaded()
+    {
+    }
+
     // ── Helper used by generated property getters ─────────────────────────────
 
     /// <summary>
