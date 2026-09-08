@@ -35,17 +35,39 @@ public abstract class LanguageSectionBase : ILanguageSection, IReadOnlyDictionar
     /// </summary>
     public abstract string? ModuleName { get; }
 
-    // ── Internal helpers used by LanguageConfig ───────────────────────────────
+    // ── Translation updates ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Atomically updates all translations from <paramref name="newTranslations"/>.
+    /// Derived classes override this to detect property value changes and raise
+    /// property-change notifications.
+    /// </summary>
+    /// <param name="newTranslations">The new dictionary of normalized key to translated value.</param>
+    public virtual void UpdateTranslations(IReadOnlyDictionary<string, string> newTranslations)
+    {
+        _translations.Clear();
+        foreach (var kvp in newTranslations)
+        {
+            _translations[kvp.Key] = kvp.Value;
+        }
+    }
 
     /// <summary>
     /// Stores a single translated value. The <paramref name="normalizedKey"/> must already
     /// be normalized (trimmed, lowercase, underscores and dashes removed).
     /// </summary>
-    internal void SetTranslation(string normalizedKey, string value)
-        => _translations[normalizedKey] = value;
+    public void SetTranslation(string normalizedKey, string value)
+    {
+        var copy = new Dictionary<string, string>(_translations, StringComparer.OrdinalIgnoreCase)
+        {
+            [normalizedKey] = value
+        };
+        UpdateTranslations(copy);
+    }
 
     /// <summary>Removes all currently loaded translations.</summary>
-    internal void ClearTranslations() => _translations.Clear();
+    public void ClearTranslations()
+        => UpdateTranslations(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
 
     // ── Helper used by generated property getters ─────────────────────────────
 
@@ -60,6 +82,17 @@ public abstract class LanguageSectionBase : ILanguageSection, IReadOnlyDictionar
     /// </param>
     protected string GetTranslation(string normalizedKey, string propertyName)
         => _translations.TryGetValue(normalizedKey, out var value) ? value : $"###{propertyName}###";
+
+    /// <summary>
+    /// Returns the translated value for <paramref name="normalizedKey"/> from the specified
+    /// <paramref name="dictionary"/>, or the sentinel string <c>###<paramref name="propertyName"/>###</c>
+    /// when the key is not found.
+    /// </summary>
+    /// <param name="dictionary">The translation dictionary to look in.</param>
+    /// <param name="normalizedKey">The key after normalization (lowercase, no _ or -).</param>
+    /// <param name="propertyName">The C# property name, used for the sentinel fallback.</param>
+    protected static string GetTranslation(IReadOnlyDictionary<string, string> dictionary, string normalizedKey, string propertyName)
+        => dictionary.TryGetValue(normalizedKey, out var value) ? value : $"###{propertyName}###";
 
     // ── Key normalization ─────────────────────────────────────────────────────
 

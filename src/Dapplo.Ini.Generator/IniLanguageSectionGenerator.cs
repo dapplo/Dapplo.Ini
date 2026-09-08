@@ -17,14 +17,19 @@ namespace Dapplo.Ini.Generator;
 [Generator]
 public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
 {
-    private const string IniLanguageSectionAttributeFqn =
-        "Dapplo.Ini.Internationalization.Attributes.IniLanguageSectionAttribute";
+    private const string IniLanguageSectionAttributeFqn = "Dapplo.Ini.Internationalization.Attributes.IniLanguageSectionAttribute";
 
-    private const string ILanguageSectionFqn =
-        "Dapplo.Ini.Internationalization.Interfaces.ILanguageSection";
+    private const string ILanguageSectionFqn = "Dapplo.Ini.Internationalization.Interfaces.ILanguageSection";
 
-    private const string IReadOnlyDictionaryOpenFqn =
-        "System.Collections.Generic.IReadOnlyDictionary<string, string>";
+    private const string IReadOnlyDictionaryOpenFqn = "System.Collections.Generic.IReadOnlyDictionary<string, string>";
+
+    private const string INotifyPropertyChangedFqn = "System.ComponentModel.INotifyPropertyChanged";
+
+    private const string INotifyPropertyChangingFqn = "System.ComponentModel.INotifyPropertyChanging";
+
+    private const string IniValueAttributeFqn = "Dapplo.Ini.Attributes.IniValueAttribute";
+
+    private const string IgnoreDataMemberAttributeFqn = "System.Runtime.Serialization.IgnoreDataMemberAttribute";
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
@@ -48,6 +53,8 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
         public string Name { get; set; } = "";
         /// <summary>Normalized key: lowercase, underscores/dashes removed.</summary>
         public string NormalizedKey { get; set; } = "";
+        public bool SuppressPropertyChanged { get; set; }
+        public bool SuppressPropertyChanging { get; set; }
     }
 
     private sealed class LanguageSectionModel
@@ -61,6 +68,8 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
         public string? ModuleName { get; set; }
         /// <summary>True when the interface also extends IReadOnlyDictionary&lt;string,string&gt;.</summary>
         public bool ImplementsReadOnlyDictionary { get; set; }
+        public bool ImplementsINotifyPropertyChanged { get; set; }
+        public bool ImplementsINotifyPropertyChanging { get; set; }
         public List<PropertyModel> Properties { get; set; } = new();
     }
 
@@ -78,16 +87,14 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
         if (attr is null) return null;
 
         var interfaceName = symbol.Name;
-        var namespaceName = symbol.ContainingNamespace.IsGlobalNamespace
-            ? ""
-            : symbol.ContainingNamespace.ToDisplayString();
+        var namespaceName = symbol.ContainingNamespace.IsGlobalNamespace ? "" : symbol.ContainingNamespace.ToDisplayString();
 
         // Read optional SectionName from attribute constructor argument (first positional arg)
         string? explicitSectionName = null;
-        if (attr.ConstructorArguments.Length > 0 &&
-            attr.ConstructorArguments[0].Value is string sn &&
-            !string.IsNullOrEmpty(sn))
+        if (attr.ConstructorArguments.Length > 0 && attr.ConstructorArguments[0].Value is string sn && !string.IsNullOrEmpty(sn))
+        {
             explicitSectionName = sn;
+        }
 
         // Also check named argument for SectionName
         foreach (var na in attr.NamedArguments)
@@ -105,11 +112,16 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
         string? moduleName = null;
         foreach (var na in attr.NamedArguments)
             if (na.Key == "ModuleName" && na.Value.Value is string mnNamed)
+            {
                 moduleName = mnNamed;
+            }
 
         // Check whether the interface extends IReadOnlyDictionary<string, string>
         bool implementsReadOnlyDictionary = symbol.AllInterfaces.Any(i =>
             i.ToDisplayString() == IReadOnlyDictionaryOpenFqn);
+
+        bool implementsINotifyPropertyChanged = ImplementsInterface(symbol, INotifyPropertyChangedFqn);
+        bool implementsINotifyPropertyChanging = ImplementsInterface(symbol, INotifyPropertyChangingFqn);
 
         // Collect string-typed get-only properties from the interface itself and
         // all its base interfaces (excluding ILanguageSection and system interfaces).
@@ -123,8 +135,15 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
             SectionName               = sectionName,
             ModuleName                = moduleName,
             ImplementsReadOnlyDictionary = implementsReadOnlyDictionary,
+            ImplementsINotifyPropertyChanged = implementsINotifyPropertyChanged,
+            ImplementsINotifyPropertyChanging = implementsINotifyPropertyChanging,
             Properties                = properties
         };
+    }
+
+    private static bool ImplementsInterface(INamedTypeSymbol symbol, string interfaceFqn)
+    {
+        return symbol.ToDisplayString() == interfaceFqn || symbol.AllInterfaces.Any(i => i.ToDisplayString() == interfaceFqn);
     }
 
     private static List<PropertyModel> CollectProperties(INamedTypeSymbol symbol)
@@ -152,12 +171,40 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
                 // Language section properties must be string get-only
                 if (member.SetMethod != null) continue;
                 if (member.Type.SpecialType != SpecialType.System_String) continue;
+
+                // Skip properties marked [IgnoreDataMember]
+                bool isIgnored = member.GetAttributes()
+                    .Any(a => a.AttributeClass?.ToDisplayString() == IgnoreDataMemberAttributeFqn);
+                if (isIgnored) continue;
+
                 if (!seen.Add(member.Name)) continue;
+
+                bool suppressPropertyChanged = false;
+                bool suppressPropertyChanging = false;
+                var iniValueAttr = member.GetAttributes()
+                    .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == IniValueAttributeFqn);
+                if (iniValueAttr != null)
+                {
+                    foreach (var na in iniValueAttr.NamedArguments)
+                    {
+                        switch (na.Key)
+                        {
+                            case "SuppressPropertyChanged":
+                                suppressPropertyChanged = na.Value.Value is true;
+                                break;
+                            case "SuppressPropertyChanging":
+                                suppressPropertyChanging = na.Value.Value is true;
+                                break;
+                        }
+                    }
+                }
 
                 result.Add(new PropertyModel
                 {
-                    Name          = member.Name,
-                    NormalizedKey = NormalizeKey(member.Name)
+                    Name                     = member.Name,
+                    NormalizedKey            = NormalizeKey(member.Name),
+                    SuppressPropertyChanged  = suppressPropertyChanged,
+                    SuppressPropertyChanging = suppressPropertyChanging
                 });
             }
 
@@ -178,7 +225,9 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
         foreach (var ch in name)
         {
             if (ch != '_' && ch != '-')
+            {
                 sb.Append(char.ToLowerInvariant(ch));
+            }
         }
         return sb.ToString();
     }
@@ -192,6 +241,11 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
         sb.AppendLine("#nullable enable");
         sb.AppendLine("#pragma warning disable CS8601, CS8604, CS8618, CS8625");
         sb.AppendLine();
+        sb.AppendLine("using System.Collections.Generic;");
+        if (m.ImplementsINotifyPropertyChanged || m.ImplementsINotifyPropertyChanging)
+        {
+            sb.AppendLine("using System.ComponentModel;");
+        }
         sb.AppendLine("using Dapplo.Ini.Internationalization.Configuration;");
         sb.AppendLine();
 
@@ -211,11 +265,22 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
         sb.AppendLine($"        public override string SectionName => \"{EscapeString(m.SectionName)}\";");
 
         // ModuleName override (null when no module file is needed)
-        var moduleExpr = m.ModuleName != null
-            ? $"\"{EscapeString(m.ModuleName)}\""
-            : "null";
+        var moduleExpr = m.ModuleName != null ? $"\"{EscapeString(m.ModuleName)}\"" : "null";
         sb.AppendLine($"        public override string? ModuleName => {moduleExpr};");
         sb.AppendLine();
+
+        if (m.ImplementsINotifyPropertyChanging)
+        {
+            sb.AppendLine("        public event PropertyChangingEventHandler? PropertyChanging;");
+        }
+        if (m.ImplementsINotifyPropertyChanged)
+        {
+            sb.AppendLine("        public event PropertyChangedEventHandler? PropertyChanged;");
+        }
+        if (m.ImplementsINotifyPropertyChanged || m.ImplementsINotifyPropertyChanging)
+        {
+            sb.AppendLine();
+        }
 
         // Generate one property per string property declared on the interface
         foreach (var p in m.Properties)
@@ -223,14 +288,95 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
             sb.AppendLine($"        public string {p.Name} => GetTranslation(\"{EscapeString(p.NormalizedKey)}\", nameof({p.Name}));");
         }
 
+        if (m.ImplementsINotifyPropertyChanged || m.ImplementsINotifyPropertyChanging)
+        {
+            sb.AppendLine();
+            sb.AppendLine("        public override void UpdateTranslations(IReadOnlyDictionary<string, string> newTranslations)");
+            sb.AppendLine("        {");
+
+            int index = 0;
+            foreach (var p in m.Properties)
+            {
+                bool canChange = (m.ImplementsINotifyPropertyChanged && !p.SuppressPropertyChanged)
+                                 || (m.ImplementsINotifyPropertyChanging && !p.SuppressPropertyChanging);
+                if (canChange)
+                {
+                    sb.AppendLine($"            var __new_{index} = GetTranslation(newTranslations, \"{EscapeString(p.NormalizedKey)}\", nameof({p.Name}));");
+                    sb.AppendLine($"            bool __changed_{index} = !string.Equals({p.Name}, __new_{index}, System.StringComparison.Ordinal);");
+                }
+                index++;
+            }
+
+            sb.AppendLine("            bool __hasAnyDictChange = Count != newTranslations.Count;");
+            sb.AppendLine("            if (!__hasAnyDictChange)");
+            sb.AppendLine("            {");
+            sb.AppendLine("                foreach (var __kvp in this)");
+            sb.AppendLine("                {");
+            sb.AppendLine("                    if (!newTranslations.TryGetValue(__kvp.Key, out var __val) || !string.Equals(__kvp.Value, __val, System.StringComparison.Ordinal))");
+            sb.AppendLine("                    {");
+            sb.AppendLine("                        __hasAnyDictChange = true;");
+            sb.AppendLine("                        break;");
+            sb.AppendLine("                    }");
+            sb.AppendLine("                }");
+            sb.AppendLine("            }");
+
+            if (m.ImplementsINotifyPropertyChanging)
+            {
+                sb.AppendLine("            var changingHandler = PropertyChanging;");
+                sb.AppendLine("            if (changingHandler != null)");
+                sb.AppendLine("            {");
+                index = 0;
+                foreach (var p in m.Properties)
+                {
+                    if (!p.SuppressPropertyChanging)
+                    {
+                        sb.AppendLine($"                if (__changed_{index}) changingHandler(this, new PropertyChangingEventArgs(nameof({p.Name})));");
+                    }
+                    index++;
+                }
+                sb.AppendLine("                if (__hasAnyDictChange) changingHandler(this, new PropertyChangingEventArgs(\"Item[]\"));");
+                sb.AppendLine("            }");
+            }
+
+            sb.AppendLine("            base.UpdateTranslations(newTranslations);");
+
+            if (m.ImplementsINotifyPropertyChanged)
+            {
+                sb.AppendLine("            var changedHandler = PropertyChanged;");
+                sb.AppendLine("            if (changedHandler != null)");
+                sb.AppendLine("            {");
+                sb.AppendLine("                bool __hasAnyPropChanged = false;");
+                index = 0;
+                foreach (var p in m.Properties)
+                {
+                    if (!p.SuppressPropertyChanged)
+                    {
+                        sb.AppendLine($"                if (__changed_{index})");
+                        sb.AppendLine("                {");
+                        sb.AppendLine($"                    changedHandler(this, new PropertyChangedEventArgs(nameof({p.Name})));");
+                        sb.AppendLine("                    __hasAnyPropChanged = true;");
+                        sb.AppendLine("                }");
+                    }
+                    index++;
+                }
+                sb.AppendLine("                if (__hasAnyPropChanged || __hasAnyDictChange)");
+                sb.AppendLine("                {");
+                sb.AppendLine("                    changedHandler(this, new PropertyChangedEventArgs(\"Item[]\"));");
+                sb.AppendLine("                }");
+                sb.AppendLine("            }");
+            }
+
+            sb.AppendLine("        }");
+        }
+
         sb.AppendLine("    }");
 
-        if (hasNamespace)
+        if (hasNamespace) {
             sb.AppendLine("}");
+        }
 
         return sb.ToString();
     }
 
-    private static string EscapeString(string s)
-        => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    private static string EscapeString(string s) => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
 }

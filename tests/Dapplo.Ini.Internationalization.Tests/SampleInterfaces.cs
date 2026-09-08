@@ -61,5 +61,36 @@ public interface IPluginLanguage
     string PluginStatus { get; }
 }
 
+/// <summary>
+/// Language section extending INotifyPropertyChanged to test UI data-binding updates.
+/// </summary>
+[IniLanguageSection("MainLanguage")]
+public interface INotifyMainLanguage : System.ComponentModel.INotifyPropertyChanged
+{
+    string WelcomeMessage { get; }
+    string ErrorTitle { get; }
+    string SaveButton { get; }
+    string CancelButton { get; }
+    string MultiLine { get; }
+    string TabValue { get; }
+    string BackslashValue { get; }
+}
+
+/// <summary>
+/// Language section extending both INotifyPropertyChanged and INotifyPropertyChanging,
+/// with per-property suppression attributes.
+/// </summary>
+[IniLanguageSection("MainLanguage")]
+public interface INpcBothLanguage : System.ComponentModel.INotifyPropertyChanged, System.ComponentModel.INotifyPropertyChanging
+{
+    string WelcomeMessage { get; }
+
+    [Dapplo.Ini.Attributes.IniValue(SuppressPropertyChanged = true)]
+    string ErrorTitle { get; }
+
+    [Dapplo.Ini.Attributes.IniValue(SuppressPropertyChanging = true)]
+    string SaveButton { get; }
+}
+
 
 
