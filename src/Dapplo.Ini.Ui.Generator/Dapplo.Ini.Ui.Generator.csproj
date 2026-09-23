@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>Dapplo.Ini.Ui.Generator</RootNamespace>
+    <AssemblyName>Dapplo.Ini.Ui.Generator</AssemblyName>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <Description>Source generator for Dapplo.Ini.Ui – generates compile-time UI section descriptors from annotated IIniSection interfaces.</Description>
+    <!-- Source generators must live in analyzers/dotnet/cs/ so MSBuild discovers them as Roslyn analyzers. -->
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <!-- NU5128: expected for analyzer-only packages with no lib/ output. -->
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Place the generator DLL in the correct NuGet analyzer folder. -->
+    <None Include="$(OutputPath)\$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.12.0" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

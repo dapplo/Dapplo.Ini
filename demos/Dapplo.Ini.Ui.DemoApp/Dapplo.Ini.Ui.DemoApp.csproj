@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!--
+      WPF requires Windows at runtime; the project can be cross-compiled on any OS with
+      the .NET 10 SDK (e.g. Linux CI) but the resulting binary only runs on Windows.
+    -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <!-- Required to cross-compile WPF on non-Windows build agents (Linux CI). -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Dapplo.Ini.Ui.DemoApp</RootNamespace>
+    <AssemblyName>Dapplo.Ini.Ui.DemoApp</AssemblyName>
+    <Description>WPF demo application for Dapplo.Ini.Ui — shows how to build a settings window from annotated IIniSection interfaces.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Core INI library -->
+    <ProjectReference Include="..\..\src\Dapplo.Ini\Dapplo.Ini.csproj" />
+    <!-- UI attribute / metadata library -->
+    <ProjectReference Include="..\..\src\Dapplo.Ini.Ui\Dapplo.Ini.Ui.csproj" />
+    <!-- INI section source generator — produces *Impl classes -->
+    <ProjectReference Include="..\..\src\Dapplo.Ini.Generator\Dapplo.Ini.Generator.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <!-- UI descriptor source generator — produces *UiDescriptor classes -->
+    <ProjectReference Include="..\..\src\Dapplo.Ini.Ui.Generator\Dapplo.Ini.Ui.Generator.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>
