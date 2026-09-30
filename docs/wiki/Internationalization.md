@@ -67,7 +67,8 @@ Examples for basename `myapp`:
 
 ### Key rules
 
-- Each line: `key=value` (everything after the first `=` is the raw value).
+- Each line: `key=value` (everything after the first `=` is the raw value; whitespace around
+  the `=` is trimmed, so `key = value` gives `value`).
 - Keys are **trimmed**; underscores `_` and dashes `-` are removed before
   comparison, so `Welcome_Message`, `WelcomeMessage`, and `welcomemessage` all
   refer to the same property.
@@ -191,7 +192,7 @@ using var config = LanguageConfigRegistry.ForFile("myapp")   // preferred entry 
     .WithCurrentLanguage("de-DE")        // optional — defaults to base language
     .RegisterSection<IMainLanguage>(new MainLanguageImpl())
     .RegisterSection<ICoreLanguage>(new CoreLanguageImpl())
-    .UseFallback()                        // fall back to base language for missing keys
+    .UseFallbackLanguage("en-US")         // optional — floor for missing keys (default: base language)
     .MonitorFiles()                       // reload when files change on disk
     .Build();                             // load immediately (sync)
 ```
@@ -206,7 +207,7 @@ using var config = LanguageConfigRegistry.ForFile("myapp")   // preferred entry 
 | `WithBaseLanguage(ietf)` | **Required.** The reference language that is always loaded first. |
 | `WithCurrentLanguage(ietf)` | Language to activate on the first load. Defaults to the base language. |
 | `RegisterSection<T>(impl, path?)` | Registers a language section; optional path overrides `AddSearchPath`. |
-| `UseFallback(ietf?)` | When a key is missing from the active language, use the base language (or the specified `ietf` tag) instead of the `###key###` sentinel. |
+| `UseFallbackLanguage(ietf)` | Uses `ietf` instead of the base language as the floor for keys that are missing in the active language. Without it the base language is the floor. |
 | `MonitorFiles()` | Enables file-system monitoring. When any language file changes, all sections are reloaded and `LanguageChanged` is raised. |
 | `AddListener(listener)` | Registers an `IIniConfigListener` for diagnostic events. See [[Listeners]]. |
 | `Create()` | Creates `LanguageConfig` **without** loading any files. Use for plugin/deferred scenarios. |
@@ -254,23 +255,40 @@ config.LanguageChanged += (sender, _) =>
 When a requested language is not fully available, the loader falls back
 progressively from most-specific to least-specific:
 
-1. Base / fallback language loaded first (provides the floor for missing keys).
-2. Parent culture — e.g. `de` when requesting `de-DE`.
-3. Specific culture — `de-DE` overwrites keys from the parent.
+1. The parent cultures of the fallback language, least specific first (`en` for `en-US`).
+2. The fallback language itself — the base language, or the one set with `UseFallbackLanguage`.
+   This is the floor for missing keys and is always loaded.
+3. Every parent culture of the requested language, least specific first — e.g. `de` when
+   requesting `de-DE`, or `zh` and then `zh-Hant` when requesting `zh-Hant-TW`.
+4. The requested culture — `de-DE` / `zh-Hant-TW` overwrites keys from everything before it.
+
+A language that appears twice in this chain is loaded once, at its first position.
 
 This means switching to `de-DE` when only a partial `de-DE` file exists will
 still show the German base strings from `de.ini` rather than the `###key###`
 sentinel.
 
-### `UseFallback()`
+The translations of a section are built completely and then swapped in at once, so a UI
+thread reading a property during a language switch or file-change reload sees either the
+old or the new language — never a half-loaded mix.
 
-Call `UseFallback()` on the builder to opt in to using the base language as a
-second safety net for keys that are absent even in the most-specific file:
+### `UseFallbackLanguage(ietf)`
+
+The fallback language is always loaded first (see the chain above), so a key missing in
+the requested language shows the fallback's text instead of the `###key###` sentinel.
+By default this is the base language; `UseFallbackLanguage` picks another one, for example
+to show English for missing keys while German is the base language:
 
 ```csharp
-.UseFallback()               // uses WithBaseLanguage() value as fallback
-.UseFallback("en-US")        // uses an explicit fallback language
+.WithBaseLanguage("de-DE")
+.UseFallbackLanguage("en-US")   // missing keys show the en / en-US text
 ```
+
+The sentinel only appears for keys that are missing in every file of the chain.
+
+> **Breaking change:** `UseFallback()` / `UseFallback(ietf)` were replaced by
+> `UseFallbackLanguage(ietf)`. The argument-less `UseFallback()` had no effect (the base
+> language was always the floor) and can simply be removed.
 
 ---
 
@@ -384,7 +402,8 @@ immediately visible in the UI during development.
 Call `.MonitorFiles()` on the builder to automatically reload all language
 sections when any language file in a watched directory changes on disk. The
 reload is debounced (200 ms) to handle editors that write files in multiple
-steps.
+steps. An exception during such a reload is reported via `IIniConfigListener.OnError`
+(see [[Listeners]]) instead of crashing the process.
 
 ```csharp
 using var config = LanguageConfigRegistry.ForFile("myapp")
@@ -423,7 +442,7 @@ config.LanguageChanged += (_, _) => RefreshUi();
 | `WithBaseLanguage(ietf)` | Sets the base (reference) language. **Required.** |
 | `WithCurrentLanguage(ietf)` | Sets the initial active language. |
 | `RegisterSection<T>(impl, path?)` | Registers a section; optional `path` overrides the default search path for this section only. |
-| `UseFallback(ietf?)` | Enables base-language fallback for missing keys. |
+| `UseFallbackLanguage(ietf)` | Sets the floor language for missing keys (default: the base language). |
 | `MonitorFiles()` | Enables file-system change monitoring with debounce. |
 | `AddListener(listener)` | Registers an `IIniConfigListener` for diagnostic events. See [[Listeners]]. |
 | `Create()` | Creates `LanguageConfig` without loading. Plugin-friendly deferred pattern. |

@@ -19,6 +19,13 @@ public sealed class IniEntry
     public IReadOnlyList<string> Comments { get; }
 
     /// <summary>
+    /// Raw lines (blank lines and comments, exactly as written) that preceded this entry, or <c>null</c>
+    /// when they were not recorded. When set, the writer writes these lines instead of <see cref="Comments"/>.
+    /// See <see cref="IniParserOptions.PreserveTrivia"/>.
+    /// </summary>
+    public IReadOnlyList<string>? LeadingTrivia { get; set; }
+
+    /// <summary>
     /// Optional writer overrides for this specific key.
     /// </summary>
     public IniWriterOptionsOverride? WriterOptionsOverride { get; set; }

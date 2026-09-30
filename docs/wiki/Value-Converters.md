@@ -10,22 +10,47 @@ pluggable `IValueConverter<T>` implementations.
 | .NET type | Converter class |
 |-----------|----------------|
 | `string` | `StringConverter` |
-| `bool` | `BoolConverter` |
+| `bool` | `BoolConverter` (writes `True`/`False`; also reads `1`/`0`, `yes`/`no`, `on`/`off`) |
 | `byte` | `ByteConverter` |
+| `sbyte` | `SByteConverter` |
+| `short` | `Int16Converter` |
+| `ushort` | `UInt16Converter` |
 | `int` | `Int32Converter` |
 | `long` | `Int64Converter` |
 | `uint` | `UInt32Converter` |
 | `ulong` | `UInt64Converter` |
-| `double` | `DoubleConverter` |
-| `float` | `FloatConverter` |
-| `decimal` | `DecimalConverter` |
+| `char` | `CharConverter` (a single character; not trimmed, so a space is a valid value) |
+| `double` | `DoubleConverter` (invariant culture, no thousands separators) |
+| `float` | `FloatConverter` (invariant culture, no thousands separators) |
+| `decimal` | `DecimalConverter` (invariant culture, no thousands separators) |
 | `DateTime` | `DateTimeConverter` (ISO 8601 round-trip) |
 | `DateTimeOffset` | `DateTimeOffsetConverter` (ISO 8601 round-trip) |
 | `TimeSpan` | `TimeSpanConverter` (constant "c" format) |
 | `Guid` | `GuidConverter` |
-| `Uri` | `UriConverter` |
+| `Uri` | `UriConverter` (absolute and relative URIs; written as `OriginalString`) |
 | Any `enum` | `EnumConverter` (auto-registered on first use) |
-| `Nullable<T>` | Wraps the inner converter |
+| `Nullable<T>` | `NullableConverter` wraps the inner converter: an empty or missing value is `null`, `null` is written as an empty value |
+
+> **Note:** `double`, `float` and `decimal` no longer accept thousands separators — before,
+> `1,5` was silently read as `15`; now it is a conversion error (reported via
+> `OnValueConversionFailed`, see [[Listeners]]).
+
+---
+
+## Lists, arrays and dictionaries
+
+`List<T>` (and its interfaces), `T[]` and `Dictionary<TKey,TValue>` are written as one
+delimiter-separated value.  An element that contains the separator, or starts with a quote
+or starts/ends with whitespace, is written in **double quotes**, with inner quotes doubled,
+so every element round-trips:
+
+```ini
+Items = plain,"has,comma","""quoted"""," padded "
+```
+
+Unquoted input is read exactly as before.  An empty element (`a,,b`) is passed to the
+element converter as `""` on every target framework, so `List<string>` gets `"a", "", "b"`.  Dictionaries read from the inline
+`key=value,…` form use a case-insensitive comparer when the key type is `string`.
 
 ---
 
@@ -52,6 +77,8 @@ public sealed class VersionConverter : ValueConverterBase<Version>
 
 // 2. Register before calling Build()
 ValueConverterRegistry.Register(new VersionConverter());
+// Registering (or replacing) a converter also updates the List<T>, T[] and
+// Dictionary converters that were created for that type earlier.
 
 // 3. Use the type in your section interface
 [IniSection]

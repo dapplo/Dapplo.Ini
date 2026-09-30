@@ -15,6 +15,13 @@ public static class ValueConverterRegistry
 {
     private static readonly ConcurrentDictionary<Type, IValueConverter> _converters = new();
 
+    // Converters this registry composed itself (nullable, list, array, dictionary). They capture their
+    // element converters, so they are dropped whenever a converter is registered and rebuilt on demand.
+    private static readonly ConcurrentDictionary<Type, byte> _composed = new();
+
+    // Serialises Register with the bookkeeping of composed converters.
+    private static readonly object _registrationLock = new();
+
     // Generic type definitions used for collection/dictionary detection
     private static readonly HashSet<Type> _listLikeGenericDefinitions = new()
     {
@@ -51,13 +58,27 @@ public static class ValueConverterRegistry
         Register(new TimeSpanConverter());
         Register(new GuidConverter());
         Register(new UriConverter());
+        Register(new Int16Converter());
+        Register(new UInt16Converter());
+        Register(new SByteConverter());
+        Register(new CharConverter());
     }
 
     /// <summary>Registers (or replaces) a converter for its <see cref="IValueConverter.TargetType"/>.</summary>
     public static void Register(IValueConverter converter)
     {
         if (converter is null) throw new ArgumentNullException(nameof(converter));
-        _converters[converter.TargetType] = converter;
+        lock (_registrationLock)
+        {
+            _converters[converter.TargetType] = converter;
+            _composed.TryRemove(converter.TargetType, out _);
+            // Composed converters captured the previous element converters: rebuild them on the next lookup.
+            foreach (var composedType in _composed.Keys)
+            {
+                if (_composed.TryRemove(composedType, out _))
+                    _converters.TryRemove(composedType, out _);
+            }
+        }
     }
 
     /// <summary>
@@ -84,16 +105,16 @@ public static class ValueConverterRegistry
         if (_converters.TryGetValue(type, out var converter))
             return converter;
 
-        // Nullable<T> → unwrap and find converter for T
+        // Nullable<T> → wrap the converter for T so that an empty value is null
         var underlying = Nullable.GetUnderlyingType(type);
         if (underlying != null)
         {
-            if (_converters.TryGetValue(underlying, out converter))
-                return converter;
-
-            // Try enum under nullable
-            if (underlying.IsEnum)
-                return GetOrCreateEnumConverter(underlying);
+            var inner = _converters.TryGetValue(underlying, out var innerConverter)
+                ? innerConverter
+                : underlying.IsEnum ? GetOrCreateEnumConverter(underlying) : null;
+            if (inner == null)
+                return null;
+            return AddComposed(type, new NullableConverter(type, inner));
         }
 
         // Plain enum
@@ -109,9 +130,7 @@ public static class ValueConverterRegistry
             {
                 var arrayConverterType = typeof(ArrayConverter<>).MakeGenericType(elementType);
                 converter = (IValueConverter)Activator.CreateInstance(arrayConverterType, elementConverter, ',')!;
-                // Use TryAdd so that only the first writer wins; all callers then read back the winner.
-                _converters.TryAdd(type, converter);
-                return _converters[type];
+                return AddComposed(type, converter);
             }
         }
 
@@ -130,8 +149,7 @@ public static class ValueConverterRegistry
                 {
                     var listConverterType = typeof(ListConverter<>).MakeGenericType(elementType);
                     converter = (IValueConverter)Activator.CreateInstance(listConverterType, elementConverter, ',')!;
-                    _converters.TryAdd(type, converter);
-                    return _converters[type];
+                    return AddComposed(type, converter);
                 }
             }
 
@@ -144,13 +162,25 @@ public static class ValueConverterRegistry
                 {
                     var dictConverterType = typeof(DictionaryConverter<,>).MakeGenericType(typeArgs[0], typeArgs[1]);
                     converter = (IValueConverter)Activator.CreateInstance(dictConverterType, keyConverter, valueConverter, ',', '=')!;
-                    _converters.TryAdd(type, converter);
-                    return _converters[type];
+                    return AddComposed(type, converter);
                 }
             }
         }
 
         return null;
+    }
+
+    private static IValueConverter AddComposed(Type type, IValueConverter converter)
+    {
+        lock (_registrationLock)
+        {
+            // Only the first writer wins; all callers then get the winner. Only a converter this registry
+            // composed is marked as composed — never one the application registered in the meantime.
+            var winner = _converters.GetOrAdd(type, converter);
+            if (ReferenceEquals(winner, converter))
+                _composed.TryAdd(type, 0);
+            return winner;
+        }
     }
 
 #if NET

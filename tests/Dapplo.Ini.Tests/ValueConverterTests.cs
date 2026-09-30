@@ -143,8 +143,12 @@ public sealed class ValueConverterTests
     {
         var conv = ValueConverterRegistry.GetConverter(typeof(int?));
         Assert.NotNull(conv);
-        // Should be able to convert
-        Assert.Equal(0, conv!.ConvertFromString(null));
+        // A missing or empty value is null for a nullable type (not 0), and null is written as empty.
+        Assert.Null(conv!.ConvertFromString(null));
+        Assert.Null(conv.ConvertFromString(""));
+        Assert.Equal(5, conv.ConvertFromString("5"));
+        Assert.Null(conv.ConvertToString(null));
+        Assert.Equal("5", conv.ConvertToString(5));
     }
 
     [Fact]

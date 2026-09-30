@@ -25,10 +25,10 @@ property of an `[IniSection]` interface.  The source generator automatically:
 
 | Attribute | Trigger condition | Default error message |
 |---|---|---|
-| `[Required]` | `string.IsNullOrEmpty` (strings) / `== null` (nullable refs & nullable value types) | `"{PropertyName} is required."` |
-| `[Range(min, max)]` | value outside `[min, max]` (uses `IComparable`) | `"{PropertyName} must be between {min} and {max}."` |
-| `[MaxLength(n)]` | `string.Length > n` (null is skipped) | `"{PropertyName} must not exceed {n} characters."` |
-| `[RegularExpression(pattern)]` | `Regex.IsMatch` returns `false` (null is skipped) | `"{PropertyName} does not match the required pattern."` |
+| `[Required]` | `string.IsNullOrWhiteSpace` (strings) / `== null` (nullable refs & nullable value types) | `"{PropertyName} is required."` |
+| `[Range(min, max)]` | value outside `[min, max]` (uses `IComparable`); works for `int`, `long`, `double`, `decimal`, nullable types (null is skipped) and the `[Range(typeof(T), "min", "max")]` form | `"{PropertyName} must be between {min} and {max}."` |
+| `[MaxLength(n)]` | `string.Length > n`, or more than `n` elements for lists/arrays (null is skipped) | `"{PropertyName} must not exceed {n} characters."` |
+| `[RegularExpression(pattern)]` | `Regex.IsMatch` returns `false`; non-string values are matched on their invariant-culture string (null is skipped) | `"{PropertyName} does not match the required pattern."` |
 
 All attributes support the `ErrorMessage` property to override the default message.
 
@@ -69,10 +69,10 @@ properties against each other or calling external services.
 [IniSection("Server")]
 public interface IServerSettings : IIniSection, IDataValidation<IServerSettings>
 {
-    [IniValue(DefaultValue = "8080", NotifyPropertyChanged = true)]
+    [IniValue(DefaultValue = "8080")]
     int Port { get; set; }
 
-    [IniValue(DefaultValue = "localhost", NotifyPropertyChanged = true)]
+    [IniValue(DefaultValue = "localhost")]
     string? Host { get; set; }
 
     static new IEnumerable<string> ValidateProperty(IServerSettings self, string propertyName)
@@ -89,11 +89,10 @@ public interface IServerSettings : IIniSection, IDataValidation<IServerSettings>
 }
 ```
 
-> Validation re-runs whenever a property annotated with
-> `NotifyPropertyChanged = true` (or carrying a DataAnnotations attribute)
-> changes its value.  For all other properties, call the framework's
-> `RunValidation(nameof(MyProp))` helper from a partial-class override to
-> trigger validation explicitly.
+> In a section with any validation, a property is re-validated on every assignment,
+> and all properties are validated after each load and reload.
+> Call `RunAllValidations()` to re-validate everything explicitly (e.g. when a settings
+> screen opens).
 
 ---
 
@@ -170,11 +169,11 @@ then custom `IDataValidation<TSelf>` rules are appended.
 public interface IServerSettings : IIniSection, IDataValidation<IServerSettings>
 {
     [Required(ErrorMessage = "Host is required.")]
-    [IniValue(NotifyPropertyChanged = true)]
+    [IniValue]
     string? Host { get; set; }
 
     [Range(1, 65535, ErrorMessage = "Port must be between 1 and 65535.")]
-    [IniValue(DefaultValue = "8080", NotifyPropertyChanged = true)]
+    [IniValue(DefaultValue = "8080")]
     int Port { get; set; }
 
     // Custom rule — applied in addition to the generated [Required] check
@@ -198,7 +197,7 @@ implement the non-generic `IDataValidation` and provide the implementation in a 
 [IniSection("Server")]
 public interface IServerSettings : IIniSection, IDataValidation
 {
-    [IniValue(DefaultValue = "8080", NotifyPropertyChanged = true)]
+    [IniValue(DefaultValue = "8080")]
     int Port { get; set; }
 }
 
@@ -212,6 +211,10 @@ public partial class ServerSettingsImpl
     }
 }
 ```
+
+This pattern can be combined with validation attributes (`[Range]`, `[Required]`, …) on the same
+interface: the errors of both are reported. (Before this release that combination, and a public
+`ValidateProperty` method as shown above, did not compile.)
 
 ---
 

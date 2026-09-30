@@ -72,8 +72,10 @@ public class MyWorker
 }
 ```
 
-> **Note:** `InitialLoadTask` is `Task.CompletedTask` when `Build()` (sync) is used.
-> Awaiting it in that case is a no-op.
+> **Note:** `InitialLoadTask` completes with the first successful `Load()` / `LoadAsync()`,
+> whichever way it was started (`Build()`, `BuildAsync()`, or `Create()` + `Load()` /
+> `LoadAsync()`), and faults when that load fails.  After a synchronous `Build()` it is
+> already completed, so awaiting it is a no-op.
 
 ---
 
@@ -133,6 +135,10 @@ builder.Services.AddSingleton(config);
 // Phase 3 — load (fire-and-forget if needed)
 await config.LoadAsync(cancellationToken);
 ```
+
+Consumers can `await config.InitialLoadTask` here too: it completes when this `LoadAsync()`
+(or `Load()`) has finished, and faults if it fails.  Until then the sections return their
+`[DefaultValue]`s rather than `default(T)`.
 
 See [[Plugin-Registrations]] for the full pattern and more examples.
 

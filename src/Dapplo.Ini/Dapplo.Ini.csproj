@@ -15,6 +15,11 @@
     <IsTrimmable Condition="$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net8.0'))">true</IsTrimmable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Dapplo.Ini.Tests" />
+    <InternalsVisibleTo Include="Dapplo.Ini.Internationalization.Tests" />
+  </ItemGroup>
+
   <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
     <PackageReference Include="System.Memory" Version="4.5.5" />
   </ItemGroup>

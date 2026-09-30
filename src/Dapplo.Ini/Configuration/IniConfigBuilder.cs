@@ -55,6 +55,10 @@ public sealed class IniConfigBuilder
     // Global EmptyWhenNull flag — applied to all sections/properties at runtime
     private bool _globalEmptyWhenNull;
 
+    // Late section registration and preservation of sections nobody registered
+    private bool _allowLateSectionRegistration;
+    private bool _preserveUnknownSections;
+
     // Parser options (null = use IniParserOptions.Default)
     private Parsing.IniParserOptions? _parserOptions;
     // Writer options (null = use IniWriterOptions.Default)
@@ -408,6 +412,74 @@ public sealed class IniConfigBuilder
         return this;
     }
 
+    // ── late registration / unknown sections ─────────────────────────────────
+
+    /// <summary>
+    /// Allows sections to be added with <see cref="IniConfig.AddSection{T}"/> /
+    /// <see cref="IniConfig.AddSectionAsync{T}"/> <em>after</em> the configuration has been loaded.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// With this option the parsed content of every file layer (defaults files, the user file and
+    /// constants files) is kept in memory after each load and reload. A section added later goes
+    /// through the same life cycle a load applies — reset to compiled defaults, defaults files, user
+    /// file, constants (protected), value sources and <see cref="IAfterLoad"/> — from that retained
+    /// data, without reading any file again.
+    /// </para>
+    /// <para>
+    /// Typical use: a plugin host that must read its own settings (e.g. which plugins to load) before
+    /// the plugins can register their sections. See the wiki page <em>Plugin-Registrations</em>.
+    /// </para>
+    /// <para>
+    /// This option implies <see cref="PreserveUnknownSections"/>: sections in the file that are not
+    /// registered (yet) are written back unchanged on save.
+    /// </para>
+    /// <para>
+    /// Cost: the parsed files stay in memory for the lifetime of the configuration, which is roughly
+    /// proportional to the size of the files on disk. Without this option nothing extra is kept, and
+    /// <see cref="IniConfig.AddSection{T}"/> after the load throws <see cref="InvalidOperationException"/>.
+    /// </para>
+    /// </remarks>
+    public IniConfigBuilder AllowLateSectionRegistration()
+    {
+        _allowLateSectionRegistration = true;
+        _preserveUnknownSections = true;
+        return this;
+    }
+
+    /// <summary>
+    /// Writes sections that are present in the INI file but not registered (for example the settings
+    /// of a plugin that is not loaded in this session) back unchanged on save, instead of dropping them.
+    /// </summary>
+    /// <remarks>
+    /// The parsed user file is kept in memory to do this. Registered sections are updated in place, so
+    /// their position in the file and the comments above existing keys are kept too. Keys in a registered
+    /// section that its interface does not declare are still removed on save, as without this option,
+    /// so migrations that rename keys keep working.
+    /// This is implied by <see cref="AllowLateSectionRegistration"/>.
+    /// </remarks>
+    public IniConfigBuilder PreserveUnknownSections()
+    {
+        _preserveUnknownSections = true;
+        return this;
+    }
+
+    /// <summary>
+    /// Keeps the layout of the INI file on save: blank lines, comments exactly as written (including
+    /// <c>#</c> comments, file header and trailing comments) and lines that cannot be parsed are written
+    /// back where they were. Implies <see cref="PreserveUnknownSections"/>.
+    /// </summary>
+    /// <remarks>
+    /// Values are still written in the configured format (e.g. <c>key = value</c>), so the spacing
+    /// around the separator of a changed or re-written key can differ from the original.
+    /// </remarks>
+    public IniConfigBuilder PreserveFormatting()
+    {
+        _preserveUnknownSections = true;
+        MutateParserOptions(o => o.PreserveTrivia = true);
+        return this;
+    }
+
     // ── writer options ─────────────────────────────────────────────────────────
 
     /// <summary>
@@ -580,6 +652,7 @@ public sealed class IniConfigBuilder
             EscapeSequences       = current.EscapeSequences,
             CaseSensitiveKeys     = current.CaseSensitiveKeys,
             CaseSensitiveSections = current.CaseSensitiveSections,
+            PreserveTrivia        = current.PreserveTrivia,
         };
         mutate(copy);
         _parserOptions = copy;
@@ -606,20 +679,16 @@ public sealed class IniConfigBuilder
     /// interface type automatically.  If the class implements more than one such interface,
     /// pass the interface type directly as <typeparamref name="T"/> to remove the ambiguity.
     /// </summary>
+#if NET
+    [UnconditionalSuppressMessage("Trimming", "IL2026",
+        Justification = "Reflection is only used when T is a concrete class; pass the interface type for trim safety.")]
+#endif
     public IniConfigBuilder RegisterSection<T>(T section) where T : IIniSection
     {
         if (section is null) throw new ArgumentNullException(nameof(section));
-        // When T is a concrete class rather than an interface, prefer registering under
-        // the most-specific IIniSection-derived interface so that GetSection<IMySection>()
-        // works as expected — consistent with the behaviour of the non-generic overload.
-        Type keyType = typeof(T);
-        if (!keyType.IsInterface)
-        {
-            keyType = keyType.GetInterfaces()
-                .FirstOrDefault(i => typeof(IIniSection).IsAssignableFrom(i) && i != typeof(IIniSection))
-                ?? keyType;
-        }
-        _sections[keyType] = section;
+        // When T is a concrete class rather than an interface, register under the most derived
+        // IIniSection-derived interface so that GetSection<IMySection>() works as expected.
+        _sections[SectionStore.ResolveKeyType(typeof(T), section.GetType())] = section;
         return this;
     }
 
@@ -637,12 +706,8 @@ public sealed class IniConfigBuilder
     {
         if (section is null) throw new ArgumentNullException(nameof(section));
 
-        // Infer the most-specific IIniSection-derived interface
-        var ifaceType = section.GetType().GetInterfaces()
-            .FirstOrDefault(i => typeof(IIniSection).IsAssignableFrom(i) && i != typeof(IIniSection))
-            ?? section.GetType();
-
-        _sections[ifaceType] = section;
+        // Infer the most derived IIniSection-derived interface
+        _sections[SectionStore.ResolveKeyType(section.GetType(), section.GetType())] = section;
         return this;
     }
 
@@ -675,11 +740,23 @@ public sealed class IniConfigBuilder
     /// Builds, loads and registers the <see cref="IniConfig"/> in the global registry.
     /// Returns the fully-populated <see cref="IniConfig"/>.
     /// </summary>
+    /// <remarks>
+    /// When loading fails, the configuration is removed from the registry again and the exception is re-thrown.
+    /// </remarks>
     public IniConfig Build()
     {
         var config = CreateCore();
         IniConfigRegistry.Register(_fileName, config);
-        return config.Load();
+        try
+        {
+            return config.Load();
+        }
+        catch
+        {
+            IniConfigRegistry.Unregister(_fileName, config);
+            config.Dispose();
+            throw;
+        }
     }
 
     /// <summary>
@@ -704,23 +781,19 @@ public sealed class IniConfigBuilder
     {
         var config = CreateCore();
 
-        // Register in the global registry and expose InitialLoadTask BEFORE any I/O starts.
-        // This lets DI consumers get a reference to the config (or its sections) and
-        // await InitialLoadTask to know when values are ready.
-        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        config.SetInitialLoadTask(tcs.Task);
+        // Register in the global registry BEFORE any I/O starts. This lets DI consumers get a
+        // reference to the config (or its sections) and await InitialLoadTask, which LoadAsync
+        // completes (or faults) when the load has finished.
         IniConfigRegistry.Register(_fileName, config);
 
         try
         {
             await config.LoadAsync(cancellationToken).ConfigureAwait(false);
-            tcs.SetResult(true);
         }
-        catch (Exception ex)
+        catch
         {
-            // Unregister from registry on failure and propagate the exception via InitialLoadTask.
-            IniConfigRegistry.Unregister(_fileName);
-            tcs.SetException(ex);
+            IniConfigRegistry.Unregister(_fileName, config);
+            config.Dispose();
             throw;
         }
 
@@ -753,6 +826,8 @@ public sealed class IniConfigBuilder
         config.UnknownKeyHandler = _unknownKeyCallback;
         config.MetadataConfig = _metadataConfig;
         config.GlobalEmptyWhenNull = _globalEmptyWhenNull;
+        config.AllowLateRegistration = _allowLateSectionRegistration;
+        config.PreserveUnknownSections = _preserveUnknownSections;
         config.WriterOptions = (_writerOptions ?? Parsing.IniWriterOptions.Default).Clone();
         config.ParserOptions = _parserOptions ?? Parsing.IniParserOptions.Default;
 
@@ -763,9 +838,13 @@ public sealed class IniConfigBuilder
         config.ValueSourcesAsync.AddRange(_valueSourcesAsync);
         config.Listeners.AddRange(_listeners);
 
-        // Seed sections (no I/O — Load() will reset and populate them)
+        // Seed sections (no I/O — Load() will reset and populate them). Resetting them now means that
+        // code which reads a section before the load sees its [DefaultValue]s instead of default(T).
         foreach (var kvp in _sections)
-            config.Sections[kvp.Key] = kvp.Value;
+        {
+            config.ResetSection(kvp.Value);
+            config.Sections.Set(kvp.Key, kvp.Value);
+        }
 
         return config;
     }

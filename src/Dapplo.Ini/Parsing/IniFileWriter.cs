@@ -13,23 +13,169 @@ public static class IniFileWriter
 {
     /// <summary>Writes <paramref name="iniFile"/> to the file at <paramref name="filePath"/> using the specified
     /// <paramref name="encoding"/> (defaults to UTF-8 when <c>null</c>).</summary>
+    /// <remarks>
+    /// The content is first written to a temporary file next to <paramref name="filePath"/>, flushed to disk,
+    /// and then swapped into place. A crash or a full disk during the write therefore never leaves a
+    /// truncated or empty INI file behind: either the old or the new content is on disk.
+    /// </remarks>
     public static void WriteFile(string filePath, IniFile iniFile, Encoding? encoding = null, IniWriterOptions? options = null)
     {
-        using var writer = new StreamWriter(filePath, append: false, encoding ?? Encoding.UTF8);
-        Write(writer, iniFile, options);
+        if (MustWriteInPlace(filePath, out var tempPath, out var tempStream))
+        {
+            using var inPlace = new StreamWriter(filePath, append: false, encoding ?? Encoding.UTF8);
+            Write(inPlace, iniFile, options);
+            return;
+        }
+        try
+        {
+            using (var stream = tempStream!)
+            {
+                using (var writer = new StreamWriter(stream, encoding ?? Encoding.UTF8, 4096, leaveOpen: true))
+                {
+                    Write(writer, iniFile, options);
+                }
+                stream.Flush(flushToDisk: true);
+            }
+            ReplaceFile(tempPath!, filePath);
+        }
+        catch
+        {
+            TryDelete(tempPath!);
+            throw;
+        }
     }
 
     /// <summary>Asynchronously writes <paramref name="iniFile"/> to the file at <paramref name="filePath"/> using the
     /// specified <paramref name="encoding"/> (defaults to UTF-8 when <c>null</c>).</summary>
+    /// <remarks>Uses the same write-to-temp-then-replace strategy as <see cref="WriteFile"/>.</remarks>
     public static async Task WriteFileAsync(string filePath, IniFile iniFile, Encoding? encoding = null, IniWriterOptions? options = null, CancellationToken cancellationToken = default)
     {
         var content = WriteToString(iniFile, options);
+        var bytes = (encoding ?? Encoding.UTF8).GetPreamble().Concat((encoding ?? Encoding.UTF8).GetBytes(content)).ToArray();
+        if (MustWriteInPlace(filePath, out var tempPath, out var tempStream))
+        {
+            using var inPlace = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.Read, 4096, FileOptions.Asynchronous);
+            await inPlace.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        try
+        {
+            using (var stream = tempStream!)
+            {
+                await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
+                stream.Flush(flushToDisk: true);
+            }
+            ReplaceFile(tempPath!, filePath);
+        }
+        catch
+        {
+            TryDelete(tempPath!);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Decides between the atomic temp-file-and-replace strategy and writing the file in place, and opens
+    /// the temp file for the former. The file is written in place when it is a symbolic link (replacing it
+    /// would turn the link into a plain file) or when no temp file can be created next to it (for example
+    /// when only the file itself, not its folder, is writable).
+    /// </summary>
+    private static bool MustWriteInPlace(string filePath, out string? tempPath, out FileStream? tempStream)
+    {
+        tempPath = null;
+        tempStream = null;
+        try
+        {
+            if (File.Exists(filePath) && (File.GetAttributes(filePath) & FileAttributes.ReparsePoint) != 0)
+                return true;
+        }
+        catch (IOException)
+        {
+            // Attributes unavailable: try the normal path.
+        }
+
+        var candidate = CreateTempPath(filePath);
+        try
+        {
+            tempStream = new FileStream(candidate, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous);
+        }
+        catch (Exception ex) when ((ex is UnauthorizedAccessException || ex is IOException) && ex is not DirectoryNotFoundException && File.Exists(filePath))
+        {
+            return true;
+        }
+        tempPath = candidate;
+        return false;
+    }
+
+    private static string CreateTempPath(string filePath)
+    {
+        var fullPath = Path.GetFullPath(filePath);
+        var directory = Path.GetDirectoryName(fullPath) ?? ".";
+        return Path.Combine(directory, $"{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
+    }
+
+    private static void ReplaceFile(string tempPath, string filePath)
+    {
 #if NET
-        await File.WriteAllTextAsync(filePath, content, encoding ?? Encoding.UTF8, cancellationToken).ConfigureAwait(false);
-#else
-        using var writer = new StreamWriter(filePath, append: false, encoding ?? Encoding.UTF8);
-        await writer.WriteAsync(content).ConfigureAwait(false);
+        // Keep the permissions of the existing file (a new file would get the default umask).
+        if (!OperatingSystem.IsWindows() && File.Exists(filePath))
+        {
+            try { File.SetUnixFileMode(tempPath, File.GetUnixFileMode(filePath)); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best effort */ }
+        }
 #endif
+        if (!File.Exists(filePath))
+        {
+            try
+            {
+                File.Move(tempPath, filePath);
+                return;
+            }
+            catch (IOException) when (File.Exists(filePath))
+            {
+                // Somebody created the target in the meantime; fall through to Replace.
+            }
+        }
+
+        try
+        {
+            // A reader (virus scanner, indexer, editor) that has the file open briefly blocks the swap.
+            // Retry a few times before falling back.
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    File.Replace(tempPath, filePath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+                    return;
+                }
+                catch (IOException) when (attempt < ReplaceAttempts && File.Exists(tempPath))
+                {
+                    Thread.Sleep(ReplaceRetryDelayMs * attempt);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or PlatformNotSupportedException or UnauthorizedAccessException && File.Exists(tempPath))
+        {
+            // Some file systems (e.g. certain network shares) do not support File.Replace.
+            // Fall back to a copy, which is not atomic but still never truncates before the data is complete.
+            File.Copy(tempPath, filePath, overwrite: true);
+            TryDelete(tempPath);
+        }
+    }
+
+    private const int ReplaceAttempts = 5;
+    private const int ReplaceRetryDelayMs = 20;
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch
+        {
+            // Best effort cleanup of a temporary file.
+        }
     }
 
     /// <summary>Returns the INI file as a string.</summary>
@@ -45,26 +191,30 @@ public static class IniFileWriter
     public static void Write(TextWriter writer, IniFile iniFile, IniWriterOptions? options = null)
     {
         var writerOptions = (options ?? IniWriterOptions.Default).Clone();
-        writerOptions.AssignmentSeparator = iniFile.AssignmentSeparator;
+        // Explicitly passed options win; without options the file's own separator is used.
+        if (options == null)
+            writerOptions.AssignmentSeparator = iniFile.AssignmentSeparator;
 
         bool firstSection = true;
         foreach (var section in iniFile.Sections)
         {
             var sectionOptions = writerOptions.Apply(section.WriterOptionsOverride);
 
-            if (!firstSection)
-                writer.WriteLine();
-            firstSection = false;
-
-            // Section comments
-            if (sectionOptions.WriteComments)
+            if (section.LeadingTrivia != null)
             {
-                foreach (var comment in section.Comments)
-                {
-                    writer.Write("; ");
-                    writer.WriteLine(comment);
-                }
+                // Recorded layout: exactly the blank lines and comments that were above the header.
+                WriteTrivia(writer, section.LeadingTrivia);
             }
+            else
+            {
+                if (!firstSection)
+                    writer.WriteLine();
+
+                // Section comments
+                if (sectionOptions.WriteComments)
+                    WriteComments(writer, section.Comments);
+            }
+            firstSection = false;
 
             // Only write header for named sections
             if (!string.IsNullOrEmpty(section.Name))
@@ -79,18 +229,36 @@ public static class IniFileWriter
             {
                 var entryOptions = sectionOptions.Apply(entry.WriterOptionsOverride);
 
-                if (entryOptions.WriteComments)
-                {
-                    foreach (var comment in entry.Comments)
-                    {
-                        writer.Write("; ");
-                        writer.WriteLine(comment);
-                    }
-                }
+                if (entry.LeadingTrivia != null)
+                    WriteTrivia(writer, entry.LeadingTrivia);
+                else if (entryOptions.WriteComments)
+                    WriteComments(writer, entry.Comments);
 
                 writer.Write(entry.Key);
                 writer.Write(entryOptions.AssignmentSeparator);
                 writer.WriteLine(FormatValue(entry.Value, entryOptions));
+            }
+        }
+
+        if (iniFile.TrailingTrivia != null)
+            WriteTrivia(writer, iniFile.TrailingTrivia);
+    }
+
+    private static void WriteTrivia(TextWriter writer, IReadOnlyList<string> lines)
+    {
+        foreach (var line in lines)
+            writer.WriteLine(line);
+    }
+
+    /// <summary>Writes each comment line prefixed with "; " — also every line of a multi-line comment.</summary>
+    private static void WriteComments(TextWriter writer, IReadOnlyList<string> comments)
+    {
+        foreach (var comment in comments)
+        {
+            foreach (var line in comment.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None))
+            {
+                writer.Write("; ");
+                writer.WriteLine(line);
             }
         }
     }
@@ -98,20 +266,62 @@ public static class IniFileWriter
     internal static string FormatValue(string? value, IniWriterOptions options)
     {
         var result = value ?? string.Empty;
-        if (options.EscapeSequences)
+        // A raw line break would end the value and could inject keys or sections into the file,
+        // so values containing one are always written with escape sequences.
+        // Enable escape sequences on the parser to read them back as line breaks.
+        if (options.EscapeSequences || result.IndexOf('\n') >= 0 || result.IndexOf('\r') >= 0)
             result = EncodeEscapeSequences(result);
-        return ApplyQuoting(result, options);
+        return ApplyQuoting(result, options, escapeSequencesEncoded: options.EscapeSequences);
     }
 
-    private static string ApplyQuoting(string value, IniWriterOptions options)
+    private static string ApplyQuoting(string value, IniWriterOptions options, bool escapeSequencesEncoded)
     {
+        // With escape sequences, backslashes are already doubled, so escaping the quotes is enough and the
+        // parser's escape decoding restores the value. Without them, the quote escaping itself must be
+        // reversible (see EscapeQuoteReversible), because the parser only undoes the quote escaping.
+        Func<string, char, string> escape = escapeSequencesEncoded ? EscapeUnescapedQuote : EscapeQuoteReversible;
         return options.QuoteStyle switch
         {
-            IniValueQuoteStyle.Single => $"'{EscapeUnescapedQuote(value, '\'')}'",
-            IniValueQuoteStyle.Double => $"\"{EscapeUnescapedQuote(value, '\"')}\"",
-            IniValueQuoteStyle.Auto when NeedsQuoting(value, options.AssignmentSeparator) => $"\"{EscapeUnescapedQuote(value, '\"')}\"",
+            IniValueQuoteStyle.Single => $"'{escape(value, '\'')}'",
+            IniValueQuoteStyle.Double => $"\"{escape(value, '\"')}\"",
+            IniValueQuoteStyle.Auto when NeedsQuoting(value, options.AssignmentSeparator) => $"\"{escape(value, '\"')}\"",
             _ => value
         };
+    }
+
+    /// <summary>
+    /// Escapes <paramref name="quoteChar"/> inside a value that is written between quotes, without escape
+    /// sequences: every run of backslashes directly before a quote (or at the very end, before the closing
+    /// quote) is doubled, and the quote gets one more backslash. The parser reverses exactly this, so any
+    /// value round-trips.
+    /// </summary>
+    private static string EscapeQuoteReversible(string value, char quoteChar)
+    {
+        if (string.IsNullOrEmpty(value) || (value.IndexOf(quoteChar) < 0 && value[value.Length - 1] != '\\'))
+            return value;
+
+        var sb = new StringBuilder(value.Length + 8);
+        var backslashes = 0;
+        foreach (var c in value)
+        {
+            if (c == '\\')
+            {
+                backslashes++;
+                continue;
+            }
+            if (c == quoteChar)
+            {
+                sb.Append('\\', backslashes * 2 + 1);
+            }
+            else
+            {
+                sb.Append('\\', backslashes);
+            }
+            backslashes = 0;
+            sb.Append(c);
+        }
+        sb.Append('\\', backslashes * 2);
+        return sb.ToString();
     }
 
     private static string EscapeUnescapedQuote(string value, char quoteChar)
@@ -146,6 +356,10 @@ public static class IniFileWriter
             return true;
 
         if (value.StartsWith(";") || value.StartsWith("#"))
+            return true;
+
+        // A value that already looks quoted would lose its quotes when read with QuotedValues.
+        if (value[0] == '"' || value[0] == '\'')
             return true;
 
         foreach (var c in assignmentSeparator)

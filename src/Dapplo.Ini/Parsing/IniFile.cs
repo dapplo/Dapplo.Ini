@@ -20,6 +20,12 @@ public sealed class IniFile
     /// </summary>
     public string AssignmentSeparator { get; set; } = " = ";
 
+    /// <summary>
+    /// Raw lines after the last entry (trailing blank lines and comments), or <c>null</c> when they were
+    /// not recorded. See <see cref="IniParserOptions.PreserveTrivia"/>.
+    /// </summary>
+    public IReadOnlyList<string>? TrailingTrivia { get; set; }
+
     /// <summary>All sections, in file order.</summary>
     public IReadOnlyList<IniSection> Sections => _sectionsOrdered;
 
@@ -60,11 +66,10 @@ public sealed class IniFile
     /// <summary>Adds a <see cref="IniSection"/> (replaces any existing section with the same name).</summary>
     public void AddSection(IniSection section)
     {
-        if (_sections.ContainsKey(section.Name))
+        if (_sections.TryGetValue(section.Name, out var existing))
         {
-            // Replace in ordered list
-            var idx = _sectionsOrdered.FindIndex(s =>
-                string.Equals(s.Name, section.Name, StringComparison.OrdinalIgnoreCase));
+            // Replace in ordered list (by reference, so the configured section comparer is honoured)
+            var idx = _sectionsOrdered.IndexOf(existing);
             if (idx >= 0) _sectionsOrdered[idx] = section;
         }
         else
@@ -74,6 +79,40 @@ public sealed class IniFile
         _sections[section.Name] = section;
     }
 
+    /// <summary>The comparer used for key lookups in the sections of this file.</summary>
+    internal StringComparer KeyComparer => _keyComparer;
+
+    /// <summary>
+    /// Creates a deep copy of this file: sections, entries, comments and writer overrides.
+    /// Changing the copy never affects the original.
+    /// </summary>
+    internal IniFile Clone()
+    {
+        var clone = new IniFile((StringComparer)_sections.Comparer, _keyComparer)
+        {
+            AssignmentSeparator = AssignmentSeparator,
+            TrailingTrivia = TrailingTrivia?.ToArray()
+        };
+        foreach (var section in _sectionsOrdered)
+        {
+            var sectionClone = new IniSection(section.Name, section.Comments.ToArray(), _keyComparer)
+            {
+                WriterOptionsOverride = section.WriterOptionsOverride,
+                LeadingTrivia = section.LeadingTrivia?.ToArray()
+            };
+            foreach (var entry in section.Entries)
+            {
+                sectionClone.SetEntry(new IniEntry(entry.Key, entry.Value, entry.Comments.ToArray())
+                {
+                    WriterOptionsOverride = entry.WriterOptionsOverride,
+                    LeadingTrivia = entry.LeadingTrivia?.ToArray()
+                });
+            }
+            clone.AddSection(sectionClone);
+        }
+        return clone;
+    }
+
     /// <summary>
     /// Inserts a section at position 0, making it the first section in the file.
     /// If a section with the same name already exists it is removed from its current position
@@ -81,11 +120,9 @@ public sealed class IniFile
     /// </summary>
     public void PrependSection(IniSection section)
     {
-        if (_sections.ContainsKey(section.Name))
+        if (_sections.TryGetValue(section.Name, out var existing))
         {
-            var idx = _sectionsOrdered.FindIndex(s =>
-                string.Equals(s.Name, section.Name, StringComparison.OrdinalIgnoreCase));
-            if (idx >= 0) _sectionsOrdered.RemoveAt(idx);
+            _sectionsOrdered.Remove(existing);
         }
         _sectionsOrdered.Insert(0, section);
         _sections[section.Name] = section;

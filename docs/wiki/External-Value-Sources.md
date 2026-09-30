@@ -82,9 +82,11 @@ var config = await IniConfigRegistry.ForFile("myapp.ini")
 Value sources are applied after the user file and constants files.
 When multiple sources are registered, they are applied in registration order with the
 last one winning.  Async sources are applied **after** all sync sources.
+Keys that a constants file has set are skipped — a value source never overrides a constant. Listeners implementing `IIniConfigExtendedListener` are told about each skipped value via `OnValueSourceIgnored` (see [[Listeners]]).
 
 > **Important:** Async value sources (`IValueSourceAsync`) are only consulted during
-> `BuildAsync()` and `ReloadAsync()`.  The synchronous `Build()` and `Reload()` skip them.
+> `BuildAsync()`, `LoadAsync()`, `ReloadAsync()` and `AddSectionAsync()`.  The synchronous
+> `Build()`, `Load()`, `Reload()` and `AddSection()` skip them.
 
 ---
 
@@ -103,8 +105,9 @@ await config.ReloadAsync();
 
 ## Value resolution order
 
-External value sources are the **highest-priority** layer — they override defaults,
-user file values, and constants files.  See [[Loading-Life-Cycle]] for the full order.
+External value sources override defaults and user file values, but **not** constants:
+keys set by a constants file are skipped when the sources are applied.
+See [[Loading-Life-Cycle]] for the full order.
 
 ---
 

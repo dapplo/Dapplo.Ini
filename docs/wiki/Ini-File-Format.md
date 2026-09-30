@@ -78,15 +78,16 @@ description are written without a comment line.
 | .NET type | Example INI value | Notes |
 |-----------|------------------|-------|
 | `string` | `Hello World` | Stored as-is |
-| `bool` | `True` / `False` | Case-insensitive on read |
-| `int`, `long`, `uint`, `ulong` | `42`, `-7`, `0` | Invariant culture |
-| `double`, `float`, `decimal` | `3.14`, `-0.5` | Invariant culture (`.` decimal separator) |
+| `bool` | `True` / `False` | Case-insensitive on read; `1`/`0`, `yes`/`no`, `on`/`off` are also accepted |
+| `byte`, `sbyte`, `short`, `ushort`, `int`, `long`, `uint`, `ulong` | `42`, `-7`, `0` | Invariant culture |
+| `char` | `x` | A single character (not trimmed) |
+| `double`, `float`, `decimal` | `3.14`, `-0.5` | Invariant culture (`.` decimal separator, no thousands separators) |
 | `DateTime` | `2024-03-15T10:30:00.0000000` | ISO 8601 round-trip format |
 | `TimeSpan` | `00:30:00` | Constant "c" format (`[-][d.]hh:mm:ss[.fffffff]`) |
 | `Guid` | `d3b07384-d9b7-4e57-b9c3-7e3a5f1e5e4d` | Standard format |
-| `Uri` | `https://example.com/api` | Full URI string |
+| `Uri` | `https://example.com/api` | Absolute or relative URI, written exactly as given |
 | Any `enum` | `Warning`, `Information` | Enum member name (case-insensitive on read) |
-| `Nullable<T>` | Empty string for `null`; otherwise the inner type's format | |
+| `Nullable<T>` | Empty string for `null`; otherwise the inner type's format | An empty value reads as `null` |
 
 ### Enum example
 
@@ -131,6 +132,9 @@ EnabledFeatures = Feature1,Feature2,Feature3
 ListenPorts = 8080,8081,8082
 ```
 
+An element that contains the separator (or starts with a quote or whitespace) is written in
+double quotes with inner quotes doubled, e.g. `"has,comma"`.  See [[Value-Converters]].
+
 ### Dictionaries
 
 `Dictionary<string, TValue>` and `IDictionary<string, TValue>` use **dotted sub-key
@@ -156,6 +160,10 @@ ServiceConfig.retries = 3
 > file uses one `PropertyName.key = value` line per entry, which is the canonical
 > storage format.
 
+Dictionary keys can contain any character: `%`, `=`, `:`, line breaks and leading or
+trailing whitespace are written as `%XX` (e.g. `a=b` → `ServiceConfig.a%3Db`) and decoded
+when the file is read. Other keys are written unchanged.
+
 ---
 
 ## Comments in the written file
@@ -163,7 +171,8 @@ ServiceConfig.retries = 3
 When the framework writes an INI file it outputs:
 
 1. A `;` comment line before each **section** that has a `Description`.
-2. A `;` comment line before each **key** that has a `Description`.
+2. A `;` comment line before each **key** that has a `Description`
+   (a multi-line description gets `; ` on every line).
 3. A blank line between sections.
 
 Comments can be disabled globally (`SkipCommentsOnWrite()` / `IniWriterOptions.WriteComments = false`)
@@ -205,7 +214,7 @@ section:
 [__metadata__]
 Version   = 1.2.0
 CreatedBy = MyApplication
-SavedOn   = 15/03/2024 10:30:00
+SavedOn   = 2024-03-15T10:30:00+01:00
 
 [General]
 AppName = MyApp

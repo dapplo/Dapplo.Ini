@@ -138,7 +138,6 @@ public sealed class LanguageConfigTests : IDisposable
             .AddSearchPath(LangDir)
             .WithBaseLanguage("en-US")
             .RegisterSection<IMainLanguage>(section)
-            .UseFallback()
             .Build();
 
         config.SetLanguage("de-DE");
@@ -156,7 +155,6 @@ public sealed class LanguageConfigTests : IDisposable
             .AddSearchPath(LangDir)
             .WithBaseLanguage("en-US")
             .RegisterSection<IMainLanguage>(section)
-            .UseFallback()
             .Build();
 
         config.SetLanguage("de-DE");

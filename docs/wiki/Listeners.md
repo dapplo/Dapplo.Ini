@@ -33,9 +33,62 @@ Implement every method, even the ones you don't need — just leave the body emp
 | `OnFileNotFound(fileName)` | The INI or language file could not be found in any search path.  Sections fall back to their compiled defaults. `fileName` is the base name (e.g. `"app.ini"` or `"myapp.en-US.ini"`). |
 | `OnSaved(filePath)` | The configuration was written to disk.  Not called by `LanguageConfig` (language files are read-only). |
 | `OnReloaded(filePath)` | The file was reloaded, either via an explicit call to `Reload()` / `ReloadAsync()`, an external file-change event, or a language switch (`SetLanguage()`). For language configs the value is the IETF language tag (e.g. `"de-DE"`). |
-| `OnError(operation, exception)` | An exception was thrown during `"Load"`, `"Save"`, `"Reload"`, or `"SetLanguage"`. The exception is **always re-thrown** after all listeners have been notified — existing error behaviour is unchanged. |
+| `OnError(operation, exception)` | An exception was thrown during `"Load"`, `"Save"`, `"Reload"`, or `"SetLanguage"`. For calls made by your code the exception is **always re-thrown** after all listeners have been notified. For background work (see below) it is only reported here. |
 | `OnUnknownKey(sectionName, key, rawValue)` | A key in the file has no matching property on the registered section interface. Fired alongside the existing `IUnknownKey` / `OnUnknownKey(callback)` mechanisms. |
 | `OnValueConversionFailed(sectionName, key, rawValue, exception)` | A raw string from the INI file could not be converted to the target property type. The property retains `default(T)`. Previously these failures were silently swallowed. |
+
+### Errors in background work
+
+Some operations run on a timer or thread-pool thread, where an unhandled exception would
+terminate the process:
+
+- the auto-save timer (`AutoSaveInterval`) — reported as `"Save"`
+- the reload after a file change (`MonitorFile`) — reported as `"Reload"`
+- the save at process exit (`SaveOnExit`) — reported as `"Save"`
+- the language-file watcher (`LanguageConfigBuilder.MonitorFiles`) — reported as `"Reload"`
+
+Exceptions there are caught and reported via `OnError` only — they do not crash the
+process.  Register a listener if you want to know about them (e.g. a locked file during
+auto-save).
+
+---
+
+## Extended notifications — `IIniConfigExtendedListener`
+
+A listener can additionally implement the optional `IIniConfigExtendedListener` interface:
+
+```csharp
+public interface IIniConfigExtendedListener
+{
+    // AddSection<T>() / AddSectionAsync<T>() registered a section
+    void OnSectionAdded(string sectionName, bool loaded);
+
+    // A value source supplied a value for a key set by a constants file; constants win, the value was not applied
+    void OnValueSourceIgnored(string sectionName, string key, string? ignoredValue);
+}
+```
+
+- `OnSectionAdded`: `loaded` is `true` when the configuration was already loaded and the section
+  was populated right away (late registration, see [[Plugin-Registrations]]), and `false` when the
+  section was registered before the load and will be populated by it. Sections passed to the
+  builder's `RegisterSection<T>()` are not reported.
+- `OnValueSourceIgnored`: see [[External-Value-Sources]].
+
+It is a separate interface (rather than new members on `IIniConfigListener`) so that existing
+listeners keep compiling — .NET Framework has no default interface members. The abstract class
+`IniConfigListenerBase` implements both interfaces with empty virtual methods, so you only override
+what you need:
+
+```csharp
+public sealed class PluginAudit : IniConfigListenerBase
+{
+    public override void OnSectionAdded(string sectionName, bool loaded)
+        => Log.Info($"[Dapplo.Ini] Section [{sectionName}] added ({(loaded ? "after" : "before")} load)");
+
+    public override void OnValueSourceIgnored(string sectionName, string key, string? ignoredValue)
+        => Log.Warn($"[Dapplo.Ini] [{sectionName}] {key} is fixed by a constants file; value source ignored");
+}
+```
 
 ---
 

@@ -17,6 +17,13 @@ public sealed class IniSection
     public IReadOnlyList<string> Comments { get; }
 
     /// <summary>
+    /// Raw lines (blank lines and comments, exactly as written) that preceded the section header,
+    /// or <c>null</c> when they were not recorded. When set, the writer writes these lines instead of
+    /// <see cref="Comments"/> and the usual blank separator line. See <see cref="IniParserOptions.PreserveTrivia"/>.
+    /// </summary>
+    public IReadOnlyList<string>? LeadingTrivia { get; set; }
+
+    /// <summary>
     /// Optional writer overrides for this section.
     /// </summary>
     public IniWriterOptionsOverride? WriterOptionsOverride { get; set; }

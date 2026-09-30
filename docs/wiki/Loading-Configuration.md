@@ -111,7 +111,10 @@ using var config = IniConfigRegistry.ForFile("app.ini")
 ```
 
 The internal timer only writes to disk when `HasPendingChanges()` returns `true`,
-so no unnecessary I/O occurs. The timer is stopped automatically when `config.Dispose()` is called.
+so no unnecessary I/O occurs. When a load, reload or save is running at that moment, the tick
+is skipped and the next one tries again. Exceptions are reported to listeners via `OnError`
+instead of crashing the process (see [[Listeners]]). The timer is stopped automatically when
+`config.Dispose()` is called.
 
 ---
 
@@ -127,6 +130,11 @@ using var config = IniConfigRegistry.ForFile("app.ini")
     .Build();
 // config.Dispose() unregisters the ProcessExit handler automatically.
 ```
+
+An exception during the exit save is reported via `IIniConfigListener.OnError` only.
+
+The lock, monitor, save-on-exit and auto-save options take effect once, after the first
+successful load — whether it comes from `Build()`, `BuildAsync()` or `Create()` + `Load()`.
 
 ---
 
@@ -278,6 +286,39 @@ foreach (var plugin in LoadPlugins())
 config.Load();
 // Or: await config.LoadAsync(cancellationToken);
 ```
+
+Sections registered before the load already return their `[DefaultValue]`s.
+`config.IsLoaded` tells whether the load has completed, and `config.InitialLoadTask`
+completes (or faults) with it.
+
+---
+
+## Late section registration and preserving unknown sections
+
+When the host must read its own settings before the plugins are known, opt in to adding
+sections **after** the load:
+
+```csharp
+var config = IniConfigRegistry.ForFile("myapp.ini")
+    .AddSearchPath(AppContext.BaseDirectory)
+    .RegisterSection<IHostSettings>(new HostSettingsImpl())
+    .AllowLateSectionRegistration()     // keep the parsed files; implies PreserveUnknownSections()
+    .Build();
+
+// Later — populated immediately from the retained data, no file I/O
+var plugin = config.AddSection<IPluginSettings>(new PluginSettingsImpl());
+
+// Optional sections can be looked up without exceptions
+if (config.TryGetSection<IPluginSettings>(out var settings)) { /* … */ }
+```
+
+| Method | Description |
+|--------|-------------|
+| `AllowLateSectionRegistration()` | Keeps the parsed defaults, user and constants files in memory after each load/reload, so `AddSection<T>()` / `AddSectionAsync<T>()` work after the load. Without it, `AddSection<T>()` after the load throws `InvalidOperationException`. |
+| `PreserveUnknownSections()` | `Save()` writes sections that are in the file but not registered (e.g. of a plugin that is not loaded) back unchanged, instead of dropping them. |
+
+See [[Plugin-Registrations#late-registration--adding-sections-after-the-load]] for the rules
+and a complete plugin-host example.
 
 ---
 

@@ -17,6 +17,8 @@ The `.ini` extension is **optional** in every method that accepts a file name �
 | `GetSection<T>(fileName)` | Shortcut for `Get(fileName).GetSection<T>()` |
 | `GetSection<T>()` | Shortcut for `Get().GetSection<T>()` — works only when exactly one config is registered |
 | `AddSection<T>(fileName, section)` | Registers a section on an existing config without I/O — for plugin pre-init. See [[Plugin-Registrations]]. |
+| `TryGetSection<T>(fileName, out section)` | Returns `false` when the config or the section is not registered |
+| `TryGetSection<T>(out section)` | Searches all registered configs for a section of type `T`; returns `false` when none has it. Useful for optional, plugin-owned sections. |
 | `Unregister(fileName)` | Removes a registration (useful in tests) |
 | `Clear()` | Removes all registrations (useful in tests) |
 
@@ -39,6 +41,14 @@ var settings = IniConfigRegistry.GetSection<IAppSettings>();
 If more than one INI file is registered, `Get()` / `GetSection<T>()` throw
 `InvalidOperationException` with a message that points to the named overload.
 
+### Registering the same file twice
+
+Registering a config for a file name that is already registered (a second `Build()`,
+`BuildAsync()` or `Create()` for the same file) **disposes the previous config**, so its
+auto-save timer, file monitor and exit handler can no longer write the file with stale
+section instances.  `Build()` / `BuildAsync()` unregister and dispose the new config again
+when loading fails, then re-throw.
+
 ---
 
 ## IniConfig
@@ -48,17 +58,20 @@ If more than one INI file is registered, `Get()` / `GetSection<T>()` throw
 | `GetSection<T>()` | Returns the registered section instance; throws if not found. **Always returns the same object reference.** |
 | `GetSection(sectionName)` | Returns the section whose `SectionName` matches (case-insensitive), or `null` if not registered. Useful for generic / dynamic access. See [[Generic-Access]]. |
 | `GetSections()` | Returns `IEnumerable<IIniSection>` over all registered sections. Enables generic iteration without compile-time type knowledge. See [[Generic-Access]]. |
-| `AddSection<T>(section)` | Registers a section without any file I/O. Returns `section` for chaining. For use between `Create()` and `Load()`. See [[Plugin-Registrations]]. |
+| `TryGetSection<T>(out section)` | Returns `false` (and `null`) instead of throwing when `T` is not registered |
+| `AddSection<T>(section)` | Registers a section. Before the load: no file I/O, populated by `Load()`. After the load: requires `AllowLateSectionRegistration()`; the section is populated immediately from the retained file data. Returns `section` for chaining. See [[Plugin-Registrations]]. |
+| `AddSectionAsync<T>(section, ct)` | Async variant of `AddSection<T>()`; after the load it also applies `IValueSourceAsync` sources and prefers `IAfterLoadAsync` hooks |
 | `AddSection(section)` | Non-generic overload; infers the interface type at runtime. Prefer the generic overload (AOT/trim safe). |
-| `Load()` | Reads all files and applies value sources once for every registered section. Returns `this`. |
+| `Load()` | Reads all files and applies value sources once for every registered section. Returns `this`. Throws `InvalidOperationException` when called from a hook or listener of a running operation. |
 | `LoadAsync(ct)` | Async variant of `Load()`; also applies `IValueSourceAsync` sources and calls `IAfterLoadAsync` hooks. |
-| `Save()` | Writes all section values to disk, honoring `IBeforeSave`/`IAfterSave` hooks |
+| `Save()` | Writes all section values to disk (atomically), honoring `IBeforeSave`/`IAfterSave` hooks. Waits for a running load, reload or save. See [[Saving]]. |
 | `SaveAsync(ct)` | Async variant of `Save()`; prefers `IBeforeSaveAsync`/`IAfterSaveAsync` hooks, falls back to sync hooks |
-| `Reload()` | Re-reads all layers in place; section references remain valid |
+| `Reload()` | Re-reads all layers in place; section references remain valid. Throws `InvalidOperationException` when called from a hook or listener of a running operation. |
 | `ReloadAsync(ct)` | Async variant of `Reload()`; also applies `IValueSourceAsync` sources and calls `IAfterLoadAsync` hooks |
 | `HasPendingChanges()` | Returns `true` when at least one registered section has unsaved changes |
 | `RequestPostponedReload()` | Triggers a reload that was earlier postponed by a `FileChangedCallback` |
-| `InitialLoadTask` | `Task.CompletedTask` after `Build()`; a pending `Task` after `BuildAsync()` that completes when loading finishes |
+| `InitialLoadTask` | Completes when the first `Load()` / `LoadAsync()` succeeds (`Build()`, `BuildAsync()` or `Create()` + load); faults when that load fails; pending until then |
+| `IsLoaded` | `true` once the first `Load()` / `LoadAsync()` has completed successfully |
 | `Metadata` | The `IniMetadata` read from the `[__metadata__]` section on the last load; `null` when the section was absent. See [[Migration]]. |
 | `Reloaded` | Event raised after a successful `Reload()` or `ReloadAsync()` |
 | `FileName` | The logical file name passed to `ForFile()` |
@@ -77,8 +90,8 @@ If more than one INI file is registered, `Get()` / `GetSection<T>()` throw
 | `SetWritablePath(path)` | Overrides the write target for new files when no existing file is found in any search path |
 | `AddDefaultsFile(path)` | Registers a file that supplies default values (applied before the user file) |
 | `AddConstantsFile(path)` | Registers a file that supplies admin-forced constants (applied last) |
-| `AddValueSource(source)` | Registers an `IValueSource` (sync) — applied after constants during both `Build()` and `BuildAsync()` |
-| `AddValueSource(asyncSource)` | Registers an `IValueSourceAsync` — applied after sync sources, only during `BuildAsync()` and `ReloadAsync()` |
+| `AddValueSource(source)` | Registers an `IValueSource` (sync) — applied after constants (constant keys are skipped) during both `Build()` and `BuildAsync()` |
+| `AddValueSource(asyncSource)` | Registers an `IValueSourceAsync` — applied after sync sources, only by the async paths (`BuildAsync()`, `LoadAsync()`, `ReloadAsync()`, `AddSectionAsync()`) |
 | `LockFile()` | Holds the file open read-exclusively for the process lifetime |
 | `MonitorFile([callback])` | Installs a `FileSystemWatcher`; optional callback controls reload decision |
 | `WithEncoding(encoding)` | Sets the file encoding for reading and writing (default: UTF-8) |
@@ -86,6 +99,8 @@ If more than one INI file is registered, `Get()` / `GetSection<T>()` throw
 | `SaveOnExit()` | Hooks `AppDomain.CurrentDomain.ProcessExit` to save on process termination |
 | `OnUnknownKey(callback)` | Registers a global `UnknownKeyCallback` invoked for keys that have no matching section property. Used for migration scenarios. See [[Migration]]. |
 | `EnableMetadata(version?, applicationName?)` | Opts in to writing a `[__metadata__]` section as the first section in the file on every save. Exposes `IniConfig.Metadata` to `IAfterLoad` hooks for version-gated migrations. See [[Migration]]. |
+| `AllowLateSectionRegistration()` | Keeps the parsed defaults/user/constants files in memory so `AddSection<T>()` works after the load, without file I/O. Implies `PreserveUnknownSections()`. Memory cost ≈ size of the files. See [[Plugin-Registrations]]. |
+| `PreserveUnknownSections()` | On save, writes sections that are in the file but not registered back unchanged (with their comments); registered sections keep their position. See [[Plugin-Registrations]]. |
 | `EmptyWhenNull()` | Makes every reference-type property (string, list, array, dictionary) across all registered sections return an empty value instead of `null` when absent and no `[DefaultValue]` is set. See [[Empty-When-Null]]. |
 | `WithParserOptions(options)` | Applies a complete `IniParserOptions` object in one call, replacing any previously configured individual parser settings. See [[Parser-Options]]. |
 | `WithDuplicateKeyHandling(handling)` | Sets `LastWins` (default), `FirstWins`, or `ThrowError` for duplicate keys within the same section. See [[Parser-Options]]. |
@@ -97,7 +112,7 @@ If more than one INI file is registered, `Get()` / `GetSection<T>()` throw
 | `RegisterSection<T>(impl)` | Registers a section with its generated implementation |
 | `AddListener(listener)` | Registers an `IIniConfigListener` for diagnostic events (file loaded/not found/saved/reloaded, unknown keys, conversion failures, errors). Zero overhead when no listener is registered. See [[Listeners]]. |
 | `Create()` | Creates and registers the `IniConfig` without loading any files. Enables plugin sections to be added via `AddSection<T>()` before the first `Load()`. See [[Plugin-Registrations]]. |
-| `Build()` | Loads the file synchronously, fires hooks, and registers the config in the global registry |
+| `Build()` | Loads the file synchronously, fires hooks, and registers the config in the global registry; unregisters and disposes it when loading fails |
 | `BuildAsync(ct)` | Async variant of `Build()`; also applies `IValueSourceAsync` sources and calls async lifecycle hooks. Registers in the global registry and sets `InitialLoadTask` before I/O starts, enabling DI fire-and-forget patterns |
 
 ---

@@ -181,11 +181,12 @@ the file:
 Version    = 1.2.0
 CommitHash = abc1234def5678
 CreatedBy  = Greenshot
-SavedOn    = 12/03/2026 07:43:32
+SavedOn    = 2026-03-12T07:43:32+01:00
 ```
 
-`SavedOn` is formatted in the user's locale — it is intended for human inspection only and
-should not be parsed programmatically.
+`SavedOn` is the local save time in ISO 8601 with the UTC offset (culture-independent), so it
+can be parsed with `DateTimeOffset.Parse(value, CultureInfo.InvariantCulture)`. Files written by
+earlier versions contain a locale-formatted time; `IniMetadata.SavedOn` keeps the raw string.
 
 `CommitHash` is only written when it can be determined (see below).
 
@@ -254,7 +255,7 @@ public interface IAppSettings : IIniSection, IAfterLoad<IAppSettings>
 | `Version` | `Version` | SemVer string (the portion of `InformationalVersion` before `+`). |
 | `CommitHash` | `CommitHash` | Source-control commit hash (the portion after `+`); `null` when absent. |
 | `ApplicationName` | `CreatedBy` | Entry assembly name or the `applicationName` argument. |
-| `SavedOn` | `SavedOn` | Locale-formatted save time; for human inspection only. |
+| `SavedOn` | `SavedOn` | Save time as written, ISO 8601 with UTC offset (e.g. `2026-09-30T11:18:00+02:00`). |
 
 ### Order guarantee
 

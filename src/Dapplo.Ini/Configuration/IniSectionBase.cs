@@ -1,6 +1,7 @@
 // Copyright (c) Dapplo. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
+using System.Text;
 using Dapplo.Ini.Converters;
 using Dapplo.Ini.Interfaces;
 #if NET
@@ -22,11 +23,16 @@ public abstract class IniSectionBase : IIniSection
     // Tracks keys that were loaded from a constants file and are protected against change.
     private readonly HashSet<string> _constantKeys = new(StringComparer.OrdinalIgnoreCase);
 
-    // Dirty flag: set when a value is written via SetRawValue; cleared by IniConfig after Save/Reload.
-    // volatile so that reads from the auto-save timer thread always see the most recent write
-    // from any application thread, and so that ClearDirtyFlag() cannot be re-ordered ahead of
-    // the file-write by the CPU or JIT.
-    private volatile bool _isDirty;
+    // Guards _rawValues and _constantKeys: a reload (timer thread) and property setters (UI thread)
+    // may touch them at the same time. Held only for the collection operation itself.
+    private readonly object _sync = new();
+
+    // Change tracking: every write increments _changeVersion; IniConfig records the version it has
+    // loaded or saved in _savedVersion. The section is dirty while the two differ. Using versions
+    // instead of a plain flag means a change made while a save is being written is never marked as
+    // saved: the save only moves _savedVersion to the version it captured before building the file.
+    private int _changeVersion;
+    private int _savedVersion;
 
     // Tracks the key currently being applied from an INI file (set/cleared by SetRawValue).
     // When non-null, ConvertFromRaw knows a file-load is in progress and can report errors.
@@ -54,7 +60,10 @@ public abstract class IniSectionBase : IIniSection
 
     /// <inheritdoc/>
     public string? GetRawValue(string key)
-        => _rawValues.TryGetValue(key, out var v) ? v : null;
+    {
+        lock (_sync)
+            return _rawValues.TryGetValue(key, out var v) ? v : null;
+    }
 
     /// <summary>
     /// Returns the current typed backing-field value for the property identified by
@@ -82,15 +91,14 @@ public abstract class IniSectionBase : IIniSection
     /// <inheritdoc/>
     public void SetRawValue(string key, string? value)
     {
-        if (_constantKeys.Contains(key))
-            throw new AccessViolationException(
-                $"The configuration key '{key}' in section '{SectionName}' is protected by an administrator constants file and cannot be modified.");
+        ThrowIfConstant(key);
 
         _currentKey = key;
         try
         {
-            _rawValues[key] = value;
-            _isDirty = true;
+            lock (_sync)
+                _rawValues[key] = value;
+            MarkAsDirty();
             OnRawValueSet(key, value);
         }
         finally
@@ -99,24 +107,154 @@ public abstract class IniSectionBase : IIniSection
         }
     }
 
+    /// <summary>
+    /// Stores the raw representation of a value that was assigned through a typed property setter.
+    /// Unlike <see cref="SetRawValue"/> this does <em>not</em> call <see cref="OnRawValueSet"/>, so the
+    /// value the caller assigned stays in the backing field exactly as given (no string round-trip).
+    /// Used by generated property setters.
+    /// </summary>
+    /// <exception cref="AccessViolationException">The key is protected by a constants file.</exception>
+    protected void SetRawValueFromProperty(string key, string? value)
+    {
+        lock (_sync)
+        {
+            ThrowIfConstant(key);
+            _rawValues[key] = value;
+        }
+        MarkAsDirty();
+    }
+
+    /// <summary>
+    /// Throws <see cref="AccessViolationException"/> when <paramref name="key"/> is protected by a constants file.
+    /// Generated setters call this before they change anything, so a rejected assignment leaves the section untouched.
+    /// </summary>
+    protected void ThrowIfConstant(string key)
+    {
+        bool isConstant;
+        lock (_sync)
+            isConstant = _constantKeys.Contains(key);
+        if (isConstant)
+            throw new AccessViolationException(
+                $"The configuration key '{key}' in section '{SectionName}' is protected by an administrator constants file and cannot be modified.");
+    }
+
+    /// <summary>
+    /// Throws <see cref="AccessViolationException"/> when any sub-key of the sub-key dictionary
+    /// <paramref name="keyPrefix"/> (keys of the form <c>prefix.subkey</c>) is protected by a constants file.
+    /// </summary>
+    protected void ThrowIfConstantPrefix(string keyPrefix)
+    {
+        string[] constantKeys;
+        lock (_sync)
+            constantKeys = _constantKeys.ToArray();
+        foreach (var constantKey in constantKeys)
+        {
+            if (constantKey.Length > keyPrefix.Length
+                && constantKey[keyPrefix.Length] == '.'
+                && constantKey.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                ThrowIfConstant(constantKey);
+            }
+        }
+    }
+
     /// <inheritdoc/>
     public abstract void ResetToDefaults();
 
-    /// <inheritdoc/>
-    public bool HasChanges => _isDirty;
+    /// <summary>
+    /// Encodes a dictionary key for use after the <c>Property.</c> prefix of a sub-key dictionary entry:
+    /// characters that would break the INI line (<c>=</c>, <c>:</c>, line breaks), the escape character
+    /// <c>%</c> itself and whitespace at the start or end are written as <c>%XX</c>. Other keys are unchanged.
+    /// </summary>
+    protected static string EncodeSubKey(string key)
+    {
+        StringBuilder? sb = null;
+        for (var i = 0; i < key.Length; i++)
+        {
+            var c = key[i];
+            var encode = c == '%' || c == '=' || c == ':' || c == '\r' || c == '\n'
+                         || (char.IsWhiteSpace(c) && (i == 0 || i == key.Length - 1));
+            if (encode)
+            {
+                sb ??= new StringBuilder(key, 0, i, key.Length + 8);
+                sb.Append('%').Append(((int)c).ToString("X2", System.Globalization.CultureInfo.InvariantCulture));
+            }
+            else
+            {
+                sb?.Append(c);
+            }
+        }
+        return sb?.ToString() ?? key;
+    }
+
+    /// <summary>Reverses <see cref="EncodeSubKey"/>: <c>%XX</c> (two hex digits) becomes the character.</summary>
+    protected static string DecodeSubKey(string encoded)
+    {
+        if (encoded.IndexOf('%') < 0)
+            return encoded;
+        var sb = new StringBuilder(encoded.Length);
+        for (var i = 0; i < encoded.Length; i++)
+        {
+            if (encoded[i] == '%' && i + 2 < encoded.Length && IsHex(encoded[i + 1]) && IsHex(encoded[i + 2]))
+            {
+                sb.Append((char)Convert.ToInt32(encoded.Substring(i + 1, 2), 16));
+                i += 2;
+            }
+            else
+            {
+                sb.Append(encoded[i]);
+            }
+        }
+        return sb.ToString();
+    }
+
+    private static bool IsHex(char c) => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+
+    /// <summary>
+    /// Captures the current property values before a reload, so that <see cref="RaisePropertyChangedForChanges"/>
+    /// can raise <c>PropertyChanged</c> for the ones the reload changed. Returns <c>null</c> when the section
+    /// does not raise change notifications. Overridden by generated sections that implement
+    /// <see cref="System.ComponentModel.INotifyPropertyChanged"/>.
+    /// </summary>
+    protected virtual object?[]? CaptureValuesForChangeNotification() => null;
+
+    /// <summary>
+    /// Raises <c>PropertyChanged</c> for every property whose value differs from <paramref name="before"/>
+    /// (as captured by <see cref="CaptureValuesForChangeNotification"/>). Called after a reload, on the
+    /// thread that performed it.
+    /// </summary>
+    protected virtual void RaisePropertyChangedForChanges(object?[] before)
+    {
+    }
+
+    // Internal entry points for IniConfig (the virtual members are protected so that generated
+    // overrides compile in any assembly, with or without access to this assembly's internals).
+    internal object?[]? CaptureForChangeNotification() => CaptureValuesForChangeNotification();
+    internal void RaiseChangedSince(object?[] before) => RaisePropertyChangedForChanges(before);
 
     /// <inheritdoc/>
-    public void MarkAsDirty() => _isDirty = true;
+    public bool HasChanges => Volatile.Read(ref _changeVersion) != Volatile.Read(ref _savedVersion);
 
     /// <inheritdoc/>
-    public bool IsConstant(string key) => _constantKeys.Contains(key);
+    public void MarkAsDirty() => Interlocked.Increment(ref _changeVersion);
+
+    /// <inheritdoc/>
+    public bool IsConstant(string key)
+    {
+        lock (_sync)
+            return _constantKeys.Contains(key);
+    }
 
     /// <inheritdoc/>
     /// <remarks>
     /// The base implementation returns the keys currently present in the raw backing store.
     /// Source-generated subclasses override this with the compile-time property list.
     /// </remarks>
-    public virtual IEnumerable<string> GetKeys() => _rawValues.Keys;
+    public virtual IEnumerable<string> GetKeys()
+    {
+        lock (_sync)
+            return _rawValues.Keys.ToArray();
+    }
 
     /// <inheritdoc/>
     /// <remarks>
@@ -182,21 +320,40 @@ public abstract class IniSectionBase : IIniSection
     /// Clears the dirty flag. Called by <see cref="IniConfig"/> after a successful
     /// <see cref="IniConfig.Save"/> or <see cref="IniConfig.Reload"/>.
     /// </summary>
-    internal void ClearDirtyFlag() => _isDirty = false;
+    internal void ClearDirtyFlag() => Volatile.Write(ref _savedVersion, Volatile.Read(ref _changeVersion));
+
+    /// <summary>
+    /// The current change version. Captured by <see cref="IniConfig"/> before it builds the file to save.
+    /// </summary>
+    internal int ChangeVersion => Volatile.Read(ref _changeVersion);
+
+    /// <summary>
+    /// Marks the changes up to <paramref name="savedVersion"/> as saved. Changes made after that
+    /// version was captured keep the section dirty, so the next (auto-)save writes them.
+    /// </summary>
+    internal void MarkSaved(int savedVersion) => Volatile.Write(ref _savedVersion, savedVersion);
 
     /// <summary>
     /// Marks <paramref name="key"/> as a constant (loaded from an admin constants file).
     /// After this call any attempt to change the key via <see cref="SetRawValue"/> will throw
     /// <see cref="AccessViolationException"/>.
     /// </summary>
-    internal void MarkKeyAsConstant(string key) => _constantKeys.Add(key);
+    internal void MarkKeyAsConstant(string key)
+    {
+        lock (_sync)
+            _constantKeys.Add(key);
+    }
 
     /// <summary>
     /// Clears all constant-key protections. Called by <see cref="IniConfig"/> at the start
     /// of every load / reload cycle so that protections are re-established from the current
     /// constants files.
     /// </summary>
-    internal void ClearConstants() => _constantKeys.Clear();
+    internal void ClearConstants()
+    {
+        lock (_sync)
+            _constantKeys.Clear();
+    }
 
     /// <summary>
     /// Clears the raw backing store. Called by <see cref="IniConfig"/> at the start of every
@@ -204,7 +361,11 @@ public abstract class IniSectionBase : IIniSection
     /// the actual file state: keys that were removed from the file between two loads are no
     /// longer reported as having a value.
     /// </summary>
-    internal void ClearRawValues() => _rawValues.Clear();
+    internal void ClearRawValues()
+    {
+        lock (_sync)
+            _rawValues.Clear();
+    }
 
     // ── Internal helpers for generated code ──────────────────────────────────
 

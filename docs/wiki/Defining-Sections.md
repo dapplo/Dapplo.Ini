@@ -58,7 +58,7 @@ your interface definitions stay clean and interoperable.
 
 | Attribute | Effect |
 |---|---|
-| `[DefaultValue(value)]` | Sets the default value. Accepts any value type; converted to string internally. |
+| `[DefaultValue(value)]` | Sets the default value. Accepts any value type; converted to string internally. The `[DefaultValue(typeof(T), "…")]` form (e.g. `typeof(TimeSpan), "00:01:30"`) and array values (`new[] { "a", "b" }` for a list) work too. |
 | `[Description("...")]` | Written as a comment above the key in the INI file |
 | `[DataMember(Name = "...")]` | Overrides the key name in the INI file |
 | `[IgnoreDataMember]` | Excludes the property from all INI read/write operations (and from `ResetToDefaults`) |
@@ -97,7 +97,7 @@ For the following three capabilities there is no standard .NET attribute; use
 
 | `[IniValue]` property | Purpose |
 |---|---|
-| `NotifyPropertyChanged = true` | Raises `INotifyPropertyChanged` / `INotifyPropertyChanging` on every assignment |
+| `SuppressPropertyChanged = true` / `SuppressPropertyChanging = true` | Suppresses the change events for this property (events are enabled for all properties by extending `INotifyPropertyChanged` / `INotifyPropertyChanging` on the section interface) |
 | `Transactional = true` | Property participates in `Begin` / `Commit` / `Rollback` — requires `ITransactional` |
 | `RuntimeOnly = true` | Property is never loaded from or saved to the INI file but its default **is** restored by `ResetToDefaults` on every reload |
 | `EmptyWhenNull = true` | When absent from the file, returns `string.Empty`, an empty list, an empty array, or an empty dictionary instead of `null`. See [[Empty-When-Null]]. |
@@ -107,11 +107,10 @@ For the following three capabilities there is no standard .NET attribute; use
 
 ```csharp
 [IniSection("AppState")]
-public interface IAppStateSettings : IIniSection
+public interface IAppStateSettings : IIniSection, INotifyPropertyChanged
 {
-    // Raises property-change events (no standard attribute equivalent)
+    // Raises PropertyChanged (enabled by INotifyPropertyChanged on the interface)
     [DefaultValue("MyApp")]
-    [IniValue(NotifyPropertyChanged = true)]
     string? AppName { get; set; }
 
     // Never persisted — default is reset on every Reload(); use for session-scoped values
@@ -365,18 +364,45 @@ public interface IAppSettings : IIniSection
 
 The generator derives the concrete class name from the interface name:
 
-| Interface name | Generated class name | Generated file |
+| Interface name | Generated class name | Generated file (namespace `MyApp`) |
 |---------------|---------------------|----------------|
-| `IAppSettings` | `AppSettingsImpl` | `AppSettingsImpl.g.cs` |
-| `IDbConfig` | `DbConfigImpl` | `DbConfigImpl.g.cs` |
-| `IUserProfile` | `UserProfileImpl` | `UserProfileImpl.g.cs` |
-| `ServerConfig` *(no leading I)* | `ServerConfigImpl` | `ServerConfigImpl.g.cs` |
+| `IAppSettings` | `AppSettingsImpl` | `MyApp.AppSettingsImpl.g.cs` |
+| `IDbConfig` | `DbConfigImpl` | `MyApp.DbConfigImpl.g.cs` |
+| `IUserProfile` | `UserProfileImpl` | `MyApp.UserProfileImpl.g.cs` |
+| `ServerConfig` *(no leading I)* | `ServerConfigImpl` | `MyApp.ServerConfigImpl.g.cs` |
+| `Interval` *(starts with `I`, but no prefix)* | `IntervalImpl` | `MyApp.IntervalImpl.g.cs` |
 
-The rule is: strip a leading `I` (if present) and append `Impl`.
+The rule is: strip a leading `I` **when it is followed by an uppercase letter** and append
+`Impl`.  The same rule gives the default section name, so `Interval` keeps its name
+(section `[Interval]`; before, it became `nterval`).
+
+The generator also implements properties inherited from base section interfaces, and
+supports section interfaces nested inside a class.
 The file is generated into your project's intermediate output folder and compiled automatically.
 
 Because the generated class is declared `partial`, you can extend it with your own
 code in a separate file — see [[Lifecycle-Hooks#legacy-partial-class-pattern]].
+
+---
+
+## Generator diagnostics
+
+The generator reports problems at the interface or property instead of producing code that
+does not compile or silently misbehaves:
+
+| Id | Severity | Meaning |
+|----|----------|---------|
+| `DINI001` | Error | Two properties of a section use the same INI key (compared case-insensitively). Give one another key with `[IniValue(KeyName = "...")]` or `[DataMember(Name = "...")]`. |
+| `DINI002` | Info | The property type has no built-in converter. Register one with `ValueConverterRegistry.Register` before loading, otherwise the value is not read or written. |
+| `DINI003` | Warning | Generic section interfaces are not supported; nothing is generated for them. |
+| `DINI005` | Error | Two interfaces would generate the same class in the same namespace (e.g. nested `A.ISettings` and `B.ISettings`); rename one. |
+| `DINI101` | Error | A property of an `[IniLanguageSection]` is not declared as `string Name { get; }`. |
+
+`DINI002` is informational because registering a converter at runtime is a valid design;
+raise it to a warning with `dotnet_diagnostic.DINI002.severity = warning` in `.editorconfig`.
+
+A `partial` section interface split over several files is generated once. The generator is
+incremental: edits elsewhere in the project do not regenerate the section classes.
 
 ---
 

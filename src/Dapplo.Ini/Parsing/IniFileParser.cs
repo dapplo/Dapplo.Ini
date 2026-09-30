@@ -36,10 +36,22 @@ public static class IniFileParser
         var keyComparer     = options.CaseSensitiveKeys     ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
 
         var iniFile = new IniFile(sectionComparer, keyComparer);
+        // A byte order mark left in the string (e.g. from Encoding.GetString) is not whitespace.
         var span = content.AsSpan();
+        if (!span.IsEmpty && span[0] == '\uFEFF')
+            span = span.Slice(1);
 
         IniSection? currentSection = null;
         var pendingComments = new List<string>();
+        // Raw blank/comment/unparseable lines, only recorded with PreserveTrivia.
+        var pendingTrivia = options.PreserveTrivia ? new List<string>() : null;
+        IReadOnlyList<string>? TakeTrivia()
+        {
+            if (pendingTrivia == null) return null;
+            var trivia = pendingTrivia.ToArray();
+            pendingTrivia.Clear();
+            return trivia;
+        }
 
         while (!span.IsEmpty)
         {
@@ -53,6 +65,7 @@ public static class IniFileParser
             {
                 // Blank line: reset pending comments (don't carry over to next key)
                 pendingComments.Clear();
+                pendingTrivia?.Add(string.Empty);
                 continue;
             }
 
@@ -65,6 +78,7 @@ public static class IniFileParser
                 if (!commentContent.IsEmpty && commentContent[0] == ' ')
                     commentContent = commentContent.Slice(1);
                 pendingComments.Add(commentContent.ToString());
+                pendingTrivia?.Add(lineSpan.TrimEnd().ToString());
                 continue;
             }
 
@@ -78,8 +92,26 @@ public static class IniFileParser
                     IReadOnlyList<string> comments = pendingComments.Count > 0
                         ? pendingComments.ToArray()
                         : (IReadOnlyList<string>)Array.Empty<string>();
-                    currentSection = new IniSection(sectionName, comments, keyComparer);
-                    iniFile.AddSection(currentSection);
+                    // A repeated header continues the existing section instead of replacing it,
+                    // so that earlier keys are not lost and duplicate-key handling still applies.
+                    var existingSection = iniFile.GetSection(sectionName);
+                    if (existingSection != null)
+                    {
+                        // The lines above the repeated header stay pending for the next entry.
+                        currentSection = existingSection;
+                    }
+                    else
+                    {
+                        currentSection = new IniSection(sectionName, comments, keyComparer)
+                        {
+                            LeadingTrivia = TakeTrivia()
+                        };
+                        iniFile.AddSection(currentSection);
+                    }
+                }
+                else
+                {
+                    pendingTrivia?.Add(lineSpan.TrimEnd().ToString()); // "[Unclosed": keep the line as it is
                 }
                 pendingComments.Clear();
                 continue;
@@ -98,7 +130,7 @@ public static class IniFileParser
 
                 // Quoted values: strip surrounding quotes if present
                 if (options.QuotedValues)
-                    value = StripQuotes(value);
+                    value = StripQuotes(value, unescapeQuotes: !options.EscapeSequences);
 
                 // Escape sequences: decode \n, \t, \\, etc.
                 if (options.EscapeSequences)
@@ -126,12 +158,19 @@ public static class IniFileParser
                 IReadOnlyList<string> entryComments = pendingComments.Count > 0
                     ? pendingComments.ToArray()
                     : (IReadOnlyList<string>)Array.Empty<string>();
-                var entry = new IniEntry(key, value, entryComments);
+                var entry = new IniEntry(key, value, entryComments) { LeadingTrivia = TakeTrivia() };
                 currentSection.SetEntry(entry);
                 pendingComments.Clear();
             }
-            // Lines that don't match any pattern are silently ignored
+            else
+            {
+                // Lines that don't match any pattern are ignored (but kept as trivia when requested)
+                pendingTrivia?.Add(lineSpan.TrimEnd().ToString());
+            }
         }
+
+        if (pendingTrivia is { Count: > 0 })
+            iniFile.TrailingTrivia = pendingTrivia.ToArray();
 
         return iniFile;
     }
@@ -201,10 +240,11 @@ public static class IniFileParser
         }
 
         var result = remaining.Slice(0, newLine);
+        var wasCarriageReturn = remaining[newLine] == '\r';
         remaining = remaining.Slice(newLine + 1);
 
-        // Handle \r\n
-        if (!remaining.IsEmpty && remaining[0] == '\n')
+        // Handle \r\n (but a second \n after a \n is an empty line, not part of the line break)
+        if (wasCarriageReturn && !remaining.IsEmpty && remaining[0] == '\n')
             remaining = remaining.Slice(1);
 
         return result;
@@ -217,13 +257,26 @@ public static class IniFileParser
     /// </summary>
     private static string ApplyLineContinuation(string value, ref ReadOnlySpan<char> remaining)
     {
-        if (value.Length == 0 || value[value.Length - 1] != '\\')
+        if (!EndsWithContinuation(value.AsSpan()))
+            return value;
+
+        // Nothing to join (end of file, blank line or a section header): keep the value as written,
+        // e.g. "Dir = C:\Temp\" directly followed by "[Next]".
+        var lookAhead = remaining;
+        var following = lookAhead.IsEmpty ? ReadOnlySpan<char>.Empty : ReadLine(ref lookAhead).Trim();
+        if (following.IsEmpty || following[0] == '[')
             return value;
 
         // Strip the trailing backslash from the initial segment.
         var sb = new StringBuilder(value, 0, value.Length - 1, value.Length + 64);
         while (!remaining.IsEmpty)
         {
+            // Never swallow a section header: stop before it without consuming it.
+            var peek = remaining;
+            var peekedLine = ReadLine(ref peek).Trim();
+            if (!peekedLine.IsEmpty && peekedLine[0] == '[')
+                break;
+
             var nextLine = ReadLine(ref remaining).Trim();
             if (nextLine.IsEmpty)
             {
@@ -231,7 +284,7 @@ public static class IniFileParser
                 break;
             }
 
-            if (nextLine[nextLine.Length - 1] == '\\')
+            if (EndsWithContinuation(nextLine))
             {
                 // This line also continues — append without trailing backslash
                 sb.Append(nextLine.Slice(0, nextLine.Length - 1).ToString());
@@ -246,10 +299,28 @@ public static class IniFileParser
     }
 
     /// <summary>
+    /// A value continues on the next line when it ends with an odd number of backslashes:
+    /// <c>C:\Temp\\</c> (an escaped backslash) does not continue, <c>abc\</c> does.
+    /// </summary>
+    private static bool EndsWithContinuation(ReadOnlySpan<char> value)
+    {
+        var backslashes = 0;
+        for (var i = value.Length - 1; i >= 0 && value[i] == '\\'; i--)
+            backslashes++;
+        return backslashes % 2 == 1;
+    }
+
+    /// <summary>
     /// Strips matching surrounding double-quote or single-quote characters from
     /// <paramref name="value"/> when they are present.
     /// </summary>
-    private static string StripQuotes(string value)
+    /// <param name="value">The raw value.</param>
+    /// <param name="unescapeQuotes">
+    /// When <c>true</c>, a quote character inside the value that is preceded by an odd number of
+    /// backslashes loses one backslash. This is the inverse of how <see cref="IniFileWriter"/> escapes
+    /// quotes when it quotes a value, so values round-trip even without escape-sequence decoding.
+    /// </param>
+    private static string StripQuotes(string value, bool unescapeQuotes)
     {
         if (value.Length >= 2)
         {
@@ -258,10 +329,46 @@ public static class IniFileParser
             if ((first == '"'  && last == '"') ||
                 (first == '\'' && last == '\''))
             {
-                return value.Substring(1, value.Length - 2);
+                var inner = value.Substring(1, value.Length - 2);
+                return unescapeQuotes ? UnescapeQuote(inner, first) : inner;
             }
         }
         return value;
+    }
+
+    /// <summary>
+    /// Inverse of the writer's quote escaping without escape sequences. The writer turns n backslashes before
+    /// a quote into 2n+1 and n backslashes at the end into 2n, so: an odd run before a quote becomes (run-1)/2
+    /// backslashes and the quote, an even run at the end is halved. Anything else was not written by the
+    /// writer (e.g. a hand-written <c>"C:\Temp\"</c>) and is kept as it is.
+    /// </summary>
+    private static string UnescapeQuote(string value, char quoteChar)
+    {
+        if (value.IndexOf('\\') < 0)
+            return value;
+
+        var sb = new StringBuilder(value.Length);
+        var i = 0;
+        while (i < value.Length)
+        {
+            if (value[i] != '\\')
+            {
+                sb.Append(value[i++]);
+                continue;
+            }
+
+            var start = i;
+            while (i < value.Length && value[i] == '\\')
+                i++;
+            var run = i - start;
+            if (i < value.Length && value[i] == quoteChar && run % 2 == 1)
+                sb.Append('\\', (run - 1) / 2);
+            else if (i == value.Length && run % 2 == 0)
+                sb.Append('\\', run / 2);
+            else
+                sb.Append('\\', run);
+        }
+        return sb.ToString();
     }
 
     /// <summary>

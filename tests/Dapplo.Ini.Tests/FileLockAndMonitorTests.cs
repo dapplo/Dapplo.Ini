@@ -219,7 +219,14 @@ public sealed class FileLockAndMonitorTests : IDisposable
         for (int i = 0; i < 30; i++)
         {
             await Task.Delay(100);
-            written = File.ReadAllText(filePath);
+            try
+            {
+                written = File.ReadAllText(filePath);
+            }
+            catch (IOException)
+            {
+                continue; // the auto-save is swapping the file in right now
+            }
             if (written.Contains("autosaved"))
                 break;
         }
