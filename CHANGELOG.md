@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Generator: generic async hooks `IAfterLoadAsync<T>`, `IBeforeSaveAsync<T>`, `IAfterSaveAsync<T>` are bridged; properties inherited from base section interfaces are implemented; nested section interfaces are supported; `[DefaultValue(typeof(T), "…")]` and array defaults work.
 - Reload raises `PropertyChanged` (for `INotifyPropertyChanged` sections) for every value the reload changed, after the reload has completed, on the reloading thread.
 - Exceptions in background work (auto-save timer, file-change reload, process-exit save, language file watcher) are reported via `IIniConfigListener.OnError` instead of crashing the process.
+- Generator diagnostics: `DINI001` duplicate INI key (error), `DINI002` property type without a built-in converter (info), `DINI003` generic section interface (warning), `DINI005` two interfaces generating the same class (error), `DINI101` language property not a get-only `string` (error). See the wiki page Defining-Sections.
+- `Dapplo.Ini.Generator.Tests`: runs both generators on source snippets (diagnostics, partial interfaces, caching).
 
 ### Changed
 
@@ -38,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Constants win over value sources: value sources are skipped for keys set by a constants file (reported via `IIniConfigExtendedListener.OnValueSourceIgnored`).
 - `AddSection<T>()` after the load throws `InvalidOperationException` unless `AllowLateSectionRegistration()` is enabled. After the load, adding an already registered type throws; a different type with an already used `SectionName` throws (also before the load). Before the load, registering the same type again still replaces it.
 - Sections registered before the load (builder `RegisterSection` + `Create()`, or `AddSection` before `Load`) return their `[DefaultValue]`s instead of `default(T)`.
+- **Breaking:** `LanguageConfigBuilder.UseFallback()` / `UseFallback(ietf)` are replaced by `UseFallbackLanguage(ietf)`. The argument-less form had no effect (the base language is always the floor) and can be removed. The load chain is now: parents of the fallback language, the fallback language, parents of the requested language, the requested language — each language once.
+- `[__metadata__]` `SavedOn` is written as ISO 8601 with UTC offset (`2026-09-30T11:18:00+02:00`) instead of the locale format.
+- Dictionary sub-keys (`Property.key = value`) encode `%`, `=`, `:`, line breaks and leading/trailing whitespace in the key as `%XX`, so such keys round-trip; other keys are written as before.
+- Generated language section files are named `{Namespace}.{Class}.g.cs` like section files, so equal class names in different namespaces no longer collide.
 - `InitialLoadTask` completes for `Create()` + `Load()` / `LoadAsync()` too (previously only `BuildAsync`), and faults when the load fails.
 - Registering a config for a file name that is already registered disposes the previous config; `Build()` / `BuildAsync()` unregister and dispose the config when loading fails.
 - Interfaces without an `I` prefix keep their name (`Interval` → section `[Interval]`, class `IntervalImpl`; previously `nterval`).
@@ -67,6 +73,8 @@ Other changes:
 - Line continuation needs an odd number of trailing backslashes (`C:\Temp\\` no longer continues) and never swallows a following section header.
 - With `QuotedValues` and without `EscapeSequences` the parser undoes the writer's quote escaping, so quoted values round-trip.
 - A leading BOM in `IniFileParser.Parse(string)` is ignored.
+- `IniFileWriter` without explicit options keeps the file's `AssignmentSeparator`; explicit options always win.
+- Generator: incremental caching works (the pipeline carries only strings and values, so unrelated edits no longer regenerate every section); a `partial` section interface is generated once; string literals (section names, descriptions, defaults) escape line breaks, `\u2028`/`\u2029` and control characters; language sections support nested interfaces and skip static members and indexers.
 - Registering a converter updates list/array/dictionary converters that were created for that type earlier.
 - An auto-save can no longer write a half-reloaded state, and a section registered on another thread no longer disturbs a running save (lifecycle gate).
 

@@ -33,17 +33,38 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
-        var interfaces = context.SyntaxProvider
+        var results = context.SyntaxProvider
             .CreateSyntaxProvider(
                 predicate: static (node, _) => node is InterfaceDeclarationSyntax ids
                                                && ids.AttributeLists.Count > 0,
-                transform: static (ctx, _) => GetModel(ctx))
-            .Where(static m => m is not null)
-            .Select(static (m, _) => m!);
+                transform: static (ctx, _) => Generate(ctx))
+            .Where(static r => r is not null)
+            .Select(static (r, _) => r!)
+            .WithTrackingName("Dapplo.Ini.LanguageSections");
 
-        context.RegisterSourceOutput(interfaces, static (spc, model) =>
-            spc.AddSource($"{model.GeneratedClassName}.g.cs",
-                SourceText.From(Emit(model), Encoding.UTF8)));
+        // Cached per interface (plain strings); see IniSectionGenerator for the details.
+        context.RegisterSourceOutput(results.Collect(), static (spc, all) => GenerationResult.Output(spc, all));
+    }
+
+    private static GenerationResult? Generate(GeneratorSyntaxContext ctx)
+    {
+        var ids = (InterfaceDeclarationSyntax)ctx.Node;
+        if (ctx.SemanticModel.GetDeclaredSymbol(ids) is not INamedTypeSymbol symbol)
+            return null;
+
+        var diagnostics = new List<DiagnosticInfo>();
+        var model = GetModel(symbol, diagnostics);
+        var interfaceKey = symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        if (model == null)
+            return diagnostics.Count == 0 ? null : new GenerationResult(interfaceKey, "", "", null, symbol, diagnostics);
+
+        return new GenerationResult(
+            interfaceKey,
+            $"{model.Namespace}.{model.GeneratedClassName}",
+            GeneratorText.HintName(model.Namespace, model.GeneratedClassName),
+            Emit(model),
+            symbol,
+            diagnostics);
     }
 
     // ── Model ─────────────────────────────────────────────────────────────────
@@ -61,6 +82,8 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
     {
         public string Namespace { get; set; } = "";
         public string InterfaceName { get; set; } = "";
+        /// <summary>global::-qualified interface name (includes containing types of nested interfaces).</summary>
+        public string FullyQualifiedInterfaceName { get; set; } = "";
         public string GeneratedClassName { get; set; } = "";
         /// <summary>The [SectionName] header used in the ini file. Always non-null (derived from interface name if not explicit).</summary>
         public string SectionName { get; set; } = "";
@@ -75,16 +98,18 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
 
     // ── Extraction ────────────────────────────────────────────────────────────
 
-    private static LanguageSectionModel? GetModel(GeneratorSyntaxContext ctx)
+    private static LanguageSectionModel? GetModel(INamedTypeSymbol symbol, List<DiagnosticInfo> diagnostics)
     {
-        var ids = (InterfaceDeclarationSyntax)ctx.Node;
-        var symbol = ctx.SemanticModel.GetDeclaredSymbol(ids) as INamedTypeSymbol;
-        if (symbol is null) return null;
-
         // Must have [IniLanguageSection]
         var attr = symbol.GetAttributes()
             .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == IniLanguageSectionAttributeFqn);
         if (attr is null) return null;
+
+        if (symbol.IsGenericType)
+        {
+            diagnostics.Add(DiagnosticInfo.Create(Diagnostics.GenericInterface, symbol, symbol.ToDisplayString()));
+            return null;
+        }
 
         var interfaceName = symbol.Name;
         var namespaceName = symbol.ContainingNamespace.IsGlobalNamespace ? "" : symbol.ContainingNamespace.ToDisplayString();
@@ -103,9 +128,7 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
 
         // Derive section name from interface name when not explicitly provided
         // (strip leading 'I' prefix, e.g. IMainLanguage → MainLanguage)
-        var derivedSectionName = interfaceName.Length > 1 && interfaceName[0] == 'I'
-            ? interfaceName.Substring(1)
-            : interfaceName;
+        var derivedSectionName = GeneratorText.StripInterfacePrefix(interfaceName);
         var sectionName = explicitSectionName ?? derivedSectionName;
 
         // Read optional ModuleName from named attribute argument (controls file naming)
@@ -125,13 +148,14 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
 
         // Collect string-typed get-only properties from the interface itself and
         // all its base interfaces (excluding ILanguageSection and system interfaces).
-        var properties = CollectProperties(symbol);
+        var properties = CollectProperties(symbol, interfaceName, diagnostics);
 
         return new LanguageSectionModel
         {
             Namespace                 = namespaceName,
             InterfaceName             = interfaceName,
-            GeneratedClassName        = $"{(interfaceName.StartsWith("I") && interfaceName.Length > 1 ? interfaceName.Substring(1) : interfaceName)}Impl",
+            FullyQualifiedInterfaceName = symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+            GeneratedClassName        = $"{GeneratorText.StripInterfacePrefix(interfaceName)}Impl",
             SectionName               = sectionName,
             ModuleName                = moduleName,
             ImplementsReadOnlyDictionary = implementsReadOnlyDictionary,
@@ -146,7 +170,7 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
         return symbol.ToDisplayString() == interfaceFqn || symbol.AllInterfaces.Any(i => i.ToDisplayString() == interfaceFqn);
     }
 
-    private static List<PropertyModel> CollectProperties(INamedTypeSymbol symbol)
+    private static List<PropertyModel> CollectProperties(INamedTypeSymbol symbol, string interfaceName, List<DiagnosticInfo> diagnostics)
     {
         var result = new List<PropertyModel>();
         var seen = new HashSet<string>(System.StringComparer.Ordinal);
@@ -168,14 +192,20 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
 
             foreach (var member in current.GetMembers().OfType<IPropertySymbol>())
             {
-                // Language section properties must be string get-only
-                if (member.SetMethod != null) continue;
-                if (member.Type.SpecialType != SpecialType.System_String) continue;
+                if (member.IsStatic || member.IsIndexer) continue;
 
                 // Skip properties marked [IgnoreDataMember]
                 bool isIgnored = member.GetAttributes()
                     .Any(a => a.AttributeClass?.ToDisplayString() == IgnoreDataMemberAttributeFqn);
                 if (isIgnored) continue;
+
+                // Language section properties must be string get-only; anything else cannot be
+                // generated, so say so instead of failing later with "does not implement member".
+                if (member.SetMethod != null || member.Type.SpecialType != SpecialType.System_String)
+                {
+                    diagnostics.Add(DiagnosticInfo.Create(Diagnostics.LanguagePropertyShape, member, member.Name, interfaceName));
+                    continue;
+                }
 
                 if (!seen.Add(member.Name)) continue;
 
@@ -256,7 +286,7 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
             sb.AppendLine("{");
         }
 
-        string baseClasses = $"Dapplo.Ini.Internationalization.Configuration.LanguageSectionBase, {m.InterfaceName}";
+        string baseClasses = $"Dapplo.Ini.Internationalization.Configuration.LanguageSectionBase, {m.FullyQualifiedInterfaceName}";
 
         sb.AppendLine($"    public sealed partial class {m.GeneratedClassName} : {baseClasses}");
         sb.AppendLine("    {");
@@ -378,5 +408,5 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
         return sb.ToString();
     }
 
-    private static string EscapeString(string s) => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    private static string EscapeString(string s) => GeneratorText.EscapeString(s);
 }

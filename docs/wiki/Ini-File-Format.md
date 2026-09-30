@@ -160,6 +160,10 @@ ServiceConfig.retries = 3
 > file uses one `PropertyName.key = value` line per entry, which is the canonical
 > storage format.
 
+Dictionary keys can contain any character: `%`, `=`, `:`, line breaks and leading or
+trailing whitespace are written as `%XX` (e.g. `a=b` → `ServiceConfig.a%3Db`) and decoded
+when the file is read. Other keys are written unchanged.
+
 ---
 
 ## Comments in the written file
@@ -210,7 +214,7 @@ section:
 [__metadata__]
 Version   = 1.2.0
 CreatedBy = MyApplication
-SavedOn   = 15/03/2024 10:30:00
+SavedOn   = 2024-03-15T10:30:00+01:00
 
 [General]
 AppName = MyApp

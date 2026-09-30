@@ -81,6 +81,10 @@ Convenience methods:
 - `QuoteValuesOnWrite(...)`
 - `SkipCommentsOnWrite()`
 
+`IniConfig` always writes with its writer options (default separator ` = `). When you use the
+low-level `IniFileWriter` directly without options, it keeps the `AssignmentSeparator` of the
+`IniFile`; explicit `IniWriterOptions` always win.
+
 You can also override write behavior per section/property via attributes:
 
 ```csharp

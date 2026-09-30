@@ -364,13 +364,13 @@ public interface IAppSettings : IIniSection
 
 The generator derives the concrete class name from the interface name:
 
-| Interface name | Generated class name | Generated file |
+| Interface name | Generated class name | Generated file (namespace `MyApp`) |
 |---------------|---------------------|----------------|
-| `IAppSettings` | `AppSettingsImpl` | `AppSettingsImpl.g.cs` |
-| `IDbConfig` | `DbConfigImpl` | `DbConfigImpl.g.cs` |
-| `IUserProfile` | `UserProfileImpl` | `UserProfileImpl.g.cs` |
-| `ServerConfig` *(no leading I)* | `ServerConfigImpl` | `ServerConfigImpl.g.cs` |
-| `Interval` *(starts with `I`, but no prefix)* | `IntervalImpl` | `IntervalImpl.g.cs` |
+| `IAppSettings` | `AppSettingsImpl` | `MyApp.AppSettingsImpl.g.cs` |
+| `IDbConfig` | `DbConfigImpl` | `MyApp.DbConfigImpl.g.cs` |
+| `IUserProfile` | `UserProfileImpl` | `MyApp.UserProfileImpl.g.cs` |
+| `ServerConfig` *(no leading I)* | `ServerConfigImpl` | `MyApp.ServerConfigImpl.g.cs` |
+| `Interval` *(starts with `I`, but no prefix)* | `IntervalImpl` | `MyApp.IntervalImpl.g.cs` |
 
 The rule is: strip a leading `I` **when it is followed by an uppercase letter** and append
 `Impl`.  The same rule gives the default section name, so `Interval` keeps its name
@@ -382,6 +382,27 @@ The file is generated into your project's intermediate output folder and compile
 
 Because the generated class is declared `partial`, you can extend it with your own
 code in a separate file — see [[Lifecycle-Hooks#legacy-partial-class-pattern]].
+
+---
+
+## Generator diagnostics
+
+The generator reports problems at the interface or property instead of producing code that
+does not compile or silently misbehaves:
+
+| Id | Severity | Meaning |
+|----|----------|---------|
+| `DINI001` | Error | Two properties of a section use the same INI key (compared case-insensitively). Give one another key with `[IniValue(KeyName = "...")]` or `[DataMember(Name = "...")]`. |
+| `DINI002` | Info | The property type has no built-in converter. Register one with `ValueConverterRegistry.Register` before loading, otherwise the value is not read or written. |
+| `DINI003` | Warning | Generic section interfaces are not supported; nothing is generated for them. |
+| `DINI005` | Error | Two interfaces would generate the same class in the same namespace (e.g. nested `A.ISettings` and `B.ISettings`); rename one. |
+| `DINI101` | Error | A property of an `[IniLanguageSection]` is not declared as `string Name { get; }`. |
+
+`DINI002` is informational because registering a converter at runtime is a valid design;
+raise it to a warning with `dotnet_diagnostic.DINI002.severity = warning` in `.editorconfig`.
+
+A `partial` section interface split over several files is generated once. The generator is
+incremental: edits elsewhere in the project do not regenerate the section classes.
 
 ---
 

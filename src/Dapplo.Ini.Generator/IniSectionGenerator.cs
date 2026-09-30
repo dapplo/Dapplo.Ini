@@ -66,30 +66,41 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         // (a) carry [IniSection], OR
         // (b) extend at least one other interface (which may be IIniSection)
         // The transform step narrows further to IIniSection-implementing interfaces only.
-        var interfaces = context.SyntaxProvider
+        var results = context.SyntaxProvider
             .CreateSyntaxProvider(
                 predicate: static (node, _) => node is InterfaceDeclarationSyntax ids
                                                && (ids.AttributeLists.Count > 0
                                                    || ids.BaseList != null),
-                transform: static (ctx, _) => GetInterfaceModel(ctx))
-            .Where(static m => m is not null)
-            .Select(static (m, _) => m!);
+                transform: static (ctx, _) => Generate(ctx))
+            .Where(static r => r is not null)
+            .Select(static (r, _) => r!)
+            .WithTrackingName("Dapplo.Ini.Sections");
 
-        // A partial interface with several declarations produces one model per declaration:
-        // generate each interface once. The hint name includes the namespace so two interfaces with the
-        // same name in different namespaces do not collide.
-        context.RegisterSourceOutput(interfaces.Collect(), static (spc, models) =>
-        {
-            var emitted = new HashSet<string>();
-            foreach (var model in models)
-            {
-                if (!emitted.Add(model.FullyQualifiedInterfaceName))
-                    continue;
-                var hintPrefix = string.IsNullOrEmpty(model.Namespace) ? "" : model.Namespace + ".";
-                spc.AddSource($"{hintPrefix}{model.GeneratedClassName}.g.cs",
-                    SourceText.From(Emit(model), Encoding.UTF8));
-            }
-        });
+        // The transform produces the finished source text (plain strings), so Roslyn's cache skips
+        // regeneration for every interface an edit did not change. Collect() lets the output step
+        // generate partial interfaces once and detect two interfaces that would produce the same class.
+        context.RegisterSourceOutput(results.Collect(), static (spc, all) => GenerationResult.Output(spc, all));
+    }
+
+    private static GenerationResult? Generate(GeneratorSyntaxContext ctx)
+    {
+        var ids = (InterfaceDeclarationSyntax)ctx.Node;
+        if (ctx.SemanticModel.GetDeclaredSymbol(ids) is not INamedTypeSymbol symbol)
+            return null;
+
+        var diagnostics = new List<DiagnosticInfo>();
+        var model = GetInterfaceModel(symbol, diagnostics);
+        var interfaceKey = symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        if (model == null)
+            return diagnostics.Count == 0 ? null : new GenerationResult(interfaceKey, "", "", null, symbol, diagnostics);
+
+        return new GenerationResult(
+            interfaceKey,
+            $"{model.Namespace}.{model.GeneratedClassName}",
+            GeneratorText.HintName(model.Namespace, model.GeneratedClassName),
+            Emit(model),
+            symbol,
+            diagnostics);
     }
 
     // ── Model ─────────────────────────────────────────────────────────────────
@@ -197,12 +208,8 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
 
     // ── Extraction ────────────────────────────────────────────────────────────
 
-    private static SectionModel? GetInterfaceModel(GeneratorSyntaxContext ctx)
+    private static SectionModel? GetInterfaceModel(INamedTypeSymbol symbol, List<DiagnosticInfo> diagnostics)
     {
-        var ids = (InterfaceDeclarationSyntax)ctx.Node;
-        var symbol = ctx.SemanticModel.GetDeclaredSymbol(ids) as INamedTypeSymbol;
-        if (symbol is null) return null;
-
         // Accept the interface when it carries [IniSection] OR when it directly or
         // indirectly extends IIniSection (without requiring the attribute).
         // IIniSection itself is excluded — we only generate for consumer interfaces.
@@ -215,7 +222,11 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         if (iniSectionAttr is null && !implementsIIniSection) return null;
 
         // A generic section interface would need a generic implementation class; not supported.
-        if (symbol.IsGenericType) return null;
+        if (symbol.IsGenericType)
+        {
+            diagnostics.Add(DiagnosticInfo.Create(Diagnostics.GenericInterface, symbol, symbol.ToDisplayString()));
+            return null;
+        }
 
         var interfaceName = symbol.Name;
         var namespaceName = symbol.ContainingNamespace.IsGlobalNamespace
@@ -312,6 +323,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         bool implementsINotifyPropertyChanging = ImplementsInterface(symbol, INotifyPropertyChangingFqn);
 
         var properties = new List<PropertyModel>();
+        var usedKeys = new Dictionary<string, string>(System.StringComparer.OrdinalIgnoreCase);
         foreach (var member in GetSectionProperties(symbol))
         {
             // Skip properties marked [IgnoreDataMember]
@@ -501,6 +513,17 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                         prop.RegexErrorMessage = em;
             }
 
+            // Two properties with the same INI key would generate duplicate case labels.
+            var iniKey = prop.KeyName ?? prop.Name;
+            if (usedKeys.TryGetValue(iniKey, out var firstProperty))
+                diagnostics.Add(DiagnosticInfo.Create(Diagnostics.DuplicateKey, member, firstProperty, member.Name, interfaceName, iniKey));
+            else
+                usedKeys[iniKey] = member.Name;
+
+            // A property type without a built-in converter only works when the application registers one.
+            if (!prop.IsIgnored && !prop.IsRuntimeOnly && !HasBuiltInConverter(member.Type))
+                diagnostics.Add(DiagnosticInfo.Create(Diagnostics.NoBuiltInConverter, member, member.Name, interfaceName, member.Type.ToDisplayString()));
+
             properties.Add(prop);
         }
 
@@ -553,9 +576,68 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         };
     }
 
-    /// <summary><c>ISettings</c> → strip the "I"; <c>Interval</c> or <c>I</c> → keep the name as it is.</summary>
-    private static bool HasInterfacePrefix(string interfaceName)
-        => interfaceName.Length > 1 && interfaceName[0] == 'I' && char.IsUpper(interfaceName[1]);
+    private static bool HasInterfacePrefix(string interfaceName) => GeneratorText.HasInterfacePrefix(interfaceName);
+
+    /// <summary>
+    /// <c>true</c> when the runtime ValueConverterRegistry has a converter for <paramref name="type"/> without
+    /// the application registering one: the built-in scalar types, enums, and nullable/array/list/dictionary
+    /// forms of those.
+    /// </summary>
+    private static bool HasBuiltInConverter(ITypeSymbol type)
+    {
+        switch (type)
+        {
+            case IArrayTypeSymbol array:
+                return HasBuiltInConverter(array.ElementType);
+            case INamedTypeSymbol named:
+                if (named.TypeKind == TypeKind.Enum)
+                    return true;
+                if (named.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
+                    return HasBuiltInConverter(named.TypeArguments[0]);
+                switch (named.SpecialType)
+                {
+                    case SpecialType.System_String:
+                    case SpecialType.System_Boolean:
+                    case SpecialType.System_Byte:
+                    case SpecialType.System_SByte:
+                    case SpecialType.System_Int16:
+                    case SpecialType.System_UInt16:
+                    case SpecialType.System_Int32:
+                    case SpecialType.System_UInt32:
+                    case SpecialType.System_Int64:
+                    case SpecialType.System_UInt64:
+                    case SpecialType.System_Single:
+                    case SpecialType.System_Double:
+                    case SpecialType.System_Decimal:
+                    case SpecialType.System_Char:
+                    case SpecialType.System_DateTime:
+                        return true;
+                }
+                var name = named.OriginalDefinition.ToDisplayString();
+                switch (name)
+                {
+                    case "System.DateTimeOffset":
+                    case "System.TimeSpan":
+                    case "System.Guid":
+                    case "System.Uri":
+                        return true;
+                    case "System.Collections.Generic.List<T>":
+                    case "System.Collections.Generic.IList<T>":
+                    case "System.Collections.Generic.ICollection<T>":
+                    case "System.Collections.Generic.IEnumerable<T>":
+                    case "System.Collections.Generic.IReadOnlyList<T>":
+                    case "System.Collections.Generic.IReadOnlyCollection<T>":
+                        return HasBuiltInConverter(named.TypeArguments[0]);
+                    case "System.Collections.Generic.Dictionary<TKey, TValue>":
+                    case "System.Collections.Generic.IDictionary<TKey, TValue>":
+                    case "System.Collections.Generic.IReadOnlyDictionary<TKey, TValue>":
+                        return HasBuiltInConverter(named.TypeArguments[0]) && HasBuiltInConverter(named.TypeArguments[1]);
+                }
+                return false;
+            default:
+                return false;
+        }
+    }
 
     /// <summary>
     /// The properties the generated class must implement: those declared on the interface itself and on
@@ -855,13 +937,13 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                     {
                         sb.AppendLine($"                {txFieldName} = __value;");
                         sb.AppendLine($"                if (_isInTransaction) {txFieldName}Touched = true;");
-                        sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = __value; {fieldName}HasRawEntries = true; if (__value != null) foreach (var __kvp in __value) SetRawValueFromProperty($\"{keyNameForSet}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value)); }}");
+                        sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = __value; {fieldName}HasRawEntries = true; if (__value != null) foreach (var __kvp in __value) SetRawValueFromProperty($\"{keyNameForSet}.{{EncodeSubKey(__kvp.Key)}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value)); }}");
                     }
                     else
                     {
                         sb.AppendLine($"                {fieldName} = __value;");
                         sb.AppendLine($"                {fieldName}HasRawEntries = true;");
-                        sb.AppendLine($"                if (__value != null) foreach (var __kvp in __value) SetRawValueFromProperty($\"{keyNameForSet}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value));");
+                        sb.AppendLine($"                if (__value != null) foreach (var __kvp in __value) SetRawValueFromProperty($\"{keyNameForSet}.{{EncodeSubKey(__kvp.Key)}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value));");
                     }
                 }
                 else if (usesTx)
@@ -965,7 +1047,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 // First sub-key clears the compiled defaults so file data fully replaces them.
                 sb.AppendLine($"                    if (!{fieldName}HasRawEntries) {{ {fieldName} = new System.Collections.Generic.Dictionary<string, {p.DictionaryValueTypeFullName}>(System.StringComparer.OrdinalIgnoreCase); {fieldName}HasRawEntries = true; }}");
                 sb.AppendLine($"                    if ({fieldName} == null) {fieldName} = new System.Collections.Generic.Dictionary<string, {p.DictionaryValueTypeFullName}>(System.StringComparer.OrdinalIgnoreCase);");
-                sb.AppendLine($"                    {fieldName}[key.Substring({keyName.Length + 1})] = ConvertFromRaw<{p.DictionaryValueTypeFullName}>(rawValue);");
+                sb.AppendLine($"                    {fieldName}[DecodeSubKey(key.Substring({keyName.Length + 1}))] = ConvertFromRaw<{p.DictionaryValueTypeFullName}>(rawValue);");
                 sb.AppendLine("                    break;");
             }
             else
@@ -1041,7 +1123,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 // Yield one entry per key in the dictionary, using "PropertyName.key" as the INI key.
                 sb.AppendLine($"            if ({fieldName} != null)");
                 sb.AppendLine($"                foreach (var __kvp in {fieldName})");
-                sb.AppendLine($"                    yield return new KeyValuePair<string, string?>($\"{EscapeString(keyName)}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value));");
+                sb.AppendLine($"                    yield return new KeyValuePair<string, string?>($\"{EscapeString(keyName)}.{{EncodeSubKey(__kvp.Key)}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value));");
             }
             else
             {
@@ -1305,7 +1387,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                     if (p.IsSubKeyDictionary)
                     {
                         sb.AppendLine($"                {field}HasRawEntries = true;");
-                        sb.AppendLine($"                if ({field} != null) foreach (var __kvp in {field}) SetRawValueFromProperty($\"{key}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value));");
+                        sb.AppendLine($"                if ({field} != null) foreach (var __kvp in {field}) SetRawValueFromProperty($\"{key}.{{EncodeSubKey(__kvp.Key)}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value));");
                     }
                     else
                     {
@@ -1549,8 +1631,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
     private static string Camel(string name)
         => name.Length == 0 ? name : char.ToLowerInvariant(name[0]) + name.Substring(1);
 
-    private static string EscapeString(string s)
-        => s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "\\r").Replace("\n", "\\n");
+    private static string EscapeString(string s) => GeneratorText.EscapeString(s);
 
     private static string EscapeCharLiteral(char c)
         => c switch

@@ -26,7 +26,6 @@ public sealed class LanguageConfigBuilder
     private readonly List<string> _searchPaths = new();
     private string? _baseLanguage;
     private string? _currentLanguage;
-    private bool _useFallback;
     private string? _fallbackLanguage;
     private bool _monitorFiles;
 
@@ -106,16 +105,20 @@ public sealed class LanguageConfigBuilder
     }
 
     /// <summary>
-    /// Enables fallback behaviour: when a key is missing from the active language the
-    /// framework uses the base language value instead of the <c>###key###</c> sentinel.
+    /// Sets the language that fills in keys missing from the active language.
     /// </summary>
-    /// <param name="ietf">
-    /// Optional IETF tag of a specific fallback language.
-    /// When <c>null</c> (or not supplied) the base language is used as the fallback.
-    /// </param>
-    public LanguageConfigBuilder UseFallback(string? ietf = null)
+    /// <remarks>
+    /// Missing keys are always filled from a fallback language; without this call that is the base
+    /// language (<see cref="WithBaseLanguage"/>). Use this method when another language should provide
+    /// them, for example when the base language files are incomplete. Its parent cultures are loaded too
+    /// (<c>de</c> before <c>de-DE</c>). Only a key that is missing in every loaded file shows the
+    /// <c>###Key###</c> placeholder.
+    /// </remarks>
+    /// <param name="ietf">IETF tag of the fallback language, e.g. <c>"en-US"</c>.</param>
+    public LanguageConfigBuilder UseFallbackLanguage(string ietf)
     {
-        _useFallback = true;
+        if (string.IsNullOrWhiteSpace(ietf))
+            throw new ArgumentException("Fallback language tag must not be empty.", nameof(ietf));
         _fallbackLanguage = ietf;
         return this;
     }
@@ -203,7 +206,6 @@ public sealed class LanguageConfigBuilder
             throw new InvalidOperationException(
                 "A base language must be specified via WithBaseLanguage().");
 
-        string? effectiveFallback = _useFallback ? _fallbackLanguage : null;
 
         var sections = _sections.Select(s => (s.Type, s.Section, s.Directory)).ToList();
 
@@ -211,7 +213,7 @@ public sealed class LanguageConfigBuilder
             _basename,
             _baseLanguage!,
             _currentLanguage ?? _baseLanguage!,
-            effectiveFallback,
+            _fallbackLanguage,
             _monitorFiles,
             _searchPaths,
             sections,

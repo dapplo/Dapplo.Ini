@@ -1,6 +1,7 @@
 // Copyright (c) Dapplo. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
+using System.Text;
 using Dapplo.Ini.Converters;
 using Dapplo.Ini.Interfaces;
 #if NET
@@ -159,6 +160,55 @@ public abstract class IniSectionBase : IIniSection
 
     /// <inheritdoc/>
     public abstract void ResetToDefaults();
+
+    /// <summary>
+    /// Encodes a dictionary key for use after the <c>Property.</c> prefix of a sub-key dictionary entry:
+    /// characters that would break the INI line (<c>=</c>, <c>:</c>, line breaks), the escape character
+    /// <c>%</c> itself and whitespace at the start or end are written as <c>%XX</c>. Other keys are unchanged.
+    /// </summary>
+    protected static string EncodeSubKey(string key)
+    {
+        StringBuilder? sb = null;
+        for (var i = 0; i < key.Length; i++)
+        {
+            var c = key[i];
+            var encode = c == '%' || c == '=' || c == ':' || c == '\r' || c == '\n'
+                         || (char.IsWhiteSpace(c) && (i == 0 || i == key.Length - 1));
+            if (encode)
+            {
+                sb ??= new StringBuilder(key, 0, i, key.Length + 8);
+                sb.Append('%').Append(((int)c).ToString("X2", System.Globalization.CultureInfo.InvariantCulture));
+            }
+            else
+            {
+                sb?.Append(c);
+            }
+        }
+        return sb?.ToString() ?? key;
+    }
+
+    /// <summary>Reverses <see cref="EncodeSubKey"/>: <c>%XX</c> (two hex digits) becomes the character.</summary>
+    protected static string DecodeSubKey(string encoded)
+    {
+        if (encoded.IndexOf('%') < 0)
+            return encoded;
+        var sb = new StringBuilder(encoded.Length);
+        for (var i = 0; i < encoded.Length; i++)
+        {
+            if (encoded[i] == '%' && i + 2 < encoded.Length && IsHex(encoded[i + 1]) && IsHex(encoded[i + 2]))
+            {
+                sb.Append((char)Convert.ToInt32(encoded.Substring(i + 1, 2), 16));
+                i += 2;
+            }
+            else
+            {
+                sb.Append(encoded[i]);
+            }
+        }
+        return sb.ToString();
+    }
+
+    private static bool IsHex(char c) => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 
     /// <summary>
     /// Captures the current property values before a reload, so that <see cref="RaisePropertyChangedForChanges"/>

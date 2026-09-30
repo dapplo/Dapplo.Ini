@@ -191,7 +191,9 @@ public static class IniFileWriter
     public static void Write(TextWriter writer, IniFile iniFile, IniWriterOptions? options = null)
     {
         var writerOptions = (options ?? IniWriterOptions.Default).Clone();
-        writerOptions.AssignmentSeparator = iniFile.AssignmentSeparator;
+        // Explicitly passed options win; without options the file's own separator is used.
+        if (options == null)
+            writerOptions.AssignmentSeparator = iniFile.AssignmentSeparator;
 
         bool firstSection = true;
         foreach (var section in iniFile.Sections)

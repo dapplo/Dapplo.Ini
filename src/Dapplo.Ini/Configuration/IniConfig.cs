@@ -1483,7 +1483,8 @@ public sealed class IniConfig : IDisposable
             var metaSection = new Parsing.IniSection(MetadataSectionName, Array.Empty<string>());
             metaSection.SetValue("Version", MetadataConfig.Version);
             metaSection.SetValue("CreatedBy", MetadataConfig.ApplicationName);
-            metaSection.SetValue("SavedOn", DateTime.Now.ToString());
+            // ISO 8601 with the UTC offset: readable, sortable and the same on every machine and culture.
+            metaSection.SetValue("SavedOn", DateTimeOffset.Now.ToString("yyyy-MM-dd'T'HH:mm:sszzz", System.Globalization.CultureInfo.InvariantCulture));
             if (!string.IsNullOrEmpty(MetadataConfig.CommitHash))
                 metaSection.SetValue("CommitHash", MetadataConfig.CommitHash);
             iniFile.PrependSection(metaSection);

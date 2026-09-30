@@ -145,6 +145,53 @@ public sealed class RoundTripAndParsingTests : IDisposable
     }
 
     [Fact]
+    public void RoundTrip_SubKeyDictionaryKeysWithSpecialCharacters()
+    {
+        var pairs = new Dictionary<string, string>
+        {
+            ["a=b"] = "1",
+            ["c:d"] = "2",
+            ["50%"] = "3",
+            [" padded "] = "4",
+            ["plain"] = "5",
+        };
+
+        var reloaded = SaveAndReload(new RoundTripSettingsImpl { Pairs = pairs }, "subkeys.ini");
+
+        Assert.Equal(pairs.OrderBy(p => p.Key), reloaded.Pairs!.OrderBy(p => p.Key));
+        // Keys without special characters are written exactly as before.
+        Assert.Contains("Pairs.plain = 5", File.ReadAllText(Path.Combine(_tempDir, "subkeys.ini")));
+    }
+
+    [Fact]
+    public void Writer_UsesTheSeparatorOfExplicitOptions()
+    {
+        var file = new IniFile();
+        file.GetOrAddSection("S").SetValue("Key", "v");
+
+        var text = IniFileWriter.WriteToString(file, new IniWriterOptions { AssignmentSeparator = "=" });
+
+        Assert.Contains("Key=v", text);
+    }
+
+    [Fact]
+    public void Metadata_SavedOn_IsIso8601()
+    {
+        using (var config = IniConfigRegistry.ForFile("meta-iso.ini").AddSearchPath(_tempDir)
+                   .EnableMetadata("1.0", "test")
+                   .RegisterSection<IRoundTripSettings>(new RoundTripSettingsImpl()).Build())
+        {
+            config.Save();
+        }
+        IniConfigRegistry.Clear();
+        using var reloaded = IniConfigRegistry.ForFile("meta-iso.ini").AddSearchPath(_tempDir)
+            .RegisterSection<IRoundTripSettings>(new RoundTripSettingsImpl()).Build();
+
+        Assert.Matches(@"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$", reloaded.Metadata!.SavedOn);
+        Assert.True(DateTimeOffset.TryParse(reloaded.Metadata.SavedOn, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out _));
+    }
+
+    [Fact]
     public void RoundTrip_NullableWithValue()
     {
         var reloaded = SaveAndReload(new RoundTripSettingsImpl { OptionalNumber = 7 }, "nullable.ini");

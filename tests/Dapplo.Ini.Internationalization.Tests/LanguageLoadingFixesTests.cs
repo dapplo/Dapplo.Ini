@@ -32,6 +32,38 @@ public sealed class LanguageLoadingFixesTests : IDisposable
     }
 
     [Fact]
+    public void LoadChain_IncludesParentsOfFallbackAndRequestedLanguage_Once()
+    {
+        using var defaultChain = LanguageConfigBuilder.ForBasename("chain-a").AddSearchPath(_dir)
+            .WithBaseLanguage("de-DE").Create();
+        Assert.Equal(new[] { "de", "de-DE" }, defaultChain.GetLoadChain("de-DE"));
+        Assert.Equal(new[] { "de", "de-DE", "de-AT" }, defaultChain.GetLoadChain("de-AT"));
+
+        LanguageConfigRegistry.Clear();
+        using var explicitFallback = LanguageConfigBuilder.ForBasename("chain-b").AddSearchPath(_dir)
+            .WithBaseLanguage("de-DE").UseFallbackLanguage("en-US").Create();
+        Assert.Equal(new[] { "en", "en-US", "zh", "zh-Hant", "zh-Hant-TW" }, explicitFallback.GetLoadChain("zh-Hant-TW"));
+    }
+
+    [Fact]
+    public void UseFallbackLanguage_FillsMissingKeysFromThatLanguage()
+    {
+        File.WriteAllText(Path.Combine(_dir, "fb.de-DE.ini"), "[MainLanguage]\nWelcomeMessage = Willkommen");
+        File.WriteAllText(Path.Combine(_dir, "fb.en-US.ini"), "[MainLanguage]\nWelcomeMessage = Welcome\nErrorTitle = Error");
+
+        var section = new MainLanguageImpl();
+        using var config = LanguageConfigBuilder.ForBasename("fb")
+            .AddSearchPath(_dir)
+            .WithBaseLanguage("de-DE")
+            .UseFallbackLanguage("en-US")
+            .RegisterSection<IMainLanguage>(section)
+            .Build();
+
+        Assert.Equal("Willkommen", section.WelcomeMessage);
+        Assert.Equal("Error", section.ErrorTitle);
+    }
+
+    [Fact]
     public void Values_WithSpacesAroundTheEqualsSign_AreTrimmed_AndMiddleParentIsUsed()
     {
         File.WriteAllText(Path.Combine(_dir, "chain.en-US.ini"), "[MainLanguage]\nWelcomeMessage = Welcome\nErrorTitle = Error");

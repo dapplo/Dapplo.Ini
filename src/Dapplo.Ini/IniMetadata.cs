@@ -23,7 +23,8 @@ public sealed class IniMetadata
     public string? ApplicationName { get; internal set; }
 
     /// <summary>
-    /// Locale-formatted save timestamp from the <c>SavedOn</c> key; <c>null</c> when absent.
+    /// Save timestamp from the <c>SavedOn</c> key (ISO 8601 with UTC offset, e.g. <c>2026-09-30T11:18:00+02:00</c>;
+    /// files written by older versions contain a culture-formatted date); <c>null</c> when absent.
     /// Intended for human inspection only — do not parse programmatically.
     /// </summary>
     public string? SavedOn { get; internal set; }

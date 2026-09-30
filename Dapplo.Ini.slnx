@@ -6,5 +6,6 @@
   <Folder Name="/tests/">
     <Project Path="tests/Dapplo.Ini.Tests/Dapplo.Ini.Tests.csproj" />
     <Project Path="tests/Dapplo.Ini.Internationalization.Tests/Dapplo.Ini.Internationalization.Tests.csproj" />
+    <Project Path="tests/Dapplo.Ini.Generator.Tests/Dapplo.Ini.Generator.Tests.csproj" />
   </Folder>
 </Solution>

@@ -52,7 +52,7 @@ public sealed class LanguageConfig : IDisposable
     private readonly string _basename;
     private readonly string _baseLanguage;
     private string _currentLanguage;
-    private readonly string? _fallbackLanguage;   // null = use _baseLanguage as fallback
+    private readonly string? _fallbackLanguage;   // null = the base language is the fallback
 
     // Default directories used for sections that don't specify their own.
     private readonly IReadOnlyList<string> _searchPaths;
@@ -323,30 +323,39 @@ public sealed class LanguageConfig : IDisposable
 
     private void LoadLanguage(string language)
     {
-        var fallback = _fallbackLanguage ?? _baseLanguage;
-
+        var chain = GetLoadChain(language);
         foreach (var kvp in _sections)
         {
             var section = kvp.Value.Section;
             var directories = kvp.Value.Directories;
             var newTranslations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-            // 1. Load fallback/base language first
-            LoadIetfIntoDictionary(newTranslations, section.ModuleName, section.SectionName, directories, fallback);
-
-            if (!string.Equals(language, fallback, StringComparison.OrdinalIgnoreCase))
-            {
-                // 2. Progressive fallback: every parent culture, least specific first
-                //    (e.g. "zh", then "zh-Hant", before "zh-Hant-TW")
-                foreach (var parent in GetParentLanguages(language))
-                    LoadIetfIntoDictionary(newTranslations, section.ModuleName, section.SectionName, directories, parent);
-
-                // 3. Most-specific language (overrides all previous)
-                LoadIetfIntoDictionary(newTranslations, section.ModuleName, section.SectionName, directories, language);
-            }
-
+            foreach (var ietf in chain)
+                LoadIetfIntoDictionary(newTranslations, section.ModuleName, section.SectionName, directories, ietf);
             section.UpdateTranslations(newTranslations);
         }
+    }
+
+    /// <summary>
+    /// The languages loaded for <paramref name="language"/>, least specific first, each once: the fallback
+    /// language (the base language unless <see cref="LanguageConfigBuilder.UseFallbackLanguage"/> set another
+    /// one) with its parent cultures as the floor for missing keys, then the parent cultures of the requested
+    /// language, then the requested language itself. Later files override earlier ones.
+    /// </summary>
+    /// <example><c>fallback en-US, requested zh-Hant-TW</c> → en, en-US, zh, zh-Hant, zh-Hant-TW.</example>
+    internal IReadOnlyList<string> GetLoadChain(string language)
+    {
+        var fallback = _fallbackLanguage ?? _baseLanguage;
+        var chain = new List<string>();
+        void Add(string ietf)
+        {
+            if (!chain.Any(c => string.Equals(c, ietf, StringComparison.OrdinalIgnoreCase)))
+                chain.Add(ietf);
+        }
+        foreach (var parent in GetParentLanguages(fallback)) Add(parent);
+        Add(fallback);
+        foreach (var parent in GetParentLanguages(language)) Add(parent);
+        Add(language);
+        return chain;
     }
 
     /// <summary>
@@ -361,24 +370,14 @@ public sealed class LanguageConfig : IDisposable
 
     private async Task LoadLanguageAsync(string language, CancellationToken cancellationToken)
     {
-        var fallback = _fallbackLanguage ?? _baseLanguage;
-
+        var chain = GetLoadChain(language);
         foreach (var kvp in _sections)
         {
             var section = kvp.Value.Section;
             var directories = kvp.Value.Directories;
             var newTranslations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-            await LoadIetfIntoDictionaryAsync(newTranslations, section.ModuleName, section.SectionName, directories, fallback, cancellationToken).ConfigureAwait(false);
-
-            if (!string.Equals(language, fallback, StringComparison.OrdinalIgnoreCase))
-            {
-                foreach (var parent in GetParentLanguages(language))
-                    await LoadIetfIntoDictionaryAsync(newTranslations, section.ModuleName, section.SectionName, directories, parent, cancellationToken).ConfigureAwait(false);
-
-                await LoadIetfIntoDictionaryAsync(newTranslations, section.ModuleName, section.SectionName, directories, language, cancellationToken).ConfigureAwait(false);
-            }
-
+            foreach (var ietf in chain)
+                await LoadIetfIntoDictionaryAsync(newTranslations, section.ModuleName, section.SectionName, directories, ietf, cancellationToken).ConfigureAwait(false);
             section.UpdateTranslations(newTranslations);
         }
     }
