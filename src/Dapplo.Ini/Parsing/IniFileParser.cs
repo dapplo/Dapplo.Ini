@@ -36,7 +36,10 @@ public static class IniFileParser
         var keyComparer     = options.CaseSensitiveKeys     ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
 
         var iniFile = new IniFile(sectionComparer, keyComparer);
+        // A byte order mark left in the string (e.g. from Encoding.GetString) is not whitespace.
         var span = content.AsSpan();
+        if (!span.IsEmpty && span[0] == '\uFEFF')
+            span = span.Slice(1);
 
         IniSection? currentSection = null;
         var pendingComments = new List<string>();
@@ -108,7 +111,7 @@ public static class IniFileParser
 
                 // Quoted values: strip surrounding quotes if present
                 if (options.QuotedValues)
-                    value = StripQuotes(value);
+                    value = StripQuotes(value, unescapeQuotes: !options.EscapeSequences);
 
                 // Escape sequences: decode \n, \t, \\, etc.
                 if (options.EscapeSequences)
@@ -227,13 +230,26 @@ public static class IniFileParser
     /// </summary>
     private static string ApplyLineContinuation(string value, ref ReadOnlySpan<char> remaining)
     {
-        if (value.Length == 0 || value[value.Length - 1] != '\\')
+        if (!EndsWithContinuation(value.AsSpan()))
+            return value;
+
+        // Nothing to join (end of file, blank line or a section header): keep the value as written,
+        // e.g. "Dir = C:\Temp\" directly followed by "[Next]".
+        var lookAhead = remaining;
+        var following = lookAhead.IsEmpty ? ReadOnlySpan<char>.Empty : ReadLine(ref lookAhead).Trim();
+        if (following.IsEmpty || following[0] == '[')
             return value;
 
         // Strip the trailing backslash from the initial segment.
         var sb = new StringBuilder(value, 0, value.Length - 1, value.Length + 64);
         while (!remaining.IsEmpty)
         {
+            // Never swallow a section header: stop before it without consuming it.
+            var peek = remaining;
+            var peekedLine = ReadLine(ref peek).Trim();
+            if (!peekedLine.IsEmpty && peekedLine[0] == '[')
+                break;
+
             var nextLine = ReadLine(ref remaining).Trim();
             if (nextLine.IsEmpty)
             {
@@ -241,7 +257,7 @@ public static class IniFileParser
                 break;
             }
 
-            if (nextLine[nextLine.Length - 1] == '\\')
+            if (EndsWithContinuation(nextLine))
             {
                 // This line also continues — append without trailing backslash
                 sb.Append(nextLine.Slice(0, nextLine.Length - 1).ToString());
@@ -256,10 +272,28 @@ public static class IniFileParser
     }
 
     /// <summary>
+    /// A value continues on the next line when it ends with an odd number of backslashes:
+    /// <c>C:\Temp\\</c> (an escaped backslash) does not continue, <c>abc\</c> does.
+    /// </summary>
+    private static bool EndsWithContinuation(ReadOnlySpan<char> value)
+    {
+        var backslashes = 0;
+        for (var i = value.Length - 1; i >= 0 && value[i] == '\\'; i--)
+            backslashes++;
+        return backslashes % 2 == 1;
+    }
+
+    /// <summary>
     /// Strips matching surrounding double-quote or single-quote characters from
     /// <paramref name="value"/> when they are present.
     /// </summary>
-    private static string StripQuotes(string value)
+    /// <param name="value">The raw value.</param>
+    /// <param name="unescapeQuotes">
+    /// When <c>true</c>, a quote character inside the value that is preceded by an odd number of
+    /// backslashes loses one backslash. This is the inverse of how <see cref="IniFileWriter"/> escapes
+    /// quotes when it quotes a value, so values round-trip even without escape-sequence decoding.
+    /// </param>
+    private static string StripQuotes(string value, bool unescapeQuotes)
     {
         if (value.Length >= 2)
         {
@@ -268,10 +302,43 @@ public static class IniFileParser
             if ((first == '"'  && last == '"') ||
                 (first == '\'' && last == '\''))
             {
-                return value.Substring(1, value.Length - 2);
+                var inner = value.Substring(1, value.Length - 2);
+                return unescapeQuotes ? UnescapeQuote(inner, first) : inner;
             }
         }
         return value;
+    }
+
+    /// <summary>
+    /// Inverse of the writer's quote escaping without escape sequences: a run of backslashes directly
+    /// before a quote, or at the end of the value, is halved (an odd run also loses the backslash that
+    /// escaped the quote). Other backslashes are kept as they are.
+    /// </summary>
+    private static string UnescapeQuote(string value, char quoteChar)
+    {
+        if (value.IndexOf('\\') < 0)
+            return value;
+
+        var sb = new StringBuilder(value.Length);
+        var i = 0;
+        while (i < value.Length)
+        {
+            if (value[i] != '\\')
+            {
+                sb.Append(value[i++]);
+                continue;
+            }
+
+            var start = i;
+            while (i < value.Length && value[i] == '\\')
+                i++;
+            var run = i - start;
+            if (i == value.Length || value[i] == quoteChar)
+                sb.Append('\\', run / 2);
+            else
+                sb.Append('\\', run);
+        }
+        return sb.ToString();
     }
 
     /// <summary>
@@ -331,13 +398,14 @@ public static class IniFileParser
         if (string.IsNullOrEmpty(delimiters))
             delimiters = "=:";
 
-        var result = -1;
+        // Delimiters are tried in the configured order: with the default "=:" a line that contains an
+        // '=' is split there, so keys such as "http://host" or "C:\path" keep their colon.
         foreach (var delimiter in delimiters)
         {
             var index = line.IndexOf(delimiter);
-            if (index > 0 && (result < 0 || index < result))
-                result = index;
+            if (index > 0)
+                return index;
         }
-        return result;
+        return -1;
     }
 }

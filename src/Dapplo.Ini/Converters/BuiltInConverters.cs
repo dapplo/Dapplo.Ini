@@ -53,7 +53,187 @@ public sealed class BoolConverter : ValueConverterBase<bool>
     public override bool ConvertFromString(string? raw, bool defaultValue = default)
     {
         if (string.IsNullOrWhiteSpace(raw)) return defaultValue;
-        return bool.Parse(raw!.Trim());
+        var value = raw!.Trim();
+        if (bool.TryParse(value, out var result)) return result;
+        // Common hand-written alternatives
+        switch (value.ToLowerInvariant())
+        {
+            case "1": case "yes": case "on": return true;
+            case "0": case "no": case "off": return false;
+        }
+        return bool.Parse(value); // throws a FormatException with the usual message
+    }
+}
+
+/// <summary>Converts <see cref="short"/>.</summary>
+public sealed class Int16Converter : ValueConverterBase<short>
+{
+    public override short ConvertFromString(string? raw, short defaultValue = default)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return defaultValue;
+        return short.Parse(raw!.Trim(), CultureInfo.InvariantCulture);
+    }
+
+    public override string? ConvertToString(short value) => value.ToString(CultureInfo.InvariantCulture);
+}
+
+/// <summary>Converts <see cref="ushort"/>.</summary>
+public sealed class UInt16Converter : ValueConverterBase<ushort>
+{
+    public override ushort ConvertFromString(string? raw, ushort defaultValue = default)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return defaultValue;
+        return ushort.Parse(raw!.Trim(), CultureInfo.InvariantCulture);
+    }
+
+    public override string? ConvertToString(ushort value) => value.ToString(CultureInfo.InvariantCulture);
+}
+
+/// <summary>Converts <see cref="sbyte"/>.</summary>
+public sealed class SByteConverter : ValueConverterBase<sbyte>
+{
+    public override sbyte ConvertFromString(string? raw, sbyte defaultValue = default)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return defaultValue;
+        return sbyte.Parse(raw!.Trim(), CultureInfo.InvariantCulture);
+    }
+
+    public override string? ConvertToString(sbyte value) => value.ToString(CultureInfo.InvariantCulture);
+}
+
+/// <summary>Converts <see cref="char"/> (a single character; not trimmed, so a space is a valid value).</summary>
+public sealed class CharConverter : ValueConverterBase<char>
+{
+    public override char ConvertFromString(string? raw, char defaultValue = default)
+    {
+        if (string.IsNullOrEmpty(raw)) return defaultValue;
+        if (raw!.Length == 1) return raw[0];
+        var trimmed = raw.Trim();
+        if (trimmed.Length == 1) return trimmed[0];
+        throw new FormatException($"'{raw}' is not a single character.");
+    }
+
+    public override string? ConvertToString(char value) => value.ToString();
+}
+
+/// <summary>
+/// Wraps the converter of a value type <c>T</c> for <c>T?</c>: an empty or missing value is <c>null</c>
+/// (instead of <c>default(T)</c>), and <c>null</c> is written as an empty value.
+/// </summary>
+public sealed class NullableConverter : IValueConverter
+{
+    private readonly IValueConverter _inner;
+
+    /// <param name="nullableType">The <c>Nullable&lt;T&gt;</c> type.</param>
+    /// <param name="inner">The converter for <c>T</c>.</param>
+    public NullableConverter(Type nullableType, IValueConverter inner)
+    {
+        TargetType = nullableType ?? throw new ArgumentNullException(nameof(nullableType));
+        _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+    }
+
+    /// <inheritdoc/>
+    public Type TargetType { get; }
+
+    /// <inheritdoc/>
+    public object? ConvertFromString(string? raw)
+        => string.IsNullOrWhiteSpace(raw) ? null : _inner.ConvertFromString(raw);
+
+    /// <inheritdoc/>
+    public string? ConvertToString(object? value)
+        => value == null ? null : _inner.ConvertToString(value);
+}
+
+/// <summary>
+/// Splits and joins delimiter-separated values. An element that contains the delimiter (or starts with a
+/// quote or with whitespace) is written between double quotes, with inner quotes doubled, so every element
+/// round-trips. Unquoted input is read exactly as before.
+/// </summary>
+internal static class DelimitedValues
+{
+    /// <summary>Splits <paramref name="raw"/> on <paramref name="separator"/> outside quotes; parts are trimmed, quotes kept.</summary>
+    /// <param name="raw">The raw value.</param>
+    /// <param name="separator">The element separator.</param>
+    /// <param name="innerSeparator">
+    /// For dictionaries: the key/value separator. A quote may also open right after it, so a quoted value
+    /// that contains the element separator (<c>"k"="a,b"</c>) stays one part.
+    /// </param>
+    public static List<string> SplitRaw(string raw, char separator, char? innerSeparator = null)
+    {
+        var parts = new List<string>();
+        var start = 0;
+        var inQuotes = false;
+        var contentSeen = false; // non-whitespace seen in the current part
+        for (var i = 0; i < raw.Length; i++)
+        {
+            var c = raw[i];
+            if (inQuotes)
+            {
+                if (c == '"')
+                {
+                    if (i + 1 < raw.Length && raw[i + 1] == '"') i++; // doubled quote
+                    else inQuotes = false;
+                }
+                continue;
+            }
+            if (c == separator)
+            {
+                parts.Add(raw.Substring(start, i - start).Trim());
+                start = i + 1;
+                contentSeen = false;
+                continue;
+            }
+            if (c == '"' && !contentSeen)
+                inQuotes = true; // a quote only opens at the start of a part (or of a value)
+            if (innerSeparator.HasValue && c == innerSeparator.Value)
+                contentSeen = false;
+            else if (!char.IsWhiteSpace(c))
+                contentSeen = true;
+        }
+        parts.Add(raw.Substring(start).Trim());
+        return parts;
+    }
+
+    /// <summary>Finds the first <paramref name="separator"/> outside quotes, or -1.</summary>
+    public static int IndexOfUnquoted(string token, char separator)
+    {
+        var inQuotes = false;
+        var contentSeen = false;
+        for (var i = 0; i < token.Length; i++)
+        {
+            var c = token[i];
+            if (inQuotes)
+            {
+                if (c == '"')
+                {
+                    if (i + 1 < token.Length && token[i + 1] == '"') i++;
+                    else inQuotes = false;
+                }
+                continue;
+            }
+            if (c == separator) return i;
+            if (c == '"' && !contentSeen) inQuotes = true;
+            if (!char.IsWhiteSpace(c)) contentSeen = true;
+        }
+        return -1;
+    }
+
+    /// <summary>Removes surrounding quotes written by <see cref="Quote"/>.</summary>
+    public static string Unquote(string token)
+    {
+        token = token.Trim();
+        if (token.Length >= 2 && token[0] == '"' && token[token.Length - 1] == '"')
+            return token.Substring(1, token.Length - 2).Replace("\"\"", "\"");
+        return token;
+    }
+
+    /// <summary>Quotes <paramref name="value"/> when it could not be read back unquoted.</summary>
+    public static string Quote(string value, char separator, char? otherSeparator = null)
+    {
+        var needsQuotes = value.IndexOf(separator) >= 0
+            || (otherSeparator.HasValue && value.IndexOf(otherSeparator.Value) >= 0)
+            || (value.Length > 0 && (value[0] == '"' || char.IsWhiteSpace(value[0]) || char.IsWhiteSpace(value[value.Length - 1])));
+        return needsQuotes ? "\"" + value.Replace("\"", "\"\"") + "\"" : value;
     }
 }
 
@@ -220,11 +400,12 @@ public sealed class UriConverter : ValueConverterBase<Uri>
     public override Uri? ConvertFromString(string? raw, Uri? defaultValue = default)
     {
         if (string.IsNullOrWhiteSpace(raw)) return defaultValue;
-        return new Uri(raw!.Trim());
+        return new Uri(raw!.Trim(), UriKind.RelativeOrAbsolute);
     }
 
+    // OriginalString keeps the value exactly as given; ToString() would unescape it.
     public override string? ConvertToString(Uri? value)
-        => value?.ToString();
+        => value?.OriginalString;
 }
 
 /// <summary>
@@ -254,28 +435,17 @@ public sealed class ListConverter<T> : ValueConverterBase<List<T>>
     public override List<T>? ConvertFromString(string? raw, List<T>? defaultValue = default)
     {
         if (raw == null) return defaultValue;
-        if (raw.Length == 0) return new List<T>();
+        if (raw.Trim().Length == 0) return new List<T>();
 
-        // Count occurrences of the separator to pre-size the list and avoid re-allocations.
-        int estimatedCount = 1;
-        for (int i = 0; i < raw.Length; i++)
-            if (raw[i] == _separator) estimatedCount++;
-        var result = new List<T>(estimatedCount);
-
-#if NET
-        foreach (var range in raw.AsSpan().Split(_separator))
+        // Quote-aware split; an empty element is passed to the element converter as "" on every
+        // target framework (so List<string> "a,,b" gives "a", "", "b").
+        var parts = DelimitedValues.SplitRaw(raw, _separator);
+        var result = new List<T>(parts.Count);
+        foreach (var part in parts)
         {
-            var part = raw.AsSpan()[range].Trim();
-            var item = _elementConverter.ConvertFromString(part.IsEmpty ? null : part.ToString());
+            var item = _elementConverter.ConvertFromString(DelimitedValues.Unquote(part));
             result.Add(item is T typed ? typed : default!);
         }
-#else
-        foreach (var part in raw.Split(_separator))
-        {
-            var item = _elementConverter.ConvertFromString(part.Trim());
-            result.Add(item is T typed ? typed : default!);
-        }
-#endif
         return result;
     }
 
@@ -286,7 +456,7 @@ public sealed class ListConverter<T> : ValueConverterBase<List<T>>
         var count = value.Count;
         var parts = new string[count];
         for (int i = 0; i < count; i++)
-            parts[i] = _elementConverter.ConvertToString(value[i]) ?? string.Empty;
+            parts[i] = DelimitedValues.Quote(_elementConverter.ConvertToString(value[i]) ?? string.Empty, _separator);
         return string.Join(_separatorStr, parts);
     }
 
@@ -370,41 +540,21 @@ public sealed class DictionaryConverter<TKey, TValue> : ValueConverterBase<Dicti
         string? raw, Dictionary<TKey, TValue>? defaultValue = default)
     {
         if (raw == null) return defaultValue;
-        if (raw.Length == 0) return new Dictionary<TKey, TValue>();
+        if (raw.Trim().Length == 0) return new Dictionary<TKey, TValue>();
 
-        // Count occurrences of the pair separator to pre-size the dictionary.
-        int estimatedCount = 1;
-        for (int i = 0; i < raw.Length; i++)
-            if (raw[i] == _pairSeparator) estimatedCount++;
-        var result = new Dictionary<TKey, TValue>(estimatedCount);
-
-#if NET
-        foreach (var pairRange in raw.AsSpan().Split(_pairSeparator))
+        var pairs = DelimitedValues.SplitRaw(raw, _pairSeparator, _keyValueSeparator);
+        var result = new Dictionary<TKey, TValue>(pairs.Count);
+        foreach (var kv in pairs)
         {
-            var kv = raw.AsSpan()[pairRange].Trim();
-            var sepIdx = kv.IndexOf(_keyValueSeparator);
+            var sepIdx = DelimitedValues.IndexOfUnquoted(kv, _keyValueSeparator);
             if (sepIdx < 0) continue;
-            var keyStr = kv.Slice(0, sepIdx).Trim();
-            var valStr = kv.Slice(sepIdx + 1).Trim();
-            var keyObj = _keyConverter.ConvertFromString(keyStr.IsEmpty ? null : keyStr.ToString());
-            var valObj = _valueConverter.ConvertFromString(valStr.IsEmpty ? null : valStr.ToString());
-            if (keyObj is TKey typedKey)
-                result[typedKey] = valObj is TValue typedVal ? typedVal : default!;
-        }
-#else
-        foreach (var pair in raw.Split(_pairSeparator))
-        {
-            var kv = pair.Trim();
-            var sepIdx = kv.IndexOf(_keyValueSeparator);
-            if (sepIdx < 0) continue;
-            var keyStr = kv.Substring(0, sepIdx).Trim();
-            var valStr = kv.Substring(sepIdx + 1).Trim();
-            var keyObj = _keyConverter.ConvertFromString(keyStr);
+            var keyStr = DelimitedValues.Unquote(kv.Substring(0, sepIdx));
+            var valStr = DelimitedValues.Unquote(kv.Substring(sepIdx + 1));
+            var keyObj = _keyConverter.ConvertFromString(keyStr.Length == 0 ? null : keyStr);
             var valObj = _valueConverter.ConvertFromString(valStr);
             if (keyObj is TKey typedKey)
                 result[typedKey] = valObj is TValue typedVal ? typedVal : default!;
         }
-#endif
         return result;
     }
 
@@ -418,9 +568,9 @@ public sealed class DictionaryConverter<TKey, TValue> : ValueConverterBase<Dicti
         {
             if (!first) sb.Append(_pairSeparatorStr);
             first = false;
-            sb.Append(_keyConverter.ConvertToString(kvp.Key) ?? string.Empty);
+            sb.Append(DelimitedValues.Quote(_keyConverter.ConvertToString(kvp.Key) ?? string.Empty, _pairSeparator, _keyValueSeparator));
             sb.Append(_keyValueSeparator);
-            sb.Append(_valueConverter.ConvertToString(kvp.Value) ?? string.Empty);
+            sb.Append(DelimitedValues.Quote(_valueConverter.ConvertToString(kvp.Value) ?? string.Empty, _pairSeparator));
         }
         return sb.ToString();
     }
@@ -437,9 +587,9 @@ public sealed class DictionaryConverter<TKey, TValue> : ValueConverterBase<Dicti
             {
                 if (!first) sb.Append(_pairSeparatorStr);
                 first = false;
-                sb.Append(_keyConverter.ConvertToString(kvp.Key) ?? string.Empty);
+                sb.Append(DelimitedValues.Quote(_keyConverter.ConvertToString(kvp.Key) ?? string.Empty, _pairSeparator, _keyValueSeparator));
                 sb.Append(_keyValueSeparator);
-                sb.Append(_valueConverter.ConvertToString(kvp.Value) ?? string.Empty);
+                sb.Append(DelimitedValues.Quote(_valueConverter.ConvertToString(kvp.Value) ?? string.Empty, _pairSeparator));
             }
             return sb.ToString();
         }
@@ -466,7 +616,8 @@ public sealed class EnumConverter : IValueConverter
 
     public object? ConvertFromString(string? raw)
     {
-        if (string.IsNullOrWhiteSpace(raw)) return Enum.ToObject(_enumType, 0);
+        // Empty means "no value": returning null lets the caller use its default value.
+        if (string.IsNullOrWhiteSpace(raw)) return null;
         return Enum.Parse(_enumType, raw!.Trim(), ignoreCase: true);
     }
 

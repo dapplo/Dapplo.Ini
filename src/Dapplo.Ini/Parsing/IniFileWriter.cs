@@ -153,13 +153,7 @@ public static class IniFileWriter
 
             // Section comments
             if (sectionOptions.WriteComments)
-            {
-                foreach (var comment in section.Comments)
-                {
-                    writer.Write("; ");
-                    writer.WriteLine(comment);
-                }
-            }
+                WriteComments(writer, section.Comments);
 
             // Only write header for named sections
             if (!string.IsNullOrEmpty(section.Name))
@@ -175,13 +169,7 @@ public static class IniFileWriter
                 var entryOptions = sectionOptions.Apply(entry.WriterOptionsOverride);
 
                 if (entryOptions.WriteComments)
-                {
-                    foreach (var comment in entry.Comments)
-                    {
-                        writer.Write("; ");
-                        writer.WriteLine(comment);
-                    }
-                }
+                    WriteComments(writer, entry.Comments);
 
                 writer.Write(entry.Key);
                 writer.Write(entryOptions.AssignmentSeparator);
@@ -190,23 +178,78 @@ public static class IniFileWriter
         }
     }
 
+    /// <summary>Writes each comment line prefixed with "; " — also every line of a multi-line comment.</summary>
+    private static void WriteComments(TextWriter writer, IReadOnlyList<string> comments)
+    {
+        foreach (var comment in comments)
+        {
+            foreach (var line in comment.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None))
+            {
+                writer.Write("; ");
+                writer.WriteLine(line);
+            }
+        }
+    }
+
     internal static string FormatValue(string? value, IniWriterOptions options)
     {
         var result = value ?? string.Empty;
-        if (options.EscapeSequences)
+        // A raw line break would end the value and could inject keys or sections into the file,
+        // so values containing one are always written with escape sequences.
+        // Enable escape sequences on the parser to read them back as line breaks.
+        if (options.EscapeSequences || result.IndexOf('\n') >= 0 || result.IndexOf('\r') >= 0)
             result = EncodeEscapeSequences(result);
-        return ApplyQuoting(result, options);
+        return ApplyQuoting(result, options, escapeSequencesEncoded: options.EscapeSequences);
     }
 
-    private static string ApplyQuoting(string value, IniWriterOptions options)
+    private static string ApplyQuoting(string value, IniWriterOptions options, bool escapeSequencesEncoded)
     {
+        // With escape sequences, backslashes are already doubled, so escaping the quotes is enough and the
+        // parser's escape decoding restores the value. Without them, the quote escaping itself must be
+        // reversible (see EscapeQuoteReversible), because the parser only undoes the quote escaping.
+        Func<string, char, string> escape = escapeSequencesEncoded ? EscapeUnescapedQuote : EscapeQuoteReversible;
         return options.QuoteStyle switch
         {
-            IniValueQuoteStyle.Single => $"'{EscapeUnescapedQuote(value, '\'')}'",
-            IniValueQuoteStyle.Double => $"\"{EscapeUnescapedQuote(value, '\"')}\"",
-            IniValueQuoteStyle.Auto when NeedsQuoting(value, options.AssignmentSeparator) => $"\"{EscapeUnescapedQuote(value, '\"')}\"",
+            IniValueQuoteStyle.Single => $"'{escape(value, '\'')}'",
+            IniValueQuoteStyle.Double => $"\"{escape(value, '\"')}\"",
+            IniValueQuoteStyle.Auto when NeedsQuoting(value, options.AssignmentSeparator) => $"\"{escape(value, '\"')}\"",
             _ => value
         };
+    }
+
+    /// <summary>
+    /// Escapes <paramref name="quoteChar"/> inside a value that is written between quotes, without escape
+    /// sequences: every run of backslashes directly before a quote (or at the very end, before the closing
+    /// quote) is doubled, and the quote gets one more backslash. The parser reverses exactly this, so any
+    /// value round-trips.
+    /// </summary>
+    private static string EscapeQuoteReversible(string value, char quoteChar)
+    {
+        if (string.IsNullOrEmpty(value) || (value.IndexOf(quoteChar) < 0 && value[value.Length - 1] != '\\'))
+            return value;
+
+        var sb = new StringBuilder(value.Length + 8);
+        var backslashes = 0;
+        foreach (var c in value)
+        {
+            if (c == '\\')
+            {
+                backslashes++;
+                continue;
+            }
+            if (c == quoteChar)
+            {
+                sb.Append('\\', backslashes * 2 + 1);
+            }
+            else
+            {
+                sb.Append('\\', backslashes);
+            }
+            backslashes = 0;
+            sb.Append(c);
+        }
+        sb.Append('\\', backslashes * 2);
+        return sb.ToString();
     }
 
     private static string EscapeUnescapedQuote(string value, char quoteChar)
@@ -241,6 +284,10 @@ public static class IniFileWriter
             return true;
 
         if (value.StartsWith(";") || value.StartsWith("#"))
+            return true;
+
+        // A value that already looks quoted would lose its quotes when read with QuotedValues.
+        if (value[0] == '"' || value[0] == '\'')
             return true;
 
         foreach (var c in assignmentSeparator)

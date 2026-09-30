@@ -635,10 +635,18 @@ public sealed class IniConfig : IDisposable
 
         _watcher = new FileSystemWatcher(dir, file)
         {
-            NotifyFilter         = NotifyFilters.LastWrite | NotifyFilters.Size,
+            NotifyFilter         = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName,
             EnableRaisingEvents  = true
         };
         _watcher.Changed += OnFileChanged;
+        // Editors that save by writing a new file and swapping it in, and a file that is created after
+        // start-up, show up as Created / Renamed instead of Changed.
+        _watcher.Created += OnFileChanged;
+        _watcher.Renamed += (sender, e) =>
+        {
+            if (string.Equals(e.Name, file, StringComparison.OrdinalIgnoreCase))
+                OnFileChanged(sender, e);
+        };
     }
 
     private void OnFileChanged(object sender, FileSystemEventArgs e)
@@ -1269,6 +1277,9 @@ public sealed class IniConfig : IDisposable
             {
                 foreach (var key in section.GetKeys())
                 {
+                    // Constants (admin-forced values) win over value sources.
+                    if (section.IsConstant(key))
+                        continue;
                     if (source.TryGetValue(section.SectionName, key, out var value))
                         section.SetRawValue(key, value);
                 }
@@ -1290,6 +1301,8 @@ public sealed class IniConfig : IDisposable
             {
                 foreach (var key in section.GetKeys())
                 {
+                    if (section.IsConstant(key))
+                        continue;
                     var (found, value) = await source.TryGetValueAsync(
                         section.SectionName, key, cancellationToken).ConfigureAwait(false);
                     if (found)

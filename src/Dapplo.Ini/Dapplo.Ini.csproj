@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Dapplo.Ini.Tests" />
+    <InternalsVisibleTo Include="Dapplo.Ini.Internationalization.Tests" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == 'net48'">

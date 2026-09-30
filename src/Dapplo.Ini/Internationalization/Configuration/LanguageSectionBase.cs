@@ -16,7 +16,9 @@ namespace Dapplo.Ini.Internationalization.Configuration;
 public abstract class LanguageSectionBase : ILanguageSection, IReadOnlyDictionary<string, string>
 {
     // Translations keyed by normalized key (lowercase, no underscores/dashes).
-    private readonly Dictionary<string, string> _translations =
+    // Never modified after it is published: UpdateTranslations swaps in a new dictionary, so UI threads
+    // reading translations during a language switch or file reload always see a complete set.
+    private volatile Dictionary<string, string> _translations =
         new(StringComparer.OrdinalIgnoreCase);
 
     // ── ILanguageSection ──────────────────────────────────────────────────────
@@ -45,11 +47,12 @@ public abstract class LanguageSectionBase : ILanguageSection, IReadOnlyDictionar
     /// <param name="newTranslations">The new dictionary of normalized key to translated value.</param>
     public virtual void UpdateTranslations(IReadOnlyDictionary<string, string> newTranslations)
     {
-        _translations.Clear();
+        var updated = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var kvp in newTranslations)
         {
-            _translations[kvp.Key] = kvp.Value;
+            updated[kvp.Key] = kvp.Value;
         }
+        _translations = updated;
     }
 
     /// <summary>

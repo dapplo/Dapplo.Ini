@@ -336,10 +336,10 @@ public sealed class LanguageConfig : IDisposable
 
             if (!string.Equals(language, fallback, StringComparison.OrdinalIgnoreCase))
             {
-                // 2. Progressive fallback: parent culture (e.g. "fr" before "fr-FR")
-                var hyphen = language.IndexOf('-');
-                if (hyphen > 0)
-                    LoadIetfIntoDictionary(newTranslations, section.ModuleName, section.SectionName, directories, language.Substring(0, hyphen));
+                // 2. Progressive fallback: every parent culture, least specific first
+                //    (e.g. "zh", then "zh-Hant", before "zh-Hant-TW")
+                foreach (var parent in GetParentLanguages(language))
+                    LoadIetfIntoDictionary(newTranslations, section.ModuleName, section.SectionName, directories, parent);
 
                 // 3. Most-specific language (overrides all previous)
                 LoadIetfIntoDictionary(newTranslations, section.ModuleName, section.SectionName, directories, language);
@@ -347,6 +347,16 @@ public sealed class LanguageConfig : IDisposable
 
             section.UpdateTranslations(newTranslations);
         }
+    }
+
+    /// <summary>
+    /// Returns the parent tags of an IETF language tag, least specific first:
+    /// <c>zh-Hant-TW</c> gives <c>zh</c> and <c>zh-Hant</c>.
+    /// </summary>
+    internal static IEnumerable<string> GetParentLanguages(string language)
+    {
+        for (var hyphen = language.IndexOf('-'); hyphen > 0; hyphen = language.IndexOf('-', hyphen + 1))
+            yield return language.Substring(0, hyphen);
     }
 
     private async Task LoadLanguageAsync(string language, CancellationToken cancellationToken)
@@ -363,9 +373,8 @@ public sealed class LanguageConfig : IDisposable
 
             if (!string.Equals(language, fallback, StringComparison.OrdinalIgnoreCase))
             {
-                var hyphen = language.IndexOf('-');
-                if (hyphen > 0)
-                    await LoadIetfIntoDictionaryAsync(newTranslations, section.ModuleName, section.SectionName, directories, language.Substring(0, hyphen), cancellationToken).ConfigureAwait(false);
+                foreach (var parent in GetParentLanguages(language))
+                    await LoadIetfIntoDictionaryAsync(newTranslations, section.ModuleName, section.SectionName, directories, parent, cancellationToken).ConfigureAwait(false);
 
                 await LoadIetfIntoDictionaryAsync(newTranslations, section.ModuleName, section.SectionName, directories, language, cancellationToken).ConfigureAwait(false);
             }
@@ -489,7 +498,7 @@ public sealed class LanguageConfig : IDisposable
 
             var rawKey = line.Slice(0, eq).TrimEnd().ToString();
             var normalizedKey = LanguageSectionBase.NormalizeKey(rawKey);
-            var rawValue = line.Slice(eq + 1).ToString();
+            var rawValue = line.Slice(eq + 1).TrimStart().ToString();
             var value = UnescapeValue(rawValue);
 
             target[normalizedKey] = value;
