@@ -4,7 +4,8 @@ Understanding the exact order in which values are resolved helps you predict the
 state of any property after `Build()`, `Load()` or `Reload()`.
 
 All files are read first (defaults, user, constants — bare file names are resolved through
-the search paths, for `Load()` and `Reload()` alike); the steps below are then applied to the
+the search paths, for `Load()` and `Reload()` alike; with `SetOverrideDirectory` the user file is
+only read from the override directory, defaults are looked for there first and constants never); the steps below are then applied to the
 registered sections without further file I/O. `Load`, `Reload`, `Save` and `AddSection` are
 serialised by one lifecycle gate, so they never interleave.
 

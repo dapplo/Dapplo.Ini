@@ -54,13 +54,19 @@ Use `AddAppDataPath` to add that directory as a search path and write target in 
 
 ```csharp
 using var config = IniConfigRegistry.ForFile("myapp.ini")
-    .AddAppDataPath("MyApplication")   // creates the folder if it does not exist
+    .AddSearchPath(AppContext.BaseDirectory) // e.g. a portable or admin-provided file next to the exe
+    .AddAppDataPath("MyApplication")         // creates the folder if it does not exist
     .RegisterSection<IAppSettings>(new AppSettingsImpl())
     .Build();
 
-// If the file does not exist yet it will be created in AppData on the first Save().
+// If the file does not exist in any search path it is created in AppData on the first Save().
 config.Save();
 ```
+
+The file is still read from the first search path that contains it, and saved back there.
+Only when no search path contains it is AppData the write target — wherever `AddAppDataPath`
+is in the search order, so a fresh install never tries to write next to the executable
+(e.g. into `Program Files`). `SetWritablePath` takes precedence over this fallback.
 
 ---
 
@@ -80,6 +86,52 @@ using var config = IniConfigRegistry.ForFile("defaults.ini")
     .RegisterSection<IAppSettings>(new AppSettingsImpl())
     .Build();
 ```
+
+---
+
+## Pinning the file to a directory (`--config-dir`)
+
+Applications often offer a command-line option that points to the directory with the
+configuration. `SetOverrideDirectory` pins the INI file to that directory:
+
+```csharp
+using var config = IniConfigRegistry.ForFile("myapp.ini")
+    .SetOverrideDirectory(options.ConfigDirectory)   // null/empty: no override
+    .AddSearchPath(AppContext.BaseDirectory)
+    .AddAppDataPath("MyApplication")
+    .AddDefaultsFile("myapp-defaults.ini")
+    .AddConstantsFile("myapp-fixed.ini")
+    .RegisterSection<IAppSettings>(new AppSettingsImpl())
+    .Build();
+
+logger.Info($"Using {config.LoadedFromPath}");
+```
+
+| | With an active override directory |
+|---|---|
+| INI file | Read from **and** saved to the override directory only — even when it does not exist there yet and does exist in a search path (e.g. AppData). `SetWritablePath` and the AppData fallback are not used. |
+| Defaults files (bare name) | Looked up in the override directory first, then in the search paths. |
+| Constants files (bare name) | **Never** read from the override directory, only from the search paths. A user cannot replace the constants an administrator placed next to the executable by putting a copy into the directory they control. |
+
+- `null`, empty or whitespace does nothing, so an optional command-line value can be passed
+  unconditionally.
+- A relative path is made absolute against the current directory; a missing directory is created.
+- When the directory cannot be created or written to (missing permissions, a file with that
+  name, an invalid path), `IIniConfigListener.OnError` is called with the operation
+  `"OverrideDirectory"` and the file is located through the search paths as if no override had
+  been set. No exception is thrown, so a bad command-line value never stops the application.
+- `config.OverrideDirectory` is the absolute directory while the override is active, otherwise `null`.
+- `config.LoadedFromPath` is the file that was loaded or, when it did not exist, where `Save()`
+  will create it — log it or pass it on.
+
+### Where a new file is created
+
+When the INI file is not found, `Save()` creates it in the first of:
+
+1. the override directory (`SetOverrideDirectory`)
+2. the explicit write target (`SetWritablePath`)
+3. the AppData directory (`AddAppDataPath`)
+4. the first search path that exists
 
 ---
 
@@ -326,6 +378,7 @@ and a complete plugin-host example.
 
 - [[Plugin-Registrations]] — `Create()` + `AddSection` + `Load()` for plugin-based apps
 - [[Loading-Life-Cycle]] — value resolution order
+- [[Listeners]] — `OnError`, including `"OverrideDirectory"`
 - [[Reloading]] — `Reload()` / `ReloadAsync()` and the singleton guarantee
 - [[Saving]] — `Save()` / `SaveAsync()` and `IBeforeSave` / `IAfterSave` hooks
 - [[File-Locking]] — `LockFile()`

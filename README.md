@@ -12,6 +12,7 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
 - ✅ Define configuration sections as **annotated interfaces** — no boilerplate
 - ✅ Concrete classes are **auto-generated** by the included Roslyn source generator
 - ✅ **Layered** loading: defaults file → user file → admin constants → external value sources
+- ✅ **Flexible file location** — ordered search paths, AppData as write fallback, and `SetOverrideDirectory` to pin the file to a `--config-dir` style directory without letting users bypass admin constants
 - ✅ **In-place reload** with singleton guarantee (safe for DI containers)
 - ✅ **File locking** to prevent external modification while the app is running
 - ✅ **File-change monitoring** with an optional consumer hook to control reload behaviour
