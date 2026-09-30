@@ -606,20 +606,16 @@ public sealed class IniConfigBuilder
     /// interface type automatically.  If the class implements more than one such interface,
     /// pass the interface type directly as <typeparamref name="T"/> to remove the ambiguity.
     /// </summary>
+#if NET
+    [UnconditionalSuppressMessage("Trimming", "IL2026",
+        Justification = "Reflection is only used when T is a concrete class; pass the interface type for trim safety.")]
+#endif
     public IniConfigBuilder RegisterSection<T>(T section) where T : IIniSection
     {
         if (section is null) throw new ArgumentNullException(nameof(section));
-        // When T is a concrete class rather than an interface, prefer registering under
-        // the most-specific IIniSection-derived interface so that GetSection<IMySection>()
-        // works as expected — consistent with the behaviour of the non-generic overload.
-        Type keyType = typeof(T);
-        if (!keyType.IsInterface)
-        {
-            keyType = keyType.GetInterfaces()
-                .FirstOrDefault(i => typeof(IIniSection).IsAssignableFrom(i) && i != typeof(IIniSection))
-                ?? keyType;
-        }
-        _sections[keyType] = section;
+        // When T is a concrete class rather than an interface, register under the most derived
+        // IIniSection-derived interface so that GetSection<IMySection>() works as expected.
+        _sections[SectionStore.ResolveKeyType(typeof(T), section.GetType())] = section;
         return this;
     }
 
@@ -637,12 +633,8 @@ public sealed class IniConfigBuilder
     {
         if (section is null) throw new ArgumentNullException(nameof(section));
 
-        // Infer the most-specific IIniSection-derived interface
-        var ifaceType = section.GetType().GetInterfaces()
-            .FirstOrDefault(i => typeof(IIniSection).IsAssignableFrom(i) && i != typeof(IIniSection))
-            ?? section.GetType();
-
-        _sections[ifaceType] = section;
+        // Infer the most derived IIniSection-derived interface
+        _sections[SectionStore.ResolveKeyType(section.GetType(), section.GetType())] = section;
         return this;
     }
 
@@ -675,11 +667,23 @@ public sealed class IniConfigBuilder
     /// Builds, loads and registers the <see cref="IniConfig"/> in the global registry.
     /// Returns the fully-populated <see cref="IniConfig"/>.
     /// </summary>
+    /// <remarks>
+    /// When loading fails, the configuration is removed from the registry again and the exception is re-thrown.
+    /// </remarks>
     public IniConfig Build()
     {
         var config = CreateCore();
         IniConfigRegistry.Register(_fileName, config);
-        return config.Load();
+        try
+        {
+            return config.Load();
+        }
+        catch
+        {
+            IniConfigRegistry.Unregister(_fileName, config);
+            config.Dispose();
+            throw;
+        }
     }
 
     /// <summary>
@@ -704,23 +708,19 @@ public sealed class IniConfigBuilder
     {
         var config = CreateCore();
 
-        // Register in the global registry and expose InitialLoadTask BEFORE any I/O starts.
-        // This lets DI consumers get a reference to the config (or its sections) and
-        // await InitialLoadTask to know when values are ready.
-        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        config.SetInitialLoadTask(tcs.Task);
+        // Register in the global registry BEFORE any I/O starts. This lets DI consumers get a
+        // reference to the config (or its sections) and await InitialLoadTask, which LoadAsync
+        // completes (or faults) when the load has finished.
         IniConfigRegistry.Register(_fileName, config);
 
         try
         {
             await config.LoadAsync(cancellationToken).ConfigureAwait(false);
-            tcs.SetResult(true);
         }
-        catch (Exception ex)
+        catch
         {
-            // Unregister from registry on failure and propagate the exception via InitialLoadTask.
-            IniConfigRegistry.Unregister(_fileName);
-            tcs.SetException(ex);
+            IniConfigRegistry.Unregister(_fileName, config);
+            config.Dispose();
             throw;
         }
 
@@ -765,7 +765,7 @@ public sealed class IniConfigBuilder
 
         // Seed sections (no I/O — Load() will reset and populate them)
         foreach (var kvp in _sections)
-            config.Sections[kvp.Key] = kvp.Value;
+            config.Sections.Set(kvp.Key, kvp.Value);
 
         return config;
     }

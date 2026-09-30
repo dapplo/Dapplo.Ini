@@ -88,7 +88,20 @@ public static class IniFileWriter
 
         try
         {
-            File.Replace(tempPath, filePath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+            // A reader (virus scanner, indexer, editor) that has the file open briefly blocks the swap.
+            // Retry a few times before falling back.
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    File.Replace(tempPath, filePath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+                    return;
+                }
+                catch (IOException) when (attempt < ReplaceAttempts && File.Exists(tempPath))
+                {
+                    Thread.Sleep(ReplaceRetryDelayMs * attempt);
+                }
+            }
         }
         catch (Exception ex) when (ex is IOException or PlatformNotSupportedException or UnauthorizedAccessException && File.Exists(tempPath))
         {
@@ -98,6 +111,9 @@ public static class IniFileWriter
             TryDelete(tempPath);
         }
     }
+
+    private const int ReplaceAttempts = 5;
+    private const int ReplaceRetryDelayMs = 20;
 
     private static void TryDelete(string path)
     {

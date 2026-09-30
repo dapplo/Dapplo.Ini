@@ -692,12 +692,6 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
 
             if (!p.IsIgnored && !p.IsRuntimeOnly)
             {
-                // Reject writes to constant keys BEFORE anything changes (field, events, raw value).
-                string constantKey = EscapeString(p.KeyName ?? p.Name);
-                sb.AppendLine(p.IsSubKeyDictionary
-                    ? $"                ThrowIfConstantPrefix(\"{constantKey}\");"
-                    : $"                ThrowIfConstant(\"{constantKey}\");");
-
                 // Setters no longer round-trip through the converter, so apply the empty-when-null
                 // rule here: assigning null gives the same empty value a missing INI key would give.
                 if (!p.IsValueType && !p.IsSubKeyDictionary)
@@ -714,13 +708,31 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
 
             // Emit early-return equality check whenever NPC events will be fired.
             // This prevents redundant events and stops infinite loops in WPF bindings.
-            if (emitChanging || emitChanged)
+            // Without NPC events the check is still emitted for value types and strings, so that
+            // assigning an unchanged value (e.g. normalisation in an IAfterLoad hook) does not mark
+            // the section dirty. Collections are excluded there: re-assigning the same, mutated
+            // instance must still be recorded as a change.
+            bool isValueLike = p.IsValueType || p.TypeFullName.TrimEnd('?') == "string";
+            if (emitChanging || emitChanged || (isValueLike && !p.IsIgnored && !p.IsRuntimeOnly))
             {
-                sb.AppendLine($"                if (EqualityComparer<{p.TypeFullName}>.Default.Equals({fieldName}, __value)) return;");
+                // In a transaction the effective current value is the pending one, not the committed field.
+                string currentValue = usesTx ? $"(_isInTransaction ? {txFieldName} : {fieldName})" : fieldName;
+                sb.AppendLine($"                if (EqualityComparer<{p.TypeFullName}>.Default.Equals({currentValue}, __value)) return;");
             }
+            if (!p.IsIgnored && !p.IsRuntimeOnly)
+            {
+                // Reject writes to constant keys BEFORE anything changes (field, events, raw value).
+                // Assigning the current value is a no-op (early return above) and therefore allowed.
+                string constantKey = EscapeString(p.KeyName ?? p.Name);
+                sb.AppendLine(p.IsSubKeyDictionary
+                    ? $"                ThrowIfConstantPrefix(\"{constantKey}\");"
+                    : $"                ThrowIfConstant(\"{constantKey}\");");
+            }
+            // Transactional properties raise their events on Commit(), when the new value becomes visible.
+            string txEventGuard = usesTx ? "if (!_isInTransaction) " : "";
             if (emitChanging)
             {
-                sb.AppendLine($"                PropertyChanging?.Invoke(this, new PropertyChangingEventArgs(nameof({p.Name})));");
+                sb.AppendLine($"                {txEventGuard}PropertyChanging?.Invoke(this, new PropertyChangingEventArgs(nameof({p.Name})));");
             }
 
             if (p.IsIgnored || p.IsRuntimeOnly)
@@ -763,7 +775,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
 
             if (emitChanged)
             {
-                sb.AppendLine($"                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof({p.Name})));");
+                sb.AppendLine($"                {txEventGuard}PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof({p.Name})));");
             }
             // Validation always runs in the setter when the section has any form of validation,
             // regardless of whether NPC events are emitted for that property.
@@ -912,6 +924,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 sb.AppendLine($"            yield return new KeyValuePair<string, string?>(\"{EscapeString(keyName)}\", {BuildConvertToRawCall(p, fieldName)});");
             }
         }
+        sb.AppendLine("            yield break; // keeps the method an iterator when the section has no properties");
         sb.AppendLine("        }");
         sb.AppendLine();
 
@@ -925,6 +938,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             string keyName = p.KeyName ?? p.Name;
             sb.AppendLine($"            yield return \"{EscapeString(keyName)}\";");
         }
+        sb.AppendLine("            yield break; // keeps the method an iterator when the section has no properties");
         sb.AppendLine("        }");
         sb.AppendLine();
 
@@ -1143,8 +1157,36 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             sb.AppendLine("        {");
             sb.AppendLine("            if (!_isInTransaction) return;");
             sb.AppendLine("            _isInTransaction = false;");
+            // Apply every changed pending value the same way a setter outside a transaction would:
+            // events, raw value (so the change is dirty and gets saved) and the backing field.
             foreach (var p in txProps)
-                sb.AppendLine($"            _{Camel(p.Name)} = _{Camel(p.Name)}Tx;");
+            {
+                string field = $"_{Camel(p.Name)}";
+                string tx = $"{field}Tx";
+                bool changing = m.ImplementsINotifyPropertyChanging && !p.SuppressPropertyChanging;
+                bool changed  = m.ImplementsINotifyPropertyChanged  && !p.SuppressPropertyChanged;
+                sb.AppendLine($"            if (!EqualityComparer<{p.TypeFullName}>.Default.Equals({field}, {tx}))");
+                sb.AppendLine("            {");
+                if (changing)
+                    sb.AppendLine($"                PropertyChanging?.Invoke(this, new PropertyChangingEventArgs(nameof({p.Name})));");
+                sb.AppendLine($"                {field} = {tx};");
+                if (!p.IsIgnored && !p.IsRuntimeOnly)
+                {
+                    string key = EscapeString(p.KeyName ?? p.Name);
+                    if (p.IsSubKeyDictionary)
+                    {
+                        sb.AppendLine($"                {field}HasRawEntries = true;");
+                        sb.AppendLine($"                if ({field} != null) foreach (var __kvp in {field}) SetRawValueFromProperty($\"{key}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value));");
+                    }
+                    else
+                    {
+                        sb.AppendLine($"                SetRawValueFromProperty(\"{key}\", {BuildConvertToRawCall(p, field)});");
+                    }
+                }
+                if (changed)
+                    sb.AppendLine($"                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof({p.Name})));");
+                sb.AppendLine("            }");
+            }
             sb.AppendLine("        }");
             sb.AppendLine();
 

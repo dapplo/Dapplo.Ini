@@ -46,11 +46,31 @@ public static class IniConfigRegistry
         return new IniConfigBuilder(fileName);
     }
 
+    /// <summary>
+    /// Registers <paramref name="config"/> under <paramref name="basename"/>. A different configuration that was
+    /// registered under the same name before is disposed, so its auto-save timer, file monitor and exit handler
+    /// can no longer write the same file with stale section instances.
+    /// </summary>
     internal static void Register(string basename, IniConfig config)
     {
+        IniConfig? replaced;
         lock (_lock)
         {
+            _registry.TryGetValue(basename, out replaced);
             _registry[basename] = config;
+        }
+        if (replaced != null && !ReferenceEquals(replaced, config))
+            replaced.Dispose();
+    }
+
+    /// <summary>Removes the registration for <paramref name="basename"/>, but only when it still points at <paramref name="config"/>.</summary>
+    internal static void Unregister(string basename, IniConfig config)
+    {
+        var key = NormalizeBasename(basename);
+        lock (_lock)
+        {
+            if (_registry.TryGetValue(key, out var current) && ReferenceEquals(current, config))
+                _registry.Remove(key);
         }
     }
 
