@@ -60,11 +60,10 @@ public sealed class IniFile
     /// <summary>Adds a <see cref="IniSection"/> (replaces any existing section with the same name).</summary>
     public void AddSection(IniSection section)
     {
-        if (_sections.ContainsKey(section.Name))
+        if (_sections.TryGetValue(section.Name, out var existing))
         {
-            // Replace in ordered list
-            var idx = _sectionsOrdered.FindIndex(s =>
-                string.Equals(s.Name, section.Name, StringComparison.OrdinalIgnoreCase));
+            // Replace in ordered list (by reference, so the configured section comparer is honoured)
+            var idx = _sectionsOrdered.IndexOf(existing);
             if (idx >= 0) _sectionsOrdered[idx] = section;
         }
         else
@@ -81,11 +80,9 @@ public sealed class IniFile
     /// </summary>
     public void PrependSection(IniSection section)
     {
-        if (_sections.ContainsKey(section.Name))
+        if (_sections.TryGetValue(section.Name, out var existing))
         {
-            var idx = _sectionsOrdered.FindIndex(s =>
-                string.Equals(s.Name, section.Name, StringComparison.OrdinalIgnoreCase));
-            if (idx >= 0) _sectionsOrdered.RemoveAt(idx);
+            _sectionsOrdered.Remove(existing);
         }
         _sectionsOrdered.Insert(0, section);
         _sections[section.Name] = section;

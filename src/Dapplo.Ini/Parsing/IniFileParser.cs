@@ -78,8 +78,18 @@ public static class IniFileParser
                     IReadOnlyList<string> comments = pendingComments.Count > 0
                         ? pendingComments.ToArray()
                         : (IReadOnlyList<string>)Array.Empty<string>();
-                    currentSection = new IniSection(sectionName, comments, keyComparer);
-                    iniFile.AddSection(currentSection);
+                    // A repeated header continues the existing section instead of replacing it,
+                    // so that earlier keys are not lost and duplicate-key handling still applies.
+                    var existingSection = iniFile.GetSection(sectionName);
+                    if (existingSection != null)
+                    {
+                        currentSection = existingSection;
+                    }
+                    else
+                    {
+                        currentSection = new IniSection(sectionName, comments, keyComparer);
+                        iniFile.AddSection(currentSection);
+                    }
                 }
                 pendingComments.Clear();
                 continue;

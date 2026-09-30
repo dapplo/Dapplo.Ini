@@ -565,8 +565,18 @@ public sealed class LanguageConfig : IDisposable
 
         _debounceTimer = new System.Threading.Timer(_ =>
         {
-            if (!_disposed)
+            if (_disposed) return;
+            // This runs on a thread-pool thread: an unhandled exception here would terminate the
+            // process (e.g. an IOException while an editor is still writing the file).
+            try
+            {
                 ReloadCurrentLanguage();
+            }
+            catch (Exception ex)
+            {
+                try { NotifyListeners(l => l.OnError("Reload", ex)); }
+                catch { /* a failing listener must not crash the process either */ }
+            }
         }, null, Timeout.Infinite, Timeout.Infinite);
 
         foreach (var dir in directories)

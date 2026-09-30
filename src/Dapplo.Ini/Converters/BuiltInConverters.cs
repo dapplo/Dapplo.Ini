@@ -128,7 +128,7 @@ public sealed class DoubleConverter : ValueConverterBase<double>
     public override double ConvertFromString(string? raw, double defaultValue = default)
     {
         if (string.IsNullOrWhiteSpace(raw)) return defaultValue;
-        return double.Parse(raw!.Trim(), CultureInfo.InvariantCulture);
+        return double.Parse(raw!.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture);
     }
 
     public override string? ConvertToString(double value)
@@ -141,7 +141,7 @@ public sealed class FloatConverter : ValueConverterBase<float>
     public override float ConvertFromString(string? raw, float defaultValue = default)
     {
         if (string.IsNullOrWhiteSpace(raw)) return defaultValue;
-        return float.Parse(raw!.Trim(), CultureInfo.InvariantCulture);
+        return float.Parse(raw!.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture);
     }
 
     public override string? ConvertToString(float value)
@@ -154,7 +154,7 @@ public sealed class DecimalConverter : ValueConverterBase<decimal>
     public override decimal ConvertFromString(string? raw, decimal defaultValue = default)
     {
         if (string.IsNullOrWhiteSpace(raw)) return defaultValue;
-        return decimal.Parse(raw!.Trim(), CultureInfo.InvariantCulture);
+        return decimal.Parse(raw!.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture);
     }
 
     public override string? ConvertToString(decimal value)

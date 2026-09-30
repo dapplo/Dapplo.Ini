@@ -13,23 +13,102 @@ public static class IniFileWriter
 {
     /// <summary>Writes <paramref name="iniFile"/> to the file at <paramref name="filePath"/> using the specified
     /// <paramref name="encoding"/> (defaults to UTF-8 when <c>null</c>).</summary>
+    /// <remarks>
+    /// The content is first written to a temporary file next to <paramref name="filePath"/>, flushed to disk,
+    /// and then swapped into place. A crash or a full disk during the write therefore never leaves a
+    /// truncated or empty INI file behind: either the old or the new content is on disk.
+    /// </remarks>
     public static void WriteFile(string filePath, IniFile iniFile, Encoding? encoding = null, IniWriterOptions? options = null)
     {
-        using var writer = new StreamWriter(filePath, append: false, encoding ?? Encoding.UTF8);
-        Write(writer, iniFile, options);
+        var tempPath = CreateTempPath(filePath);
+        try
+        {
+            using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                using (var writer = new StreamWriter(stream, encoding ?? Encoding.UTF8, 4096, leaveOpen: true))
+                {
+                    Write(writer, iniFile, options);
+                }
+                stream.Flush(flushToDisk: true);
+            }
+            ReplaceFile(tempPath, filePath);
+        }
+        catch
+        {
+            TryDelete(tempPath);
+            throw;
+        }
     }
 
     /// <summary>Asynchronously writes <paramref name="iniFile"/> to the file at <paramref name="filePath"/> using the
     /// specified <paramref name="encoding"/> (defaults to UTF-8 when <c>null</c>).</summary>
+    /// <remarks>Uses the same write-to-temp-then-replace strategy as <see cref="WriteFile"/>.</remarks>
     public static async Task WriteFileAsync(string filePath, IniFile iniFile, Encoding? encoding = null, IniWriterOptions? options = null, CancellationToken cancellationToken = default)
     {
         var content = WriteToString(iniFile, options);
-#if NET
-        await File.WriteAllTextAsync(filePath, content, encoding ?? Encoding.UTF8, cancellationToken).ConfigureAwait(false);
-#else
-        using var writer = new StreamWriter(filePath, append: false, encoding ?? Encoding.UTF8);
-        await writer.WriteAsync(content).ConfigureAwait(false);
-#endif
+        var bytes = (encoding ?? Encoding.UTF8).GetPreamble().Concat((encoding ?? Encoding.UTF8).GetBytes(content)).ToArray();
+        var tempPath = CreateTempPath(filePath);
+        try
+        {
+            using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous))
+            {
+                await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
+                stream.Flush(flushToDisk: true);
+            }
+            ReplaceFile(tempPath, filePath);
+        }
+        catch
+        {
+            TryDelete(tempPath);
+            throw;
+        }
+    }
+
+    private static string CreateTempPath(string filePath)
+    {
+        var fullPath = Path.GetFullPath(filePath);
+        var directory = Path.GetDirectoryName(fullPath) ?? ".";
+        return Path.Combine(directory, $"{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
+    }
+
+    private static void ReplaceFile(string tempPath, string filePath)
+    {
+        if (!File.Exists(filePath))
+        {
+            try
+            {
+                File.Move(tempPath, filePath);
+                return;
+            }
+            catch (IOException) when (File.Exists(filePath))
+            {
+                // Somebody created the target in the meantime; fall through to Replace.
+            }
+        }
+
+        try
+        {
+            File.Replace(tempPath, filePath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+        }
+        catch (Exception ex) when (ex is IOException or PlatformNotSupportedException or UnauthorizedAccessException && File.Exists(tempPath))
+        {
+            // Some file systems (e.g. certain network shares) do not support File.Replace.
+            // Fall back to a copy, which is not atomic but still never truncates before the data is complete.
+            File.Copy(tempPath, filePath, overwrite: true);
+            TryDelete(tempPath);
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch
+        {
+            // Best effort cleanup of a temporary file.
+        }
     }
 
     /// <summary>Returns the INI file as a string.</summary>

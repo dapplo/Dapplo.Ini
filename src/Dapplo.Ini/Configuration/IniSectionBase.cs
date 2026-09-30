@@ -82,9 +82,7 @@ public abstract class IniSectionBase : IIniSection
     /// <inheritdoc/>
     public void SetRawValue(string key, string? value)
     {
-        if (_constantKeys.Contains(key))
-            throw new AccessViolationException(
-                $"The configuration key '{key}' in section '{SectionName}' is protected by an administrator constants file and cannot be modified.");
+        ThrowIfConstant(key);
 
         _currentKey = key;
         try
@@ -96,6 +94,48 @@ public abstract class IniSectionBase : IIniSection
         finally
         {
             _currentKey = null;
+        }
+    }
+
+    /// <summary>
+    /// Stores the raw representation of a value that was assigned through a typed property setter.
+    /// Unlike <see cref="SetRawValue"/> this does <em>not</em> call <see cref="OnRawValueSet"/>, so the
+    /// value the caller assigned stays in the backing field exactly as given (no string round-trip).
+    /// Used by generated property setters.
+    /// </summary>
+    /// <exception cref="AccessViolationException">The key is protected by a constants file.</exception>
+    protected void SetRawValueFromProperty(string key, string? value)
+    {
+        ThrowIfConstant(key);
+        _rawValues[key] = value;
+        _isDirty = true;
+    }
+
+    /// <summary>
+    /// Throws <see cref="AccessViolationException"/> when <paramref name="key"/> is protected by a constants file.
+    /// Generated setters call this before they change anything, so a rejected assignment leaves the section untouched.
+    /// </summary>
+    protected void ThrowIfConstant(string key)
+    {
+        if (_constantKeys.Contains(key))
+            throw new AccessViolationException(
+                $"The configuration key '{key}' in section '{SectionName}' is protected by an administrator constants file and cannot be modified.");
+    }
+
+    /// <summary>
+    /// Throws <see cref="AccessViolationException"/> when any sub-key of the sub-key dictionary
+    /// <paramref name="keyPrefix"/> (keys of the form <c>prefix.subkey</c>) is protected by a constants file.
+    /// </summary>
+    protected void ThrowIfConstantPrefix(string keyPrefix)
+    {
+        foreach (var constantKey in _constantKeys)
+        {
+            if (constantKey.Length > keyPrefix.Length
+                && constantKey[keyPrefix.Length] == '.'
+                && constantKey.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                ThrowIfConstant(constantKey);
+            }
         }
     }
 

@@ -690,6 +690,23 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             sb.AppendLine("                var __value = value;");
             sb.AppendLine($"                On{p.Name}Set(ref __value);");
 
+            if (!p.IsIgnored && !p.IsRuntimeOnly)
+            {
+                // Reject writes to constant keys BEFORE anything changes (field, events, raw value).
+                string constantKey = EscapeString(p.KeyName ?? p.Name);
+                sb.AppendLine(p.IsSubKeyDictionary
+                    ? $"                ThrowIfConstantPrefix(\"{constantKey}\");"
+                    : $"                ThrowIfConstant(\"{constantKey}\");");
+
+                // Setters no longer round-trip through the converter, so apply the empty-when-null
+                // rule here: assigning null gives the same empty value a missing INI key would give.
+                if (!p.IsValueType && !p.IsSubKeyDictionary)
+                {
+                    string emptyCondition = p.EmptyWhenNull ? "__value == null" : "__value == null && GlobalEmptyWhenNull";
+                    sb.AppendLine($"                if ({emptyCondition}) __value = {BuildConvertFromRawCall(p, "\"\"")}!;");
+                }
+            }
+
             // Determine which events this property should emit.
             // Events are generated at interface level; per-property attributes can suppress them.
             bool emitChanging = m.ImplementsINotifyPropertyChanging && !p.SuppressPropertyChanging;
@@ -721,26 +738,26 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                     if (usesTx)
                     {
                         sb.AppendLine($"                {txFieldName} = __value;");
-                        sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = __value; {fieldName}HasRawEntries = true; if (__value != null) foreach (var __kvp in __value) SetRawValue($\"{keyNameForSet}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value)); }}");
+                        sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = __value; {fieldName}HasRawEntries = true; if (__value != null) foreach (var __kvp in __value) SetRawValueFromProperty($\"{keyNameForSet}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value)); }}");
                     }
                     else
                     {
                         sb.AppendLine($"                {fieldName} = __value;");
                         sb.AppendLine($"                {fieldName}HasRawEntries = true;");
-                        sb.AppendLine($"                if (__value != null) foreach (var __kvp in __value) SetRawValue($\"{keyNameForSet}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value));");
+                        sb.AppendLine($"                if (__value != null) foreach (var __kvp in __value) SetRawValueFromProperty($\"{keyNameForSet}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value));");
                     }
                 }
                 else if (usesTx)
                 {
                     var convertToRawValue = BuildConvertToRawCall(p, "__value");
                     sb.AppendLine($"                {txFieldName} = __value;");
-                    sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = __value; SetRawValue(\"{keyNameForSet}\", {convertToRawValue}); }}");
+                    sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = __value; SetRawValueFromProperty(\"{keyNameForSet}\", {convertToRawValue}); }}");
                 }
                 else
                 {
                     var convertToRawValue = BuildConvertToRawCall(p, "__value");
                     sb.AppendLine($"                {fieldName} = __value;");
-                    sb.AppendLine($"                SetRawValue(\"{keyNameForSet}\", {convertToRawValue});");
+                    sb.AppendLine($"                SetRawValueFromProperty(\"{keyNameForSet}\", {convertToRawValue});");
                 }
             }
 

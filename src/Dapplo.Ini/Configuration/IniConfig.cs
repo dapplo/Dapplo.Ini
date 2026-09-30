@@ -307,7 +307,7 @@ public sealed class IniConfig : IDisposable
             }
             catch (Exception ex)
             {
-                NotifyListeners(l => l.OnError("Save", ex));
+                NotifyError("Save", ex);
                 throw;
             }
         }
@@ -393,7 +393,7 @@ public sealed class IniConfig : IDisposable
             }
             catch (Exception ex)
             {
-                NotifyListeners(l => l.OnError("Save", ex));
+                NotifyError("Save", ex);
                 throw;
             }
         }
@@ -455,8 +455,9 @@ public sealed class IniConfig : IDisposable
                 // 2. Apply default files
                 foreach (var path in DefaultFilePaths)
                 {
-                    if (File.Exists(path))
-                        ApplyIniFile(IniFileParser.ParseFile(path, Encoding, ParserOptions), isDefault: true);
+                    var resolvedDefault = ResolveAuxiliaryFilePath(path);
+                    if (resolvedDefault != null)
+                        ApplyIniFile(IniFileParser.ParseFile(resolvedDefault, Encoding, ParserOptions), isDefault: true);
                 }
 
                 // 3. Apply user file
@@ -468,8 +469,9 @@ public sealed class IniConfig : IDisposable
                 // 4. Apply constant files
                 foreach (var path in ConstantFilePaths)
                 {
-                    if (File.Exists(path))
-                        ApplyIniFile(IniFileParser.ParseFile(path, Encoding, ParserOptions), isConstant: true);
+                    var resolvedConstant = ResolveAuxiliaryFilePath(path);
+                    if (resolvedConstant != null)
+                        ApplyIniFile(IniFileParser.ParseFile(resolvedConstant, Encoding, ParserOptions), isConstant: true);
                 }
 
                 // 5. Apply external value sources
@@ -487,7 +489,7 @@ public sealed class IniConfig : IDisposable
             }
             catch (Exception ex)
             {
-                NotifyListeners(l => l.OnError("Reload", ex));
+                NotifyError("Reload", ex);
                 throw;
             }
         }
@@ -546,8 +548,9 @@ public sealed class IniConfig : IDisposable
                 // 2. Apply default files
                 foreach (var path in DefaultFilePaths)
                 {
-                    if (File.Exists(path))
-                        ApplyIniFile(await IniFileParser.ParseFileAsync(path, Encoding, ParserOptions, cancellationToken).ConfigureAwait(false), isDefault: true);
+                    var resolvedDefault = ResolveAuxiliaryFilePath(path);
+                    if (resolvedDefault != null)
+                        ApplyIniFile(await IniFileParser.ParseFileAsync(resolvedDefault, Encoding, ParserOptions, cancellationToken).ConfigureAwait(false), isDefault: true);
                 }
 
                 // 3. Apply user file
@@ -559,8 +562,9 @@ public sealed class IniConfig : IDisposable
                 // 4. Apply constant files
                 foreach (var path in ConstantFilePaths)
                 {
-                    if (File.Exists(path))
-                        ApplyIniFile(await IniFileParser.ParseFileAsync(path, Encoding, ParserOptions, cancellationToken).ConfigureAwait(false), isConstant: true);
+                    var resolvedConstant = ResolveAuxiliaryFilePath(path);
+                    if (resolvedConstant != null)
+                        ApplyIniFile(await IniFileParser.ParseFileAsync(resolvedConstant, Encoding, ParserOptions, cancellationToken).ConfigureAwait(false), isConstant: true);
                 }
 
                 // 5. Apply external value sources (sync and async)
@@ -580,7 +584,7 @@ public sealed class IniConfig : IDisposable
             }
             catch (Exception ex)
             {
-                NotifyListeners(l => l.OnError("Reload", ex));
+                NotifyError("Reload", ex);
                 throw;
             }
         }
@@ -664,7 +668,7 @@ public sealed class IniConfig : IDisposable
         _reloadDebounceTimer = new System.Threading.Timer(_ =>
         {
             if (!_disposed)
-                Reload();
+                RunInBackground("Reload", Reload);
         }, null, Timeout.Infinite, Timeout.Infinite);
 
         var dir  = Path.GetDirectoryName(LoadedFromPath)!;
@@ -715,7 +719,7 @@ public sealed class IniConfig : IDisposable
         _processExitHandler = (_, _) =>
         {
             if (!_disposed)
-                Save();
+                RunInBackground("Save", Save);
         };
         AppDomain.CurrentDomain.ProcessExit += _processExitHandler;
     }
@@ -757,7 +761,7 @@ public sealed class IniConfig : IDisposable
         _autoSaveTimer = new System.Threading.Timer(_ =>
         {
             if (!_disposed && Volatile.Read(ref _autoSavePauseCount) == 0 && HasPendingChanges())
-                Save();
+                RunInBackground("Save", Save);
         }, null, interval, interval);
     }
 
@@ -936,7 +940,7 @@ public sealed class IniConfig : IDisposable
         }
         catch (Exception ex)
         {
-            NotifyListeners(l => l.OnError("Load", ex));
+            NotifyError("Load", ex);
             throw;
         }
 
@@ -1053,7 +1057,7 @@ public sealed class IniConfig : IDisposable
         }
         catch (Exception ex)
         {
-            NotifyListeners(l => l.OnError("Load", ex));
+            NotifyError("Load", ex);
             throw;
         }
 
@@ -1123,6 +1127,37 @@ public sealed class IniConfig : IDisposable
         if (Listeners.Count == 0) return;
         foreach (var listener in Listeners)
             notify(listener);
+    }
+
+    // Key stored in Exception.Data once an exception has been reported to the listeners,
+    // so that background wrappers do not report the same exception twice.
+    private const string ReportedKey = "Dapplo.Ini.ReportedToListeners";
+
+    /// <summary>Reports <paramref name="exception"/> to all listeners via <see cref="IIniConfigListener.OnError"/>.</summary>
+    private void NotifyError(string operation, Exception exception)
+    {
+        try { exception.Data[ReportedKey] = true; }
+        catch { /* some exceptions have a read-only Data dictionary */ }
+        NotifyListeners(l => l.OnError(operation, exception));
+    }
+
+    /// <summary>
+    /// Runs <paramref name="action"/> on a background thread context (timer, file watcher, process exit),
+    /// where an unhandled exception would terminate the process. Exceptions are reported to the
+    /// listeners instead of being re-thrown.
+    /// </summary>
+    private void RunInBackground(string operation, Action action)
+    {
+        try
+        {
+            action();
+        }
+        catch (Exception ex)
+        {
+            if (ex.Data.Contains(ReportedKey)) return;
+            try { NotifyError(operation, ex); }
+            catch { /* a failing listener must not crash the process */ }
+        }
     }
 
     // The name of the special metadata section prepended to the INI file when opted in.
