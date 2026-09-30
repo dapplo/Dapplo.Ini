@@ -7,7 +7,7 @@ synchronous and an asynchronous variant.
 
 | Interface | Trigger | Return type | Behaviour |
 |-----------|---------|-------------|-----------|
-| `IAfterLoad<TSelf>` | After `Build()` and `Reload()` | `void` | Normalize, decrypt, derive values |
+| `IAfterLoad<TSelf>` | After `Build()` / `Load()`, `Reload()`, and a late `AddSection()` | `void` | Normalize, decrypt, migrate, derive values |
 | `IBeforeSave<TSelf>` | Before writing to disk | `bool` | Return `false` to cancel the save |
 | `IAfterSave<TSelf>` | After a successful write | `void` | Notify, audit, log |
 
@@ -15,13 +15,29 @@ synchronous and an asynchronous variant.
 
 | Interface | Trigger | Return type | Behaviour |
 |-----------|---------|-------------|-----------|
-| `IAfterLoadAsync` | After `BuildAsync()` and `ReloadAsync()` | `Task` | Async normalize, decrypt, derive values |
+| `IAfterLoadAsync` | After `BuildAsync()` / `LoadAsync()`, `ReloadAsync()`, and a late `AddSectionAsync()` | `Task` | Async normalize, decrypt, derive values |
 | `IBeforeSaveAsync` | Before writing to disk during `SaveAsync()` | `Task<bool>` | Return `false` to cancel the save |
 | `IAfterSaveAsync` | After a successful async write | `Task` | Async notify, audit, log |
 
 > **Fallback:** When `BuildAsync` / `ReloadAsync` is used, if a section implements only
 > `IAfterLoad` (not `IAfterLoadAsync`), the sync hook is called automatically. The same
 > fallback applies to `IBeforeSave` / `IAfterSave` during `SaveAsync`.
+
+---
+
+## What hooks may and may not do
+
+- **Changes made in `IAfterLoad` are saved.** Dirty flags are cleared *before* the
+  `IAfterLoad` hooks run, so a value a hook changes (a migration, a normalisation) stays
+  dirty and is written by the next `Save()` or auto-save.  Assigning a value-type or
+  `string` property its current value does not mark the section dirty.
+- **Do not call `Load()` / `Reload()` from a hook** (or from a listener) while that load,
+  reload or save is running: it throws `InvalidOperationException`.  Mark the section dirty
+  instead, or reload after the operation has finished.
+- `Save()` from an `IAfterLoad` hook runs directly, as part of the load.  `Save()` from
+  inside a save hook (`IBeforeSave` / `IAfterSave`) returns immediately.
+- `AddSection<T>()` from a hook — e.g. a host section's `IAfterLoad` that starts plugins —
+  runs inline (with `AllowLateSectionRegistration()`, see [[Plugin-Registrations]]).
 
 ---
 
@@ -64,7 +80,9 @@ public interface IServerSettings
 ```
 
 The source generator detects these generic interfaces and emits a bridge in the
-generated class so the framework can dispatch the hooks at runtime.
+generated class so the framework can dispatch the hooks at runtime.  The generic async
+hooks `IAfterLoadAsync<TSelf>`, `IBeforeSaveAsync<TSelf>` and `IAfterSaveAsync<TSelf>` are
+bridged the same way.
 
 ### Method signatures
 
@@ -197,7 +215,8 @@ public partial class MySettingsImpl
 }
 ```
 
-Async hooks are called by `BuildAsync`, `ReloadAsync`, and `SaveAsync`.  If a section
+Async hooks are called by `BuildAsync`, `LoadAsync`, `ReloadAsync`, `SaveAsync`, and
+`AddSectionAsync`.  If a section
 implements only the synchronous variants, those are called as a fallback.  Mixing sync
 and async sections in the same `IniConfig` is fully supported.
 

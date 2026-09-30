@@ -108,6 +108,19 @@ Setting a property to its current value is a no-op — no events are fired and t
 raw-value store is not updated.  This prevents infinite loops in WPF/Avalonia
 two-way bindings.
 
+For value types and `string` the check is emitted even when no event is generated, so
+assigning an unchanged value never marks the section dirty.  (Collections are excluded:
+re-assigning the same, mutated instance is still recorded as a change.)
+
+---
+
+## Notifications after a reload
+
+`Reload()` / `ReloadAsync()` (and file-change reloads) set values without going through the
+setters.  Sections that implement `INotifyPropertyChanged` get a `PropertyChanged` event for
+every property whose value the reload changed, raised after the reload has completed on the
+thread that ran it — marshal to the UI thread where needed.  See [[Reloading]].
+
 ---
 
 ## Integration with WPF / Avalonia data binding

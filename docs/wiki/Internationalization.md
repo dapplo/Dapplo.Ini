@@ -67,7 +67,8 @@ Examples for basename `myapp`:
 
 ### Key rules
 
-- Each line: `key=value` (everything after the first `=` is the raw value).
+- Each line: `key=value` (everything after the first `=` is the raw value; whitespace around
+  the `=` is trimmed, so `key = value` gives `value`).
 - Keys are **trimmed**; underscores `_` and dashes `-` are removed before
   comparison, so `Welcome_Message`, `WelcomeMessage`, and `welcomemessage` all
   refer to the same property.
@@ -255,12 +256,17 @@ When a requested language is not fully available, the loader falls back
 progressively from most-specific to least-specific:
 
 1. Base / fallback language loaded first (provides the floor for missing keys).
-2. Parent culture — e.g. `de` when requesting `de-DE`.
-3. Specific culture — `de-DE` overwrites keys from the parent.
+2. Every parent culture, least specific first — e.g. `de` when requesting `de-DE`, or `zh`
+   and then `zh-Hant` when requesting `zh-Hant-TW`.
+3. Specific culture — `de-DE` / `zh-Hant-TW` overwrites keys from the parents.
 
 This means switching to `de-DE` when only a partial `de-DE` file exists will
 still show the German base strings from `de.ini` rather than the `###key###`
 sentinel.
+
+The translations of a section are built completely and then swapped in at once, so a UI
+thread reading a property during a language switch or file-change reload sees either the
+old or the new language — never a half-loaded mix.
 
 ### `UseFallback()`
 
@@ -384,7 +390,8 @@ immediately visible in the UI during development.
 Call `.MonitorFiles()` on the builder to automatically reload all language
 sections when any language file in a watched directory changes on disk. The
 reload is debounced (200 ms) to handle editors that write files in multiple
-steps.
+steps. An exception during such a reload is reported via `IIniConfigListener.OnError`
+(see [[Listeners]]) instead of crashing the process.
 
 ```csharp
 using var config = LanguageConfigRegistry.ForFile("myapp")

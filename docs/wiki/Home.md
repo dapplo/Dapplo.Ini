@@ -14,6 +14,7 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
 - ✅ **Lifecycle hooks** implementable directly in the section interface via static virtuals (C# 11+)
 - ✅ Extensible **value converter** system (custom converters for encryption etc.)
 - ✅ **Async support** — `BuildAsync`, `ReloadAsync`, `SaveAsync`, async lifecycle hooks, and `IValueSourceAsync` for REST APIs / remote configuration services
+- ✅ **Late section registration** — `AllowLateSectionRegistration()` lets plugins add their sections after the load (e.g. when the host's settings decide which plugins run), populated without re-reading any file; `PreserveUnknownSections()` keeps sections of plugins that are not loaded on save
 - ✅ **DI-friendly async loading** — `InitialLoadTask` lets consumers await the initial load while sections are injected as singletons immediately
 - ✅ **Migration support** — unknown-key callbacks, `IUnknownKey<TSelf>`, and an optional `[__metadata__]` section for version-gated upgrades
 - ✅ **Internationalization** — `.ini`-based language packs with source-generated type-safe interfaces, progressive fallback, plugin-friendly deferred loading, and optional file monitoring
@@ -77,7 +78,7 @@ config.Save();
 | [[Ini-File-Format]] | INI file syntax, value formats, collections, comments, and a complete example |
 | [[Defining-Sections]] | `[IniSection]` and `[IniValue]` attribute reference, generated class naming |
 | [[Loading-Life-Cycle]] | Complete order in which values are resolved during `Build()` / `Reload()` |
-| [[Plugin-Registrations]] | Three-phase `Create()` / `AddSection` / `Load()` pattern for plugin-based apps |
+| [[Plugin-Registrations]] | Three-phase `Create()` / `AddSection` / `Load()` pattern and late registration for plugin-based apps |
 | [[Loading-Configuration]] | `IniConfigBuilder` fluent API, AppData, write target |
 | [[Reloading]] | `Reload()`, `ReloadAsync()`, singleton guarantee, `Reloaded` event |
 | [[Saving]] | `Save()`, `SaveAsync()`, `IBeforeSave`, `IAfterSave` |

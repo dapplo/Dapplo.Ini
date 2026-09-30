@@ -22,6 +22,18 @@ using var config = IniConfigRegistry.ForFile("myapp.ini")
 config.RequestPostponedReload();
 ```
 
+The watcher reacts to `Changed`, `Created` and `Renamed` events, so editors that save by
+writing a new file and swapping it in (and a file that is created after start-up) also
+trigger a reload.  Rapid successive events are debounced (`debounceMs`, 200 ms by default)
+into a single reload.
+
+The reload runs on a thread-pool thread:
+
+- An exception during that reload (e.g. the file is still locked by the editor) is reported
+  via `IIniConfigListener.OnError("Reload", …)` and does not crash the process — see [[Listeners]].
+- `PropertyChanged` events for the changed values are raised on that thread, so UI code must
+  marshal to the UI thread itself — see [[Reloading#change-notifications-after-a-reload]].
+
 ---
 
 ## ReloadDecision values

@@ -58,7 +58,7 @@ your interface definitions stay clean and interoperable.
 
 | Attribute | Effect |
 |---|---|
-| `[DefaultValue(value)]` | Sets the default value. Accepts any value type; converted to string internally. |
+| `[DefaultValue(value)]` | Sets the default value. Accepts any value type; converted to string internally. The `[DefaultValue(typeof(T), "…")]` form (e.g. `typeof(TimeSpan), "00:01:30"`) and array values (`new[] { "a", "b" }` for a list) work too. |
 | `[Description("...")]` | Written as a comment above the key in the INI file |
 | `[DataMember(Name = "...")]` | Overrides the key name in the INI file |
 | `[IgnoreDataMember]` | Excludes the property from all INI read/write operations (and from `ResetToDefaults`) |
@@ -371,8 +371,14 @@ The generator derives the concrete class name from the interface name:
 | `IDbConfig` | `DbConfigImpl` | `DbConfigImpl.g.cs` |
 | `IUserProfile` | `UserProfileImpl` | `UserProfileImpl.g.cs` |
 | `ServerConfig` *(no leading I)* | `ServerConfigImpl` | `ServerConfigImpl.g.cs` |
+| `Interval` *(starts with `I`, but no prefix)* | `IntervalImpl` | `IntervalImpl.g.cs` |
 
-The rule is: strip a leading `I` (if present) and append `Impl`.
+The rule is: strip a leading `I` **when it is followed by an uppercase letter** and append
+`Impl`.  The same rule gives the default section name, so `Interval` keeps its name
+(section `[Interval]`; before, it became `nterval`).
+
+The generator also implements properties inherited from base section interfaces, and
+supports section interfaces nested inside a class.
 The file is generated into your project's intermediate output folder and compiled automatically.
 
 Because the generated class is declared `partial`, you can extend it with your own

@@ -44,6 +44,15 @@ using var config = IniConfigRegistry.ForFile("app.ini")
 
 ---
 
+## Rules that always apply
+
+- A repeated `[Section]` header **continues** the existing section instead of replacing it,
+  so keys above the second header are kept and `DuplicateKeyHandling` applies across both parts.
+- A leading byte order mark (`\uFEFF`) in the string passed to `IniFileParser.Parse(string)`
+  is ignored.
+
+---
+
 ## Options reference
 
 ### `AssignmentDelimiters`
@@ -119,6 +128,10 @@ have their surrounding quote characters stripped.  Interior whitespace is preser
 | `true` | `key = '  spaces  '` | `  spaces  ` |
 | `true` | `key = plain value` | `plain value` *(unchanged — no quotes)* |
 
+When `QuotedValues` is on and `EscapeSequences` is off, the parser also undoes the quote
+escaping the writer applies to quoted values (`\"` inside `"…"`), so values written with
+`QuoteValuesOnWrite()` round-trip.  Hand-written values such as `"C:\Temp\"` are kept as written.
+
 ```csharp
 var opts = new IniParserOptions { QuotedValues = true };
 var file = IniFileParser.Parse(content, opts);
@@ -159,6 +172,15 @@ Command = first \
 ```
 
 Parsed value with `LineContinuation = true`: `first second third`
+
+Details:
+
+- Only an **odd** number of trailing backslashes continues the line: `abc\` continues,
+  `C:\Temp\\` (an escaped backslash) does not.
+- A section header is never swallowed: continuation stops before a `[Section]` line.
+  When the next line is a section header, a blank line or the end of the file, the value is
+  kept as written, including its trailing backslash (e.g. `Dir = C:\Temp\` followed by `[Next]`).
+- An empty continuation line ends the value.
 
 ```csharp
 var opts = new IniParserOptions { LineContinuation = true };

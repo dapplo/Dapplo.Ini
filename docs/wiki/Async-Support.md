@@ -84,8 +84,11 @@ public class MyWorker
 }
 ```
 
-> **Note:** `InitialLoadTask` is `Task.CompletedTask` after a synchronous `Build()`.
-> Awaiting it in that case is a no-op and incurs no overhead.
+> **Note:** `InitialLoadTask` completes when the first `Load()` / `LoadAsync()` succeeds,
+> however it was started: `Build()`, `BuildAsync()`, or `Create()` followed by `Load()` /
+> `LoadAsync()`. After a synchronous `Build()` it is already completed, so awaiting it is a
+> no-op. After `Create()` it stays pending until the load has run. When the load fails the
+> task **faults** with the load exception, so awaiting consumers see the error.
 
 ---
 
@@ -130,13 +133,18 @@ Three async lifecycle interfaces parallel the existing synchronous ones:
 
 | Interface | Trigger | Return type |
 |-----------|---------|-------------|
-| `IAfterLoadAsync` | After `BuildAsync()` or `ReloadAsync()` | `Task` |
+| `IAfterLoadAsync` | After `BuildAsync()`, `LoadAsync()`, `ReloadAsync()`, or `AddSectionAsync()` after the load | `Task` |
 | `IBeforeSaveAsync` | Before writing to disk during `SaveAsync()` | `Task<bool>` — return `false` to cancel |
 | `IAfterSaveAsync` | After a successful async write | `Task` |
 
-These hooks are called only from the async code paths (`BuildAsync`, `ReloadAsync`,
-`SaveAsync`).  The synchronous `Build()`, `Reload()`, and `Save()` continue to call the
-synchronous hooks only.
+These hooks are called only from the async code paths (`BuildAsync`, `LoadAsync`,
+`ReloadAsync`, `SaveAsync`, `AddSectionAsync`).  The synchronous `Build()`, `Load()`,
+`Reload()`, `Save()` and `AddSection()` continue to call the synchronous hooks only.
+
+> **Caution — sync over async:** do not block the UI thread on a synchronous `Save()` /
+> `Reload()` while an async hook of another running operation awaits that same UI thread;
+> the synchronous call waits for the lifecycle gate and the hook can never continue.
+> Use the async variants from UI code.
 
 ### Implementing async hooks (instance methods)
 
@@ -248,8 +256,9 @@ var config = await IniConfigRegistry.ForFile("app.ini")
 `IValueSourceAsync`.  Async sources are applied **after** all synchronous sources, in
 registration order.
 
-> **Important:** Async value sources are only consulted during `BuildAsync()` and
-> `ReloadAsync()`.  The synchronous `Build()` and `Reload()` skip async sources.
+> **Important:** Async value sources are only consulted during `BuildAsync()`, `LoadAsync()`,
+> `ReloadAsync()` and `AddSectionAsync()`.  The synchronous `Build()`, `Load()`, `Reload()`
+> and `AddSection()` skip async sources.
 
 ### Triggering a reload when remote values change
 

@@ -25,10 +25,10 @@ property of an `[IniSection]` interface.  The source generator automatically:
 
 | Attribute | Trigger condition | Default error message |
 |---|---|---|
-| `[Required]` | `string.IsNullOrEmpty` (strings) / `== null` (nullable refs & nullable value types) | `"{PropertyName} is required."` |
-| `[Range(min, max)]` | value outside `[min, max]` (uses `IComparable`) | `"{PropertyName} must be between {min} and {max}."` |
-| `[MaxLength(n)]` | `string.Length > n` (null is skipped) | `"{PropertyName} must not exceed {n} characters."` |
-| `[RegularExpression(pattern)]` | `Regex.IsMatch` returns `false` (null is skipped) | `"{PropertyName} does not match the required pattern."` |
+| `[Required]` | `string.IsNullOrWhiteSpace` (strings) / `== null` (nullable refs & nullable value types) | `"{PropertyName} is required."` |
+| `[Range(min, max)]` | value outside `[min, max]` (uses `IComparable`); works for `int`, `long`, `double`, `decimal`, nullable types (null is skipped) and the `[Range(typeof(T), "min", "max")]` form | `"{PropertyName} must be between {min} and {max}."` |
+| `[MaxLength(n)]` | `string.Length > n`, or more than `n` elements for lists/arrays (null is skipped) | `"{PropertyName} must not exceed {n} characters."` |
+| `[RegularExpression(pattern)]` | `Regex.IsMatch` returns `false`; non-string values are matched on their invariant-culture string (null is skipped) | `"{PropertyName} does not match the required pattern."` |
 
 All attributes support the `ErrorMessage` property to override the default message.
 

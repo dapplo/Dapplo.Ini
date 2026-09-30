@@ -14,6 +14,45 @@ await config.SaveAsync(cancellationToken);
 
 ---
 
+## How the file is written
+
+Saving is **atomic**: the content is written to a temporary file next to the INI file
+(`<name>.ini.<guid>.tmp`), flushed to disk and then swapped in with `File.Replace` (retried a
+few times when a virus scanner or editor briefly holds the file).  A crash or a full disk
+during the save never leaves a truncated or empty INI file behind.
+
+The file is written in place instead when it is a symbolic link (replacing it would turn the
+link into a plain file) or when no temporary file can be created in its folder (for example
+when only the file itself is writable).
+
+Other details:
+
+- A value that contains a line break is always written with escape sequences (`\n`, `\r`),
+  because a raw line break could inject keys or sections into the file.  Enable
+  `EscapeSequences` on the parser ([[Parser-Options]]) to read it back as a line break.
+- A multi-line `Description` is written with `; ` in front of every line.
+- By default only registered sections are written.  Use `PreserveUnknownSections()` to keep
+  sections of plugins that are not loaded — see [[Plugin-Registrations#keeping-the-settings-of-plugins-that-are-not-loaded]].
+
+---
+
+## Concurrency
+
+`Load`, `Reload`, `Save` and `AddSection` are serialised by one lifecycle gate:
+
+| Situation | Behaviour |
+|-----------|-----------|
+| `Save()` while another load, reload or save is running | Waits for it to finish, then saves the latest values |
+| `Save()` from inside a save (e.g. an `IBeforeSave` hook) | Returns immediately |
+| `Save()` from a load/reload hook or a listener | Runs directly, as part of that operation |
+| Auto-save tick while another operation is running | The tick is skipped; the next tick tries again |
+
+> **Caution:** do not block the UI thread on `Save()` while an async hook
+> (`IBeforeSaveAsync` / `IAfterSaveAsync`) awaits that same UI thread — this sync-over-async
+> pattern deadlocks.  Use `await SaveAsync()` in UI code.
+
+---
+
 ## Configuring write behavior
 
 Use `IniWriterOptions` (file-level) or convenience methods on `IniConfigBuilder`:
