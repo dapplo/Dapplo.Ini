@@ -543,7 +543,10 @@ public sealed class DictionaryConverter<TKey, TValue> : ValueConverterBase<Dicti
         if (raw.Trim().Length == 0) return new Dictionary<TKey, TValue>();
 
         var pairs = DelimitedValues.SplitRaw(raw, _pairSeparator, _keyValueSeparator);
-        var result = new Dictionary<TKey, TValue>(pairs.Count);
+        // String keys are case-insensitive, like INI keys and the sub-key dictionaries the generator creates.
+        var result = typeof(TKey) == typeof(string)
+            ? new Dictionary<TKey, TValue>(pairs.Count, (IEqualityComparer<TKey>)(object)StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<TKey, TValue>(pairs.Count);
         foreach (var kv in pairs)
         {
             var sepIdx = DelimitedValues.IndexOfUnquoted(kv, _keyValueSeparator);

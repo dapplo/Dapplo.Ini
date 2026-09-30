@@ -160,6 +160,28 @@ public abstract class IniSectionBase : IIniSection
     /// <inheritdoc/>
     public abstract void ResetToDefaults();
 
+    /// <summary>
+    /// Captures the current property values before a reload, so that <see cref="RaisePropertyChangedForChanges"/>
+    /// can raise <c>PropertyChanged</c> for the ones the reload changed. Returns <c>null</c> when the section
+    /// does not raise change notifications. Overridden by generated sections that implement
+    /// <see cref="System.ComponentModel.INotifyPropertyChanged"/>.
+    /// </summary>
+    protected virtual object?[]? CaptureValuesForChangeNotification() => null;
+
+    /// <summary>
+    /// Raises <c>PropertyChanged</c> for every property whose value differs from <paramref name="before"/>
+    /// (as captured by <see cref="CaptureValuesForChangeNotification"/>). Called after a reload, on the
+    /// thread that performed it.
+    /// </summary>
+    protected virtual void RaisePropertyChangedForChanges(object?[] before)
+    {
+    }
+
+    // Internal entry points for IniConfig (the virtual members are protected so that generated
+    // overrides compile in any assembly, with or without access to this assembly's internals).
+    internal object?[]? CaptureForChangeNotification() => CaptureValuesForChangeNotification();
+    internal void RaiseChangedSince(object?[] before) => RaisePropertyChangedForChanges(before);
+
     /// <inheritdoc/>
     public bool HasChanges => Volatile.Read(ref _changeVersion) != Volatile.Read(ref _savedVersion);
 

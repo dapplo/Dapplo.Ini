@@ -502,8 +502,10 @@ public sealed class IniConfig : IDisposable
                 _postponedReloadPending = false;
                 var snapshot = ReadLayers(resolveUserFile: false);
                 var sections = Sections.Values;
+                var before = CaptureForChangeNotification(sections);
                 ApplySnapshot(sections, snapshot, updateMetadata: true);
                 ApplyValueSources(sections);
+                RaiseChangeNotifications(sections, before);
                 ClearDirtyFlags(sections);
                 Retain(snapshot);
                 RunAfterLoadHooks(sections);
@@ -547,8 +549,10 @@ public sealed class IniConfig : IDisposable
                 _postponedReloadPending = false;
                 var snapshot = await ReadLayersAsync(resolveUserFile: false, cancellationToken).ConfigureAwait(false);
                 var sections = Sections.Values;
+                var before = CaptureForChangeNotification(sections);
                 ApplySnapshot(sections, snapshot, updateMetadata: true);
                 await ApplyValueSourcesAsync(sections, cancellationToken).ConfigureAwait(false);
+                RaiseChangeNotifications(sections, before);
                 ClearDirtyFlags(sections);
                 Retain(snapshot);
                 await RunAfterLoadHooksAsync(sections, cancellationToken).ConfigureAwait(false);
@@ -567,6 +571,24 @@ public sealed class IniConfig : IDisposable
 
         Reloaded?.Invoke(this, EventArgs.Empty);
         NotifyListeners(l => l.OnReloaded(LoadedFromPath ?? FileName));
+    }
+
+    private static object?[]?[] CaptureForChangeNotification(IReadOnlyList<IIniSection> sections)
+    {
+        var captured = new object?[]?[sections.Count];
+        for (var i = 0; i < sections.Count; i++)
+            captured[i] = (sections[i] as IniSectionBase)?.CaptureForChangeNotification();
+        return captured;
+    }
+
+    /// <summary>A reload changes values without going through the setters: raise PropertyChanged for what changed.</summary>
+    private static void RaiseChangeNotifications(IReadOnlyList<IIniSection> sections, object?[]?[] before)
+    {
+        for (var i = 0; i < sections.Count; i++)
+        {
+            if (before[i] is { } values && sections[i] is IniSectionBase sectionBase)
+                sectionBase.RaiseChangedSince(values);
+        }
     }
 
     /// <summary>

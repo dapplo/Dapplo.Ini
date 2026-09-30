@@ -50,6 +50,14 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
     private const string IAfterSaveGenericName      = "IAfterSave";
     private const string IDataValidationGenericName = "IDataValidation";
     private const string IUnknownKeyGenericName     = "IUnknownKey";
+    private const string IAfterLoadAsyncGenericName  = "IAfterLoadAsync";
+    private const string IBeforeSaveAsyncGenericName = "IBeforeSaveAsync";
+    private const string IAfterSaveAsyncGenericName  = "IAfterSaveAsync";
+
+    // Type names in generated code are fully qualified (global::…) so they cannot clash with types in the
+    // consumer's namespace; nullable reference annotations are kept so the implementation matches the interface.
+    private static readonly SymbolDisplayFormat TypeFormat = SymbolDisplayFormat.FullyQualifiedFormat
+        .AddMiscellaneousOptions(SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier);
     private const string LifecycleInterfacesNamespace = "Dapplo.Ini.Interfaces";
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
@@ -67,9 +75,21 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             .Where(static m => m is not null)
             .Select(static (m, _) => m!);
 
-        context.RegisterSourceOutput(interfaces, static (spc, model) =>
-            spc.AddSource($"{model.GeneratedClassName}.g.cs",
-                SourceText.From(Emit(model), Encoding.UTF8)));
+        // A partial interface with several declarations produces one model per declaration:
+        // generate each interface once. The hint name includes the namespace so two interfaces with the
+        // same name in different namespaces do not collide.
+        context.RegisterSourceOutput(interfaces.Collect(), static (spc, models) =>
+        {
+            var emitted = new HashSet<string>();
+            foreach (var model in models)
+            {
+                if (!emitted.Add(model.FullyQualifiedInterfaceName))
+                    continue;
+                var hintPrefix = string.IsNullOrEmpty(model.Namespace) ? "" : model.Namespace + ".";
+                spc.AddSource($"{hintPrefix}{model.GeneratedClassName}.g.cs",
+                    SourceText.From(Emit(model), Encoding.UTF8));
+            }
+        });
     }
 
     // ── Model ─────────────────────────────────────────────────────────────────
@@ -124,6 +144,8 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         public string? MaxLengthErrorMessage { get; set; }
         public string? RegexPattern { get; set; }
         public string? RegexErrorMessage { get; set; }
+        // True for [Range(typeof(T), "min", "max")]: RangeMinRaw/RangeMaxRaw are strings parsed at runtime.
+        public bool RangeIsStringForm { get; set; }
         // Convenience: true when any DataAnnotations validation attributes are present
         public bool HasValidationAttributes => IsRequired || RangeMinRaw != null || MaxLength.HasValue || RegexPattern != null;
     }
@@ -132,6 +154,12 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
     {
         public string Namespace { get; set; } = "";
         public string InterfaceName { get; set; } = "";
+        // global::-qualified name of the interface (includes containing types for nested interfaces)
+        public string FullyQualifiedInterfaceName { get; set; } = "";
+        // Generic async lifecycle hooks (static-virtual pattern)
+        public bool ImplementsAfterLoadAsyncGeneric { get; set; }
+        public bool ImplementsBeforeSaveAsyncGeneric { get; set; }
+        public bool ImplementsAfterSaveAsyncGeneric { get; set; }
         public string GeneratedClassName { get; set; } = "";
         public string SectionName { get; set; } = "";
         public string? Description { get; set; }
@@ -186,6 +214,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
 
         if (iniSectionAttr is null && !implementsIIniSection) return null;
 
+        // A generic section interface would need a generic implementation class; not supported.
+        if (symbol.IsGenericType) return null;
+
         var interfaceName = symbol.Name;
         var namespaceName = symbol.ContainingNamespace.IsGlobalNamespace
             ? ""
@@ -212,7 +243,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
 
             if (dataContractName != null)
                 sectionName = dataContractName;
-            else if (interfaceName.StartsWith("I") && interfaceName.Length > 1)
+            else if (HasInterfacePrefix(interfaceName))
                 sectionName = interfaceName.Substring(1);
             else
                 sectionName = interfaceName;
@@ -281,7 +312,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         bool implementsINotifyPropertyChanging = ImplementsInterface(symbol, INotifyPropertyChangingFqn);
 
         var properties = new List<PropertyModel>();
-        foreach (var member in symbol.GetMembers().OfType<IPropertySymbol>())
+        foreach (var member in GetSectionProperties(symbol))
         {
             // Skip properties marked [IgnoreDataMember]
             bool isIgnored = member.GetAttributes()
@@ -290,7 +321,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             var prop = new PropertyModel
             {
                 Name = member.Name,
-                TypeFullName = member.Type.ToDisplayString(),
+                TypeFullName = member.Type.ToDisplayString(TypeFormat),
                 IsValueType  = member.Type.IsValueType,
                 IsIgnored    = isIgnored,
                 // A getter-only interface property ({ get; }) is treated as read-only:
@@ -318,7 +349,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                      originalDefStr == "System.Collections.Generic.IDictionary<TKey, TValue>"))
                 {
                     prop.IsSubKeyDictionary = true;
-                    prop.DictionaryValueTypeFullName = namedMemberType.TypeArguments[1].ToDisplayString();
+                    prop.DictionaryValueTypeFullName = namedMemberType.TypeArguments[1].ToDisplayString(TypeFormat);
                 }
 
                 if (namedMemberType.TypeArguments.Length == 1 &&
@@ -381,8 +412,22 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                     .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == DefaultValueAttributeFqn);
                 if (defaultValueAttr != null && defaultValueAttr.ConstructorArguments.Length > 0)
                 {
-                    var raw = defaultValueAttr.ConstructorArguments[0].Value;
-                    prop.DefaultValue = raw == null ? null : FormatDefaultValueAsString(raw);
+                    var args = defaultValueAttr.ConstructorArguments;
+                    if (args.Length == 2 && args[0].Kind == TypedConstantKind.Type)
+                    {
+                        // [DefaultValue(typeof(TimeSpan), "00:01:00")] — the string is the value
+                        prop.DefaultValue = args[1].Value as string;
+                    }
+                    else if (args[0].Kind == TypedConstantKind.Array)
+                    {
+                        // [DefaultValue(new[] { "a", "b" })] — becomes the list notation "a,b"
+                        prop.DefaultValue = string.Join(",", args[0].Values.Select(v => v.Value == null ? "" : FormatDefaultValueAsString(v.Value)));
+                    }
+                    else
+                    {
+                        var raw = args[0].Value;
+                        prop.DefaultValue = raw == null ? null : FormatDefaultValueAsString(raw);
+                    }
                 }
             }
 
@@ -412,7 +457,18 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             // [Range(min, max)]
             var rangeAttr = member.GetAttributes()
                 .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == RangeAttributeFqn);
-            if (rangeAttr != null && rangeAttr.ConstructorArguments.Length >= 2)
+            if (rangeAttr != null && rangeAttr.ConstructorArguments.Length == 3
+                && rangeAttr.ConstructorArguments[0].Kind == TypedConstantKind.Type)
+            {
+                // [Range(typeof(decimal), "1", "10")]
+                prop.RangeIsStringForm = true;
+                prop.RangeMinRaw = rangeAttr.ConstructorArguments[1].Value as string;
+                prop.RangeMaxRaw = rangeAttr.ConstructorArguments[2].Value as string;
+                foreach (var na in rangeAttr.NamedArguments)
+                    if (na.Key == "ErrorMessage" && na.Value.Value is string em)
+                        prop.RangeErrorMessage = em;
+            }
+            else if (rangeAttr != null && rangeAttr.ConstructorArguments.Length >= 2)
             {
                 prop.RangeMinRaw = FormatRangeArgAsLiteral(rangeAttr.ConstructorArguments[0]);
                 prop.RangeMaxRaw = FormatRangeArgAsLiteral(rangeAttr.ConstructorArguments[1]);
@@ -464,7 +520,11 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         {
             Namespace                  = namespaceName,
             InterfaceName              = interfaceName,
-            GeneratedClassName         = $"{(interfaceName.StartsWith("I") ? interfaceName.Substring(1) : interfaceName)}Impl",
+            FullyQualifiedInterfaceName = symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+            GeneratedClassName         = $"{(HasInterfacePrefix(interfaceName) ? interfaceName.Substring(1) : interfaceName)}Impl",
+            ImplementsAfterLoadAsyncGeneric  = ImplementsGenericInterface(symbol, LifecycleInterfacesNamespace, IAfterLoadAsyncGenericName),
+            ImplementsBeforeSaveAsyncGeneric = ImplementsGenericInterface(symbol, LifecycleInterfacesNamespace, IBeforeSaveAsyncGenericName),
+            ImplementsAfterSaveAsyncGeneric  = ImplementsGenericInterface(symbol, LifecycleInterfacesNamespace, IAfterSaveAsyncGenericName),
             SectionName                = sectionName,
             Description                = description,
             ImplementsTransactional    = implementsTransactional,
@@ -491,6 +551,40 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             // Properties with IsIgnored=true are excluded only from INI read/write operations.
             Properties                 = properties
         };
+    }
+
+    /// <summary><c>ISettings</c> → strip the "I"; <c>Interval</c> or <c>I</c> → keep the name as it is.</summary>
+    private static bool HasInterfacePrefix(string interfaceName)
+        => interfaceName.Length > 1 && interfaceName[0] == 'I' && char.IsUpper(interfaceName[1]);
+
+    /// <summary>
+    /// The properties the generated class must implement: those declared on the interface itself and on
+    /// every base interface that is a section interface too (not IIniSection or other framework interfaces).
+    /// Static and indexer properties are not settings and are skipped.
+    /// </summary>
+    private static IEnumerable<IPropertySymbol> GetSectionProperties(INamedTypeSymbol symbol)
+    {
+        var seen = new HashSet<string>();
+        var sources = new List<INamedTypeSymbol> { symbol };
+        var iniSection = symbol.AllInterfaces.FirstOrDefault(i => i.ToDisplayString() == IIniSectionFqn);
+        foreach (var baseInterface in symbol.AllInterfaces)
+        {
+            // Skip the framework's own interfaces (IIniSection and friends are implemented by IniSectionBase).
+            if (iniSection != null && SymbolEqualityComparer.Default.Equals(baseInterface.ContainingAssembly, iniSection.ContainingAssembly))
+                continue;
+            if (baseInterface.AllInterfaces.Any(i => i.ToDisplayString() == IIniSectionFqn))
+                sources.Add(baseInterface);
+        }
+        foreach (var source in sources)
+        {
+            foreach (var member in source.GetMembers().OfType<IPropertySymbol>())
+            {
+                if (member.IsStatic || member.IsIndexer)
+                    continue;
+                if (seen.Add(member.Name))
+                    yield return member;
+            }
+        }
     }
 
     private static bool ImplementsInterface(INamedTypeSymbol symbol, string ifaceFqn)
@@ -578,7 +672,14 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         if (m.ImplementsUnknownKeyGeneric)
             extraBases.Add("Dapplo.Ini.Interfaces.IUnknownKey");
 
-        string baseClasses = "Dapplo.Ini.Configuration.IniSectionBase, " + m.InterfaceName;
+        if (m.ImplementsAfterLoadAsyncGeneric)
+            extraBases.Add("Dapplo.Ini.Interfaces.IAfterLoadAsync");
+        if (m.ImplementsBeforeSaveAsyncGeneric)
+            extraBases.Add("Dapplo.Ini.Interfaces.IBeforeSaveAsync");
+        if (m.ImplementsAfterSaveAsyncGeneric)
+            extraBases.Add("Dapplo.Ini.Interfaces.IAfterSaveAsync");
+
+        string baseClasses = "Dapplo.Ini.Configuration.IniSectionBase, " + m.FullyQualifiedInterfaceName;
         if (extraBases.Count > 0)
             baseClasses += ", " + string.Join(", ", extraBases);
 
@@ -855,7 +956,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             if (p.IsSubKeyDictionary)
             {
                 // Sub-key pattern: "propertyname.subkey"
-                sb.AppendLine($"                case var __sk when __sk.StartsWith(\"{EscapeString(keyName)}.\"):");
+                sb.AppendLine($"                case var __sk when __sk.StartsWith(\"{EscapeString(keyName)}.\", System.StringComparison.Ordinal):");
                 // First sub-key clears the compiled defaults so file data fully replaces them.
                 sb.AppendLine($"                    if (!{fieldName}HasRawEntries) {{ {fieldName} = new System.Collections.Generic.Dictionary<string, {p.DictionaryValueTypeFullName}>(System.StringComparer.OrdinalIgnoreCase); {fieldName}HasRawEntries = true; }}");
                 sb.AppendLine($"                    if ({fieldName} == null) {fieldName} = new System.Collections.Generic.Dictionary<string, {p.DictionaryValueTypeFullName}>(System.StringComparer.OrdinalIgnoreCase);");
@@ -878,6 +979,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 sb.AppendLine("                    break;");
             }
         }
+        sb.AppendLine("                default: break;");
         sb.AppendLine("            }");
         sb.AppendLine("        }");
         sb.AppendLine();
@@ -894,7 +996,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
 
             string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
             if (p.IsSubKeyDictionary)
-                sb.AppendLine($"                case var __k when __k.StartsWith(\"{EscapeString(keyName)}.\"):  return true;");
+                sb.AppendLine($"                case var __k when __k.StartsWith(\"{EscapeString(keyName)}.\", System.StringComparison.Ordinal):  return true;");
             else
                 sb.AppendLine($"                case \"{EscapeString(keyName)}\": return true;");
         }
@@ -902,6 +1004,23 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         sb.AppendLine("            }");
         sb.AppendLine("        }");
         sb.AppendLine();
+
+        // ── Change notification after a reload ────────────────────────────
+        if (m.ImplementsINotifyPropertyChanged)
+        {
+            var notifyProps = m.Properties
+                .Where(p => !p.IsIgnored && !p.IsRuntimeOnly && !p.SuppressPropertyChanged)
+                .ToList();
+            sb.AppendLine("        protected override object?[]? CaptureValuesForChangeNotification()");
+            sb.AppendLine($"            => new object?[] {{ {string.Join(", ", notifyProps.Select(p => $"_{Camel(p.Name)}"))} }};");
+            sb.AppendLine();
+            sb.AppendLine("        protected override void RaisePropertyChangedForChanges(object?[] before)");
+            sb.AppendLine("        {");
+            for (var i = 0; i < notifyProps.Count; i++)
+                sb.AppendLine($"            if (!Equals(before[{i}], _{Camel(notifyProps[i].Name)})) PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof({notifyProps[i].Name})));");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+        }
 
         // ── GetAllRawValues ───────────────────────────────────────────────
         sb.AppendLine("        public override IEnumerable<KeyValuePair<string, string?>> GetAllRawValues()");
@@ -959,7 +1078,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                     ? p.TypeFullName.Substring(0, p.TypeFullName.Length - 1)
                     : p.TypeFullName;
                 if (p.IsSubKeyDictionary)
-                    sb.AppendLine($"                case var __pt when __pt.StartsWith(\"{EscapeString(keyName)}.\"):  return typeof({typeofArg});");
+                    sb.AppendLine($"                case var __pt when __pt.StartsWith(\"{EscapeString(keyName)}.\", System.StringComparison.Ordinal):  return typeof({typeofArg});");
                 else
                     sb.AppendLine($"                case \"{EscapeString(keyName)}\": return typeof({typeofArg});");
             }
@@ -1069,7 +1188,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
                 var assignments = BuildWriterOverrideAssignments(p.WriterQuoteValues, p.WriterEscapeSequences, p.WriterComments);
                 if (p.IsSubKeyDictionary)
-                    sb.AppendLine($"                case var __pwo when __pwo.StartsWith(\"{EscapeString(keyName)}.\"): return new Dapplo.Ini.Parsing.IniWriterOptionsOverride {{ {assignments} }};");
+                    sb.AppendLine($"                case var __pwo when __pwo.StartsWith(\"{EscapeString(keyName)}.\", System.StringComparison.Ordinal): return new Dapplo.Ini.Parsing.IniWriterOptionsOverride {{ {assignments} }};");
                 else
                     sb.AppendLine($"                case \"{EscapeString(keyName)}\": return new Dapplo.Ini.Parsing.IniWriterOptionsOverride {{ {assignments} }};");
             }
@@ -1105,7 +1224,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             {
                 string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
                 if (p.IsSubKeyDictionary)
-                    sb.AppendLine($"                case var __idk when __idk.StartsWith(\"{EscapeString(keyName)}.\"):  return true;");
+                    sb.AppendLine($"                case var __idk when __idk.StartsWith(\"{EscapeString(keyName)}.\", System.StringComparison.Ordinal):  return true;");
                 else
                     sb.AppendLine($"                case \"{EscapeString(keyName)}\": return true;");
             }
@@ -1129,7 +1248,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             {
                 string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
                 if (p.IsSubKeyDictionary)
-                    sb.AppendLine($"                case var __ick when __ick.StartsWith(\"{EscapeString(keyName)}.\"):  return true;");
+                    sb.AppendLine($"                case var __ick when __ick.StartsWith(\"{EscapeString(keyName)}.\", System.StringComparison.Ordinal):  return true;");
                 else
                     sb.AppendLine($"                case \"{EscapeString(keyName)}\": return true;");
             }
@@ -1203,9 +1322,32 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         // When a consumer uses IAfterLoad<TSelf> / IBeforeSave<TSelf> / IAfterSave<TSelf>
         // the generator emits explicit implementations of the non-generic dispatch interfaces
         // that delegate to the static virtual method on the consumer's interface.
-        string ifaceFqn = string.IsNullOrEmpty(m.Namespace)
-            ? m.InterfaceName
-            : $"{m.Namespace}.{m.InterfaceName}";
+        string ifaceFqn = m.FullyQualifiedInterfaceName;
+
+        // Generic async hooks (IAfterLoadAsync<TSelf> etc.): bridge the static virtual ValueTask methods
+        // to the non-generic Task-based dispatch interfaces the framework calls.
+        if (m.ImplementsAfterLoadAsyncGeneric)
+        {
+            sb.AppendLine("        async System.Threading.Tasks.Task Dapplo.Ini.Interfaces.IAfterLoadAsync.OnAfterLoadAsync(System.Threading.CancellationToken cancellationToken)");
+            sb.AppendLine("        {");
+            sb.AppendLine($"            await {ifaceFqn}.OnAfterLoadAsync(this, cancellationToken).ConfigureAwait(false);");
+            if (needsValidation)
+                sb.AppendLine("            RunAllValidations();");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+        }
+        if (m.ImplementsBeforeSaveAsyncGeneric)
+        {
+            sb.AppendLine("        System.Threading.Tasks.Task<bool> Dapplo.Ini.Interfaces.IBeforeSaveAsync.OnBeforeSaveAsync(System.Threading.CancellationToken cancellationToken)");
+            sb.AppendLine($"            => {ifaceFqn}.OnBeforeSaveAsync(this, cancellationToken).AsTask();");
+            sb.AppendLine();
+        }
+        if (m.ImplementsAfterSaveAsyncGeneric)
+        {
+            sb.AppendLine("        System.Threading.Tasks.Task Dapplo.Ini.Interfaces.IAfterSaveAsync.OnAfterSaveAsync(System.Threading.CancellationToken cancellationToken)");
+            sb.AppendLine($"            => {ifaceFqn}.OnAfterSaveAsync(this, cancellationToken).AsTask();");
+            sb.AppendLine();
+        }
 
         if (m.ImplementsAfterLoadGeneric)
         {
@@ -1286,7 +1428,8 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 {
                     string requiredMsg = EscapeString(p.RequiredErrorMessage ?? $"{p.Name} is required.");
                     if (isStringType)
-                        sb.AppendLine($"                    if (string.IsNullOrEmpty({fieldName})) yield return \"{requiredMsg}\";");
+                        // Like DataAnnotations' [Required]: whitespace-only strings are invalid too.
+                        sb.AppendLine($"                    if (string.IsNullOrWhiteSpace({fieldName})) yield return \"{requiredMsg}\";");
                     else if (!isNonNullableValueType)
                         // Covers nullable value types (int?, etc.) and reference types (string already handled above)
                         sb.AppendLine($"                    if ({fieldName} == null) yield return \"{requiredMsg}\";");
@@ -1295,19 +1438,33 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 if (p.RangeMinRaw != null && p.RangeMaxRaw != null)
                 {
                     string rangeMsg = EscapeString(p.RangeErrorMessage ?? $"{p.Name} must be between {p.RangeMinRaw} and {p.RangeMaxRaw}.");
-                    // Use IComparable for generic range check to support int, double, etc.
-                    sb.AppendLine($"                    {{ var __cv = (System.IComparable){fieldName}; if (__cv.CompareTo({p.RangeMinRaw}) < 0 || __cv.CompareTo({p.RangeMaxRaw}) > 0) yield return \"{rangeMsg}\"; }}");
+                    // Compare as the property's own (non-nullable) type: the bounds are converted to it,
+                    // so [Range(1, 100)] works on double/long properties and a null value is skipped.
+                    string rangeType = p.TypeFullName.TrimEnd('?');
+                    string minExpr = p.RangeIsStringForm
+                        ? $"ConvertFromRaw<{rangeType}>(\"{EscapeString(p.RangeMinRaw!)}\")"
+                        : $"({rangeType})({p.RangeMinRaw})";
+                    string maxExpr = p.RangeIsStringForm
+                        ? $"ConvertFromRaw<{rangeType}>(\"{EscapeString(p.RangeMaxRaw!)}\")"
+                        : $"({rangeType})({p.RangeMaxRaw})";
+                    string nullGuard = isNonNullableValueType ? "" : $"if ({fieldName} != null) ";
+                    sb.AppendLine($"                    {nullGuard}{{ var __cv = (System.IComparable){fieldName}; if (__cv.CompareTo({minExpr}) < 0 || __cv.CompareTo({maxExpr}) > 0) yield return \"{rangeMsg}\"; }}");
                 }
                 if (p.MaxLength.HasValue)
                 {
                     string maxLenMsg = EscapeString(p.MaxLengthErrorMessage ?? $"{p.Name} must not exceed {p.MaxLength.Value} characters.");
-                    sb.AppendLine($"                    if ({fieldName} != null && {fieldName}.Length > {p.MaxLength.Value}) yield return \"{maxLenMsg}\";");
+                    bool hasLength = isStringType || p.TypeFullName.TrimEnd('?').EndsWith("[]");
+                    string lengthExpr = hasLength ? $"{fieldName}.Length" : $"System.Linq.Enumerable.Count({fieldName})";
+                    string lengthGuard = isNonNullableValueType ? "" : $"{fieldName} != null && ";
+                    sb.AppendLine($"                    if ({lengthGuard}{lengthExpr} > {p.MaxLength.Value}) yield return \"{maxLenMsg}\";");
                 }
                 if (p.RegexPattern != null)
                 {
                     string regexMsg = EscapeString(p.RegexErrorMessage ?? $"{p.Name} does not match the required pattern.");
                     string escapedPattern = EscapeString(p.RegexPattern);
-                    sb.AppendLine($"                    if ({fieldName} != null && !System.Text.RegularExpressions.Regex.IsMatch({fieldName}, \"{escapedPattern}\")) yield return \"{regexMsg}\";");
+                    string regexInput = isStringType ? fieldName : $"System.Convert.ToString({fieldName}, System.Globalization.CultureInfo.InvariantCulture)";
+                    string regexGuard = isNonNullableValueType ? "" : $"{fieldName} != null && ";
+                    sb.AppendLine($"                    if ({regexGuard}!System.Text.RegularExpressions.Regex.IsMatch({regexInput}, \"{escapedPattern}\")) yield return \"{regexMsg}\";");
                 }
                 sb.AppendLine("                    break;");
             }
