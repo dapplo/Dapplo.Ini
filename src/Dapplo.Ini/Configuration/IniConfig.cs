@@ -1547,7 +1547,8 @@ public sealed class IniConfig : IDisposable
         var comments = existing.Comments.Count > 0 ? existing.Comments : built.Comments;
         var merged = new Parsing.IniSection(existing.Name, comments, keyComparer)
         {
-            WriterOptionsOverride = built.WriterOptionsOverride ?? existing.WriterOptionsOverride
+            WriterOptionsOverride = built.WriterOptionsOverride ?? existing.WriterOptionsOverride,
+            LeadingTrivia = existing.LeadingTrivia
         };
 
         foreach (var entry in existing.Entries)
@@ -1557,7 +1558,8 @@ public sealed class IniConfig : IDisposable
             {
                 merged.SetEntry(new Parsing.IniEntry(entry.Key, update.Value, entry.Comments.Count > 0 ? entry.Comments : update.Comments)
                 {
-                    WriterOptionsOverride = update.WriterOptionsOverride
+                    WriterOptionsOverride = update.WriterOptionsOverride,
+                    LeadingTrivia = entry.LeadingTrivia
                 });
             }
         }

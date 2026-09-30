@@ -43,6 +43,15 @@ public static class IniFileParser
 
         IniSection? currentSection = null;
         var pendingComments = new List<string>();
+        // Raw blank/comment/unparseable lines, only recorded with PreserveTrivia.
+        var pendingTrivia = options.PreserveTrivia ? new List<string>() : null;
+        IReadOnlyList<string>? TakeTrivia()
+        {
+            if (pendingTrivia == null) return null;
+            var trivia = pendingTrivia.ToArray();
+            pendingTrivia.Clear();
+            return trivia;
+        }
 
         while (!span.IsEmpty)
         {
@@ -56,6 +65,7 @@ public static class IniFileParser
             {
                 // Blank line: reset pending comments (don't carry over to next key)
                 pendingComments.Clear();
+                pendingTrivia?.Add(string.Empty);
                 continue;
             }
 
@@ -68,6 +78,7 @@ public static class IniFileParser
                 if (!commentContent.IsEmpty && commentContent[0] == ' ')
                     commentContent = commentContent.Slice(1);
                 pendingComments.Add(commentContent.ToString());
+                pendingTrivia?.Add(lineSpan.TrimEnd().ToString());
                 continue;
             }
 
@@ -86,13 +97,21 @@ public static class IniFileParser
                     var existingSection = iniFile.GetSection(sectionName);
                     if (existingSection != null)
                     {
+                        // The lines above the repeated header stay pending for the next entry.
                         currentSection = existingSection;
                     }
                     else
                     {
-                        currentSection = new IniSection(sectionName, comments, keyComparer);
+                        currentSection = new IniSection(sectionName, comments, keyComparer)
+                        {
+                            LeadingTrivia = TakeTrivia()
+                        };
                         iniFile.AddSection(currentSection);
                     }
+                }
+                else
+                {
+                    pendingTrivia?.Add(lineSpan.TrimEnd().ToString()); // "[Unclosed": keep the line as it is
                 }
                 pendingComments.Clear();
                 continue;
@@ -139,12 +158,19 @@ public static class IniFileParser
                 IReadOnlyList<string> entryComments = pendingComments.Count > 0
                     ? pendingComments.ToArray()
                     : (IReadOnlyList<string>)Array.Empty<string>();
-                var entry = new IniEntry(key, value, entryComments);
+                var entry = new IniEntry(key, value, entryComments) { LeadingTrivia = TakeTrivia() };
                 currentSection.SetEntry(entry);
                 pendingComments.Clear();
             }
-            // Lines that don't match any pattern are silently ignored
+            else
+            {
+                // Lines that don't match any pattern are ignored (but kept as trivia when requested)
+                pendingTrivia?.Add(lineSpan.TrimEnd().ToString());
+            }
         }
+
+        if (pendingTrivia is { Count: > 0 })
+            iniFile.TrailingTrivia = pendingTrivia.ToArray();
 
         return iniFile;
     }
@@ -214,10 +240,11 @@ public static class IniFileParser
         }
 
         var result = remaining.Slice(0, newLine);
+        var wasCarriageReturn = remaining[newLine] == '\r';
         remaining = remaining.Slice(newLine + 1);
 
-        // Handle \r\n
-        if (!remaining.IsEmpty && remaining[0] == '\n')
+        // Handle \r\n (but a second \n after a \n is an empty line, not part of the line break)
+        if (wasCarriageReturn && !remaining.IsEmpty && remaining[0] == '\n')
             remaining = remaining.Slice(1);
 
         return result;

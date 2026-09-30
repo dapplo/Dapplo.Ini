@@ -277,6 +277,13 @@ Builder shorthand:
 
 ---
 
+### `PreserveTrivia`
+
+When `true`, blank lines, comment lines (exactly as written) and lines that cannot be parsed are
+kept on the parsed `IniFile` (`IniSection.LeadingTrivia`, `IniEntry.LeadingTrivia`,
+`IniFile.TrailingTrivia`), and `IniFileWriter` writes them back unchanged. Default `false`.
+`IniConfigBuilder.PreserveFormatting()` turns it on (see [[Saving]]).
+
 ### `CaseSensitiveSections`
 
 By default (`false`) section names are compared **case-insensitively** —

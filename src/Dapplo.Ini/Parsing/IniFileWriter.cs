@@ -198,13 +198,21 @@ public static class IniFileWriter
         {
             var sectionOptions = writerOptions.Apply(section.WriterOptionsOverride);
 
-            if (!firstSection)
-                writer.WriteLine();
-            firstSection = false;
+            if (section.LeadingTrivia != null)
+            {
+                // Recorded layout: exactly the blank lines and comments that were above the header.
+                WriteTrivia(writer, section.LeadingTrivia);
+            }
+            else
+            {
+                if (!firstSection)
+                    writer.WriteLine();
 
-            // Section comments
-            if (sectionOptions.WriteComments)
-                WriteComments(writer, section.Comments);
+                // Section comments
+                if (sectionOptions.WriteComments)
+                    WriteComments(writer, section.Comments);
+            }
+            firstSection = false;
 
             // Only write header for named sections
             if (!string.IsNullOrEmpty(section.Name))
@@ -219,7 +227,9 @@ public static class IniFileWriter
             {
                 var entryOptions = sectionOptions.Apply(entry.WriterOptionsOverride);
 
-                if (entryOptions.WriteComments)
+                if (entry.LeadingTrivia != null)
+                    WriteTrivia(writer, entry.LeadingTrivia);
+                else if (entryOptions.WriteComments)
                     WriteComments(writer, entry.Comments);
 
                 writer.Write(entry.Key);
@@ -227,6 +237,15 @@ public static class IniFileWriter
                 writer.WriteLine(FormatValue(entry.Value, entryOptions));
             }
         }
+
+        if (iniFile.TrailingTrivia != null)
+            WriteTrivia(writer, iniFile.TrailingTrivia);
+    }
+
+    private static void WriteTrivia(TextWriter writer, IReadOnlyList<string> lines)
+    {
+        foreach (var line in lines)
+            writer.WriteLine(line);
     }
 
     /// <summary>Writes each comment line prefixed with "; " — also every line of a multi-line comment.</summary>

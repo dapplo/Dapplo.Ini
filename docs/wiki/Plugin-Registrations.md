@@ -229,7 +229,20 @@ load, reload or save:
 Limits: blank lines and comments that are not attached to a section or key (a file header
 followed by a blank line, trailing comments, comments separated from the next key or section
 by a blank line) are not preserved,
-and `#` comments are written as `;` comments.
+and `#` comments are written as `;` comments. Use `PreserveFormatting()` instead to keep
+all of them exactly as written:
+
+```csharp
+var config = IniConfigRegistry.ForFile("app.ini")
+    .AddSearchPath(AppContext.BaseDirectory)
+    .RegisterSection<IHostSettings>(new HostSettingsImpl())
+    .PreserveFormatting()               // implies PreserveUnknownSections()
+    .Build();
+```
+
+With `PreserveFormatting()` blank lines, comments (including `#` comments, a file header and
+trailing comments) and lines that cannot be parsed stay where they were. Keys are still written
+in the configured format (`key = value`), and new keys get the usual description comments.
 
 `PreserveUnknownSections()` alone does **not** allow late registration.
 

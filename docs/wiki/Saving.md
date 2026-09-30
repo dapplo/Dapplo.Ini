@@ -33,6 +33,9 @@ Other details:
 - A multi-line `Description` is written with `; ` in front of every line.
 - By default only registered sections are written.  Use `PreserveUnknownSections()` to keep
   sections of plugins that are not loaded — see [[Plugin-Registrations#keeping-the-settings-of-plugins-that-are-not-loaded]].
+- Comments are regenerated from `[Description]`s and blank lines are not kept. Use
+  `PreserveFormatting()` (which implies `PreserveUnknownSections()`) to write blank lines and
+  comments back exactly as they were in the file.
 
 ---
 

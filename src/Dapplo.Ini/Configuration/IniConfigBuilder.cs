@@ -464,6 +464,22 @@ public sealed class IniConfigBuilder
         return this;
     }
 
+    /// <summary>
+    /// Keeps the layout of the INI file on save: blank lines, comments exactly as written (including
+    /// <c>#</c> comments, file header and trailing comments) and lines that cannot be parsed are written
+    /// back where they were. Implies <see cref="PreserveUnknownSections"/>.
+    /// </summary>
+    /// <remarks>
+    /// Values are still written in the configured format (e.g. <c>key = value</c>), so the spacing
+    /// around the separator of a changed or re-written key can differ from the original.
+    /// </remarks>
+    public IniConfigBuilder PreserveFormatting()
+    {
+        _preserveUnknownSections = true;
+        MutateParserOptions(o => o.PreserveTrivia = true);
+        return this;
+    }
+
     // ── writer options ─────────────────────────────────────────────────────────
 
     /// <summary>
@@ -636,6 +652,7 @@ public sealed class IniConfigBuilder
             EscapeSequences       = current.EscapeSequences,
             CaseSensitiveKeys     = current.CaseSensitiveKeys,
             CaseSensitiveSections = current.CaseSensitiveSections,
+            PreserveTrivia        = current.PreserveTrivia,
         };
         mutate(copy);
         _parserOptions = copy;

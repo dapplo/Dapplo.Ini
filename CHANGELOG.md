@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Targets both `net48` and `net10.0`.
 - `IniConfigBuilder.AllowLateSectionRegistration()`: `IniConfig.AddSection<T>()` / `AddSectionAsync<T>()` also work after the load. The parsed defaults, user and constants files are kept in memory (≈ the size of the files) and a late section is populated from them without file I/O: compiled defaults, defaults files, user file, constants (protected), value sources (async ones too with `AddSectionAsync`), dirty flag cleared, then `IAfterLoad` (`AddSectionAsync` prefers `IAfterLoadAsync`). Implies `PreserveUnknownSections()`.
 - `IniConfigBuilder.PreserveUnknownSections()`: `Save()` starts from the parsed user file, so sections nobody registered (e.g. of an excluded or not-yet-loaded plugin) are written back unchanged with their comments; registered sections keep their position and existing comments; undeclared keys of registered sections are still removed.
+- `IniConfigBuilder.PreserveFormatting()` (implies `PreserveUnknownSections()`): blank lines, comments exactly as written (including `#`, file header and trailing comments) and unparseable lines are written back where they were; backed by `IniParserOptions.PreserveTrivia` and `LeadingTrivia` / `TrailingTrivia` on `IniSection`, `IniEntry` and `IniFile`.
 - `IniConfig.TryGetSection<T>(out T?)`, `IniConfigRegistry.TryGetSection<T>(fileName, out T?)` and `IniConfigRegistry.TryGetSection<T>(out T?)` (searches all registered configs).
 - `IniConfig.IsLoaded`.
 - `IIniConfigExtendedListener` — optional listener interface (separate because `net48` has no default interface members) with `OnSectionAdded(sectionName, loaded)` for `AddSection` registrations and `OnValueSourceIgnored(sectionName, key, value)` when a constant wins over a value source; `IniConfigListenerBase` implements all listener callbacks as empty virtual methods.
@@ -62,6 +63,7 @@ Other changes:
 - `IniConfig`, `IniConfigRegistry`, and `IniConfigBuilder` moved to the `Dapplo.Ini` namespace; `IniSectionBase` remains in `Dapplo.Ini.Configuration`.
 
 ### Fixed
+- The parser no longer treats two consecutive `\n` line breaks as one (`\n` followed by `\n` was handled like `\r\n`), so empty lines are counted correctly.
 - Line continuation needs an odd number of trailing backslashes (`C:\Temp\\` no longer continues) and never swallows a following section header.
 - With `QuotedValues` and without `EscapeSequences` the parser undoes the writer's quote escaping, so quoted values round-trip.
 - A leading BOM in `IniFileParser.Parse(string)` is ignored.

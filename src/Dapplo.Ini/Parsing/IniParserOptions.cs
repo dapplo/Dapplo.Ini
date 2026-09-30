@@ -83,4 +83,12 @@ public sealed class IniParserOptions
     /// When <c>false</c> (the default), section names are case-insensitive.
     /// </summary>
     public bool CaseSensitiveSections { get; set; } = false;
+
+    /// <summary>
+    /// When <c>true</c>, blank lines, comment lines (exactly as written) and lines that cannot be parsed
+    /// are kept as <see cref="IniSection.LeadingTrivia"/> / <see cref="IniEntry.LeadingTrivia"/> /
+    /// <see cref="IniFile.TrailingTrivia"/>, so that <see cref="IniFileWriter"/> writes them back unchanged.
+    /// Defaults to <c>false</c>. Enabled by <c>IniConfigBuilder.PreserveFormatting()</c>.
+    /// </summary>
+    public bool PreserveTrivia { get; set; } = false;
 }

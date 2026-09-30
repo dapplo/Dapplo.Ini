@@ -20,6 +20,12 @@ public sealed class IniFile
     /// </summary>
     public string AssignmentSeparator { get; set; } = " = ";
 
+    /// <summary>
+    /// Raw lines after the last entry (trailing blank lines and comments), or <c>null</c> when they were
+    /// not recorded. See <see cref="IniParserOptions.PreserveTrivia"/>.
+    /// </summary>
+    public IReadOnlyList<string>? TrailingTrivia { get; set; }
+
     /// <summary>All sections, in file order.</summary>
     public IReadOnlyList<IniSection> Sections => _sectionsOrdered;
 
@@ -84,19 +90,22 @@ public sealed class IniFile
     {
         var clone = new IniFile((StringComparer)_sections.Comparer, _keyComparer)
         {
-            AssignmentSeparator = AssignmentSeparator
+            AssignmentSeparator = AssignmentSeparator,
+            TrailingTrivia = TrailingTrivia?.ToArray()
         };
         foreach (var section in _sectionsOrdered)
         {
             var sectionClone = new IniSection(section.Name, section.Comments.ToArray(), _keyComparer)
             {
-                WriterOptionsOverride = section.WriterOptionsOverride
+                WriterOptionsOverride = section.WriterOptionsOverride,
+                LeadingTrivia = section.LeadingTrivia?.ToArray()
             };
             foreach (var entry in section.Entries)
             {
                 sectionClone.SetEntry(new IniEntry(entry.Key, entry.Value, entry.Comments.ToArray())
                 {
-                    WriterOptionsOverride = entry.WriterOptionsOverride
+                    WriterOptionsOverride = entry.WriterOptionsOverride,
+                    LeadingTrivia = entry.LeadingTrivia?.ToArray()
                 });
             }
             clone.AddSection(sectionClone);

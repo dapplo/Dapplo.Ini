@@ -339,6 +339,41 @@ public sealed class LateSectionRegistrationTests : IDisposable
         Assert.Null(saved.GetSection("__metadata__")!.GetValue("TopLevel"));
     }
 
+    [Fact]
+    public void Save_WithPreserveFormatting_KeepsBlankLinesAndCommentsExactly()
+    {
+        var original = string.Join("\n",
+            "# Greenshot settings - edited by hand",
+            "",
+            "[Host]",
+            "# keep plugins on",
+            "LoadPlugins = True",
+            "",
+            "",
+            "; the plugin section",
+            "[Plugin]",
+            "FromUser = keep me",
+            "this line is not a key",
+            "",
+            "; trailing comment",
+            "");
+        var path = WriteIni("formatting.ini", original);
+        var host = new HostSettingsImpl();
+        using var config = IniConfigRegistry.ForFile("formatting.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IHostSettings>(host)
+            .PreserveFormatting()
+            .Build();
+
+        host.LoadPlugins = false;
+        config.Save();
+
+        var expected = original.Replace("LoadPlugins = True", "LoadPlugins = False")
+            .Replace("LoadPlugins = False\n", "LoadPlugins = False\nExcludePlugins = \n");
+        var actual = File.ReadAllText(path).Replace("\r\n", "\n");
+        Assert.Equal(expected, actual);
+    }
+
     // ── TryGetSection ─────────────────────────────────────────────────────────
 
     [Fact]
