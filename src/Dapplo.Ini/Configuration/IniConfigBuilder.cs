@@ -34,6 +34,12 @@ public sealed class IniConfigBuilder
     // Explicit write-target path (overrides the search-path fallback)
     private string? _writablePath;
 
+    // Directory the main INI file is pinned to (null = none), see SetOverrideDirectory
+    private string? _overrideDirectory;
+
+    // Directory registered by AddAppDataPath: the write target when the file exists nowhere
+    private string? _appDataDirectory;
+
     // Encoding for reading/writing INI files (null = UTF-8)
     private Encoding? _encoding;
 
@@ -94,9 +100,45 @@ public sealed class IniConfigBuilder
     }
 
     /// <summary>
+    /// Pins the INI file to <paramref name="directory"/>, typically the value of a
+    /// <c>--config-dir</c> style command-line option.
+    /// <list type="bullet">
+    ///   <item>
+    ///     The INI file is read from <b>and</b> saved to this directory only, even when it does not
+    ///     exist there yet and does exist in one of the search paths. The search paths, the
+    ///     <see cref="AddAppDataPath"/> fallback and <see cref="SetWritablePath"/> are not used for it.
+    ///   </item>
+    ///   <item>
+    ///     Defaults files (<see cref="AddDefaultsFile"/>) given as a bare file name are looked up in
+    ///     this directory first, then in the search paths.
+    ///   </item>
+    ///   <item>
+    ///     Constants files (<see cref="AddConstantsFile"/>) are <b>never</b> read from this directory,
+    ///     so a user cannot replace the constants an administrator placed in a search path.
+    ///   </item>
+    /// </list>
+    /// A relative path is made absolute against the current directory, and the directory is created
+    /// when it does not exist. When it cannot be created or written to (missing permissions, a file
+    /// with that name, an invalid path), the problem is reported via
+    /// <see cref="IIniConfigListener.OnError"/> with the operation <c>"OverrideDirectory"</c> and
+    /// the INI file is located through the search paths as if no override had been set; no exception
+    /// is thrown. <see cref="IniConfig.OverrideDirectory"/> tells whether the override is active.
+    /// </summary>
+    /// <param name="directory">
+    /// The directory to pin the INI file to. <c>null</c>, empty or whitespace does nothing, so an
+    /// optional command-line value can be passed unconditionally.
+    /// </param>
+    public IniConfigBuilder SetOverrideDirectory(string? directory)
+    {
+        if (!string.IsNullOrWhiteSpace(directory))
+            _overrideDirectory = directory;
+        return this;
+    }
+
+    /// <summary>
     /// Adds the per-user application-data directory for <paramref name="applicationName"/> as a
-    /// search path and, when the INI file is not found anywhere, as the write target for
-    /// <see cref="IniConfig.Save"/>.
+    /// search path and as the write target for <see cref="IniConfig.Save"/> when the INI file is
+    /// not found in any search path — regardless of where it is in the search order.
     /// <list type="bullet">
     ///   <item>On Windows this resolves to <c>%APPDATA%\<paramref name="applicationName"/></c>.</item>
     ///   <item>On Linux it resolves to <c>~/.config/<paramref name="applicationName"/></c>.</item>
@@ -104,6 +146,9 @@ public sealed class IniConfigBuilder
     /// </list>
     /// The directory is created if it does not yet exist so that a subsequent
     /// <see cref="IniConfig.Save"/> can write there immediately.
+    /// An explicit <see cref="SetWritablePath"/> takes precedence over this fallback, and
+    /// <see cref="SetOverrideDirectory"/> takes precedence over both. When this method is called
+    /// more than once, the first directory is the write target.
     /// </summary>
     /// <param name="applicationName">
     /// Sub-directory name under the roaming application-data root (typically the product name).
@@ -114,16 +159,27 @@ public sealed class IniConfigBuilder
             throw new ArgumentException("Application name must not be empty.", nameof(applicationName));
 
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        var path = Path.Combine(appData, applicationName);
+        return AddAppDataDirectory(Path.Combine(appData, applicationName));
+    }
+
+    /// <summary>
+    /// Implementation of <see cref="AddAppDataPath"/> for an already resolved directory;
+    /// lets tests use a temporary directory instead of the real application-data folder.
+    /// </summary>
+    internal IniConfigBuilder AddAppDataDirectory(string path)
+    {
         Directory.CreateDirectory(path);
+        _appDataDirectory ??= path;
         return AddSearchPath(path);
     }
 
     /// <summary>
     /// Explicitly sets the path to which <see cref="IniConfig.Save"/> will write when the INI
-    /// file does not exist yet.  Use this when the desired write location differs from every
+    /// file does not exist in any search path.  Use this when the desired write location differs from every
     /// search path (e.g. when reading from a read-only system directory and writing to
     /// a user-specific location that is not in the search list).
+    /// It takes precedence over the <see cref="AddAppDataPath"/> fallback and is ignored while
+    /// <see cref="SetOverrideDirectory"/> is active.
     /// <para>
     /// The containing directory must already exist (or be created by the caller beforehand).
     /// The file itself will be created on the first <see cref="IniConfig.Save"/> call.
@@ -837,6 +893,10 @@ public sealed class IniConfigBuilder
         config.ValueSources.AddRange(_valueSources);
         config.ValueSourcesAsync.AddRange(_valueSourcesAsync);
         config.Listeners.AddRange(_listeners);
+        config.AppDataDirectory = _appDataDirectory;
+        // After the listeners are attached: an unusable directory is reported via OnError.
+        if (_overrideDirectory != null)
+            config.UseOverrideDirectory(_overrideDirectory);
 
         // Seed sections (no I/O — Load() will reset and populate them). Resetting them now means that
         // code which reads a section before the load sees its [DefaultValue]s instead of default(T).

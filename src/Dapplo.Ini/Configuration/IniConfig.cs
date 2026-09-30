@@ -66,6 +66,8 @@ public sealed class IniConfig : IDisposable
     internal bool ShouldSaveOnExit;
     internal TimeSpan? ConfiguredAutoSaveInterval;
     internal string? WritablePath;
+    /// <summary>Directory registered by <see cref="IniConfigBuilder.AddAppDataPath"/>: the write target when the file exists nowhere.</summary>
+    internal string? AppDataDirectory;
 
     /// <summary>
     /// When <c>true</c>, every reference-type property (string, list, array, dictionary) across
@@ -187,8 +189,18 @@ public sealed class IniConfig : IDisposable
     /// <summary>The logical name of the INI file (e.g. "myapp.ini").</summary>
     public string FileName { get; }
 
-    /// <summary>The resolved absolute path from which the file was loaded, or <c>null</c> if not yet loaded.</summary>
+    /// <summary>
+    /// The path of the INI file: where it was loaded from or, when it did not exist yet, where
+    /// <see cref="Save"/> will create it. <c>null</c> before the load, or when no write location is known.
+    /// </summary>
     public string? LoadedFromPath { get; internal set; }
+
+    /// <summary>
+    /// The absolute directory the INI file is pinned to via <see cref="IniConfigBuilder.SetOverrideDirectory"/>,
+    /// or <c>null</c> when no override is active — none was set, or it could not be used and was
+    /// reported via <see cref="IIniConfigListener.OnError"/>.
+    /// </summary>
+    public string? OverrideDirectory { get; private set; }
 
     /// <summary>
     /// <c>true</c> once <see cref="Load"/> / <see cref="LoadAsync"/> (or <see cref="IniConfigBuilder.Build"/>)
@@ -1121,19 +1133,49 @@ public sealed class IniConfig : IDisposable
 
     private void UpdateLoadedFromPath(LayerSnapshot snapshot)
     {
-        if (snapshot.UserFilePath != null)
+        var path = snapshot.UserFilePath ?? GetWriteTargetForNewFile();
+        if (path != null)
+            LoadedFromPath = path;
+    }
+
+    /// <summary>
+    /// Where <see cref="Save"/> creates the INI file when it was not found: the override directory,
+    /// the explicit writable path, the AppData directory, or the first existing search path — in that order.
+    /// </summary>
+    private string? GetWriteTargetForNewFile()
+    {
+        if (OverrideDirectory != null)
+            return Path.Combine(OverrideDirectory, FileName);
+        if (WritablePath != null)
+            return WritablePath;
+        if (AppDataDirectory != null)
+            return Path.Combine(AppDataDirectory, FileName);
+        var firstExisting = SearchPaths.FirstOrDefault(Directory.Exists);
+        return firstExisting != null ? Path.Combine(firstExisting, FileName) : null;
+    }
+
+    /// <summary>
+    /// Activates the override directory: makes it absolute, creates it and checks that a file can be
+    /// written there. On failure the problem is reported via <see cref="IIniConfigListener.OnError"/>
+    /// and the override stays inactive, so the search paths are used.
+    /// </summary>
+    internal void UseOverrideDirectory(string directory)
+    {
+        try
         {
-            LoadedFromPath = snapshot.UserFilePath;
+            var fullPath = Path.GetFullPath(directory);
+            Directory.CreateDirectory(fullPath);
+            // Creating the directory succeeds for an existing directory we may not write to.
+            var probe = Path.Combine(fullPath, "." + Guid.NewGuid().ToString("N") + ".tmp");
+            using (new FileStream(probe, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose))
+            {
+            }
+            OverrideDirectory = fullPath;
         }
-        else if (WritablePath != null)
+        catch (Exception ex)
         {
-            LoadedFromPath = WritablePath;
-        }
-        else
-        {
-            var firstWritable = SearchPaths.FirstOrDefault(Directory.Exists);
-            if (firstWritable != null)
-                LoadedFromPath = Path.Combine(firstWritable, FileName);
+            NotifyError("OverrideDirectory", new IOException(
+                $"The override directory '{directory}' for '{FileName}' cannot be used, the search paths are used instead: {ex.Message}", ex));
         }
     }
 
@@ -1186,7 +1228,7 @@ public sealed class IniConfig : IDisposable
         var defaults = new List<IniFile>();
         foreach (var path in DefaultFilePaths)
         {
-            var resolved = ResolveAuxiliaryFilePath(path);
+            var resolved = ResolveAuxiliaryFilePath(path, isConstantsFile: false);
             if (resolved != null)
                 defaults.Add(IniFileParser.ParseFile(resolved, Encoding, ParserOptions));
         }
@@ -1197,7 +1239,7 @@ public sealed class IniConfig : IDisposable
         var constants = new List<IniFile>();
         foreach (var path in ConstantFilePaths)
         {
-            var resolved = ResolveAuxiliaryFilePath(path);
+            var resolved = ResolveAuxiliaryFilePath(path, isConstantsFile: true);
             if (resolved != null)
                 constants.Add(IniFileParser.ParseFile(resolved, Encoding, ParserOptions));
         }
@@ -1212,7 +1254,7 @@ public sealed class IniConfig : IDisposable
         var defaults = new List<IniFile>();
         foreach (var path in DefaultFilePaths)
         {
-            var resolved = ResolveAuxiliaryFilePath(path);
+            var resolved = ResolveAuxiliaryFilePath(path, isConstantsFile: false);
             if (resolved != null)
                 defaults.Add(await IniFileParser.ParseFileAsync(resolved, Encoding, ParserOptions, cancellationToken).ConfigureAwait(false));
         }
@@ -1225,7 +1267,7 @@ public sealed class IniConfig : IDisposable
         var constants = new List<IniFile>();
         foreach (var path in ConstantFilePaths)
         {
-            var resolved = ResolveAuxiliaryFilePath(path);
+            var resolved = ResolveAuxiliaryFilePath(path, isConstantsFile: true);
             if (resolved != null)
                 constants.Add(await IniFileParser.ParseFileAsync(resolved, Encoding, ParserOptions, cancellationToken).ConfigureAwait(false));
         }
@@ -1626,9 +1668,18 @@ public sealed class IniConfig : IDisposable
         }
     }
 
-    /// <summary>Resolves the file path by searching <see cref="SearchPaths"/>.</summary>
+    /// <summary>
+    /// Resolves the file path: only the <see cref="OverrideDirectory"/> when it is active,
+    /// otherwise the first of the <see cref="SearchPaths"/> that contains the file.
+    /// </summary>
     private string? ResolveFilePath()
     {
+        if (OverrideDirectory != null)
+        {
+            var pinned = Path.Combine(OverrideDirectory, FileName);
+            return File.Exists(pinned) ? pinned : null;
+        }
+
         foreach (var dir in SearchPaths)
         {
             var candidate = Path.Combine(dir, FileName);
@@ -1644,12 +1695,21 @@ public sealed class IniConfig : IDisposable
     /// <remarks>
     /// When <paramref name="filePath"/> contains a directory component it is used as-is.
     /// When it is a bare filename, every directory in <see cref="SearchPaths"/> is tried in
-    /// order — the first match wins.
+    /// order — the first match wins. A defaults file is looked for in the
+    /// <see cref="OverrideDirectory"/> first; a constants file never is, because a user must not be
+    /// able to replace the constants an administrator placed in a search path.
     /// </remarks>
-    private string? ResolveAuxiliaryFilePath(string filePath)
+    private string? ResolveAuxiliaryFilePath(string filePath, bool isConstantsFile)
     {
         if (!string.IsNullOrEmpty(Path.GetDirectoryName(filePath)))
             return File.Exists(filePath) ? filePath : null;
+
+        if (!isConstantsFile && OverrideDirectory != null)
+        {
+            var candidate = Path.Combine(OverrideDirectory, filePath);
+            if (File.Exists(candidate))
+                return candidate;
+        }
 
         foreach (var dir in SearchPaths)
         {
