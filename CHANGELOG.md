@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## 1.1
 
 ### Added
 - Migration support: `IUnknownKey<TSelf>` interface, `OnUnknownKey` callback, `TrackAssemblyVersion`, and optional `[__metadata__]` section (`EnableMetadata`) for version-gated upgrades.
