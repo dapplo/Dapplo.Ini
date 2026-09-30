@@ -73,6 +73,37 @@ public sealed class IniFile
         _sections[section.Name] = section;
     }
 
+    /// <summary>The comparer used for key lookups in the sections of this file.</summary>
+    internal StringComparer KeyComparer => _keyComparer;
+
+    /// <summary>
+    /// Creates a deep copy of this file: sections, entries, comments and writer overrides.
+    /// Changing the copy never affects the original.
+    /// </summary>
+    internal IniFile Clone()
+    {
+        var clone = new IniFile((StringComparer)_sections.Comparer, _keyComparer)
+        {
+            AssignmentSeparator = AssignmentSeparator
+        };
+        foreach (var section in _sectionsOrdered)
+        {
+            var sectionClone = new IniSection(section.Name, section.Comments.ToArray(), _keyComparer)
+            {
+                WriterOptionsOverride = section.WriterOptionsOverride
+            };
+            foreach (var entry in section.Entries)
+            {
+                sectionClone.SetEntry(new IniEntry(entry.Key, entry.Value, entry.Comments.ToArray())
+                {
+                    WriterOptionsOverride = entry.WriterOptionsOverride
+                });
+            }
+            clone.AddSection(sectionClone);
+        }
+        return clone;
+    }
+
     /// <summary>
     /// Inserts a section at position 0, making it the first section in the file.
     /// If a section with the same name already exists it is removed from its current position

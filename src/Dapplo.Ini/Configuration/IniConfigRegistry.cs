@@ -82,7 +82,8 @@ public static class IniConfigRegistry
     /// This is a convenience overload for plugin-style distributed registrations.
     /// It is equivalent to <c>IniConfigRegistry.Get(fileName).AddSection&lt;T&gt;(section)</c>.
     /// Call <see cref="IniConfig.Load"/> (or <see cref="IniConfig.LoadAsync"/>) after all
-    /// sections have been added to read all files at once.
+    /// sections have been added to read all files at once. After the load this requires
+    /// <see cref="IniConfigBuilder.AllowLateSectionRegistration"/>; see <see cref="IniConfig.AddSection{T}"/>.
     /// </remarks>
     /// <typeparam name="T">The INI section interface type.</typeparam>
     /// <param name="fileName">The INI file name or basename the config was registered under.</param>
@@ -158,6 +159,38 @@ public static class IniConfigRegistry
     /// </exception>
     public static T GetSection<T>() where T : IIniSection
         => Get().GetSection<T>();
+
+    /// <summary>
+    /// Returns the section of type <typeparamref name="T"/> from the configuration registered for
+    /// <paramref name="fileName"/>, without throwing when the configuration or the section is missing.
+    /// </summary>
+    /// <returns><c>true</c> when the configuration exists and has a section of type <typeparamref name="T"/>.</returns>
+    public static bool TryGetSection<T>(string fileName, out T? section) where T : IIniSection
+    {
+        section = default;
+        return TryGet(fileName, out var config) && config!.TryGetSection(out section);
+    }
+
+    /// <summary>
+    /// Returns the section of type <typeparamref name="T"/> from whichever registered configuration has it,
+    /// without throwing when none has. Useful for optional, plugin-owned sections.
+    /// </summary>
+    /// <returns><c>true</c> when a registered configuration has a section of type <typeparamref name="T"/>.</returns>
+    public static bool TryGetSection<T>(out T? section) where T : IIniSection
+    {
+        IniConfig[] configs;
+        lock (_lock)
+        {
+            configs = _registry.Values.ToArray();
+        }
+        foreach (var config in configs)
+        {
+            if (config.TryGetSection(out section))
+                return true;
+        }
+        section = default;
+        return false;
+    }
 
     /// <summary>
     /// Attempts to return the <see cref="IniConfig"/> registered for <paramref name="fileName"/>.

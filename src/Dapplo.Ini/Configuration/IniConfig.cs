@@ -75,6 +75,20 @@ public sealed class IniConfig : IDisposable
     /// </summary>
     internal bool GlobalEmptyWhenNull;
 
+    /// <summary>Set via <see cref="IniConfigBuilder.AllowLateSectionRegistration"/>.</summary>
+    internal bool AllowLateRegistration;
+
+    /// <summary>Set via <see cref="IniConfigBuilder.PreserveUnknownSections"/> (implied by late registration).</summary>
+    internal bool PreserveUnknownSections;
+
+    // The file data kept after a load / reload: all layers with AllowLateRegistration, only the user
+    // file with PreserveUnknownSections, nothing otherwise. Replaced (never modified) under the gate.
+    private LayerSnapshot? _retained;
+
+    // Number of times the file layers were read (ReadLayers / ReadLayersAsync). Used by tests to verify
+    // that late registrations do not touch the disk.
+    internal int LayerReadCount;
+
     /// <summary>Writer options that control how INI files are written on save.</summary>
     internal Parsing.IniWriterOptions WriterOptions = Parsing.IniWriterOptions.Default;
 
@@ -292,6 +306,7 @@ public sealed class IniConfig : IDisposable
                 var iniFile = BuildIniFile(sections);
                 WriteToDisk(() => IniFileWriter.WriteFile(LoadedFromPath!, iniFile, Encoding, WriterOptions));
                 MarkSaved(sections, versions);
+                RetainWrittenFile(iniFile);
 
                 NotifyListeners(l => l.OnSaved(LoadedFromPath!));
 
@@ -394,6 +409,7 @@ public sealed class IniConfig : IDisposable
                 }
 
                 MarkSaved(sections, versions);
+                RetainWrittenFile(iniFile);
                 NotifyListeners(l => l.OnSaved(LoadedFromPath!));
 
                 foreach (var section in sections)
@@ -489,6 +505,7 @@ public sealed class IniConfig : IDisposable
                 ApplySnapshot(sections, snapshot, updateMetadata: true);
                 ApplyValueSources(sections);
                 ClearDirtyFlags(sections);
+                Retain(snapshot);
                 RunAfterLoadHooks(sections);
             }
             catch (Exception ex)
@@ -533,6 +550,7 @@ public sealed class IniConfig : IDisposable
                 ApplySnapshot(sections, snapshot, updateMetadata: true);
                 await ApplyValueSourcesAsync(sections, cancellationToken).ConfigureAwait(false);
                 ClearDirtyFlags(sections);
+                Retain(snapshot);
                 await RunAfterLoadHooksAsync(sections, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -707,21 +725,37 @@ public sealed class IniConfig : IDisposable
     // ── Section registration ──────────────────────────────────────────────────
 
     /// <summary>
-    /// Registers a section instance without loading any values from disk.
+    /// Returns the registered section of type <typeparamref name="T"/>, without throwing when it is missing.
+    /// </summary>
+    /// <param name="section">The section, or <c>default</c> when <typeparamref name="T"/> is not registered.</param>
+    /// <returns><c>true</c> when a section of type <typeparamref name="T"/> is registered.</returns>
+    public bool TryGetSection<T>(out T? section) where T : IIniSection
+    {
+        if (Sections.TryGetValue(typeof(T), out var found))
+        {
+            section = (T)found;
+            return true;
+        }
+        section = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Registers a section instance.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// This is the mechanism for <em>distributed registrations</em> used in plugin-based
-    /// applications.  The host calls <see cref="IniConfigBuilder.Create"/> to create the
-    /// <see cref="IniConfig"/> and register it in the global registry without loading files.
-    /// Each plugin's pre-initialization method then retrieves the shared config from
-    /// <see cref="IniConfigRegistry.Get(string)"/> and registers its own section.
-    /// See the project wiki page <em>Plugin-Registrations</em> for the three-phase flow.
+    /// <b>Before the configuration is loaded</b> (after <see cref="IniConfigBuilder.Create"/>) this only
+    /// registers the section, without file I/O; the coming <see cref="Load"/> populates it together with all
+    /// other sections. This is the three-phase pattern described on the wiki page <em>Plugin-Registrations</em>.
+    /// Registering the same type again before the load replaces the earlier instance.
     /// </para>
     /// <para>
-    /// If a section of the same type has already been registered, it is replaced.
-    /// Call <see cref="Load"/> (or <see cref="LoadAsync"/>) after all sections have been
-    /// added to read the INI file(s) exactly once for all sections.
+    /// <b>After the configuration is loaded</b> this requires <see cref="IniConfigBuilder.AllowLateSectionRegistration"/>.
+    /// The section is then populated right away from the retained file data, without reading any file: reset to
+    /// its compiled defaults, defaults files, user file, constants (protected), synchronous value sources,
+    /// and <see cref="IAfterLoad"/>. It is not marked dirty. Use <see cref="AddSectionAsync{T}"/> to also apply
+    /// <see cref="IValueSourceAsync"/> sources and prefer <see cref="IAfterLoadAsync"/> hooks.
     /// </para>
     /// </remarks>
     /// <typeparam name="T">
@@ -730,6 +764,11 @@ public sealed class IniConfig : IDisposable
     /// </typeparam>
     /// <param name="section">The concrete section instance to register.</param>
     /// <returns>The <paramref name="section"/> instance (for fluent chaining).</returns>
+    /// <exception cref="InvalidOperationException">
+    /// The configuration is already loaded and late registration was not enabled; or, after the load, a
+    /// section of the same type is already registered; or a section of another type already uses the same
+    /// <see cref="IIniSection.SectionName"/>.
+    /// </exception>
 #if NET
     [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2026",
         Justification = "Reflection is only used when T is a concrete class; pass the interface type for trim safety.")]
@@ -737,14 +776,52 @@ public sealed class IniConfig : IDisposable
     public T AddSection<T>(T section) where T : IIniSection
     {
         if (section is null) throw new ArgumentNullException(nameof(section));
-        Sections.Set(SectionStore.ResolveKeyType(typeof(T), section.GetType()), section);
+        AddSectionCore(SectionStore.ResolveKeyType(typeof(T), section.GetType()), section);
+        return section;
+    }
+
+    /// <summary>
+    /// Asynchronously registers a section instance. Identical to <see cref="AddSection{T}"/>, except that a section
+    /// added after the load also gets the values of <see cref="IValueSourceAsync"/> sources, and
+    /// <see cref="IAfterLoadAsync"/> hooks are preferred over <see cref="IAfterLoad"/>.
+    /// </summary>
+    /// <param name="section">The concrete section instance to register.</param>
+    /// <param name="cancellationToken">Token to cancel the async operation. A section is only registered when it completes.</param>
+    /// <returns>The <paramref name="section"/> instance.</returns>
+    /// <exception cref="InvalidOperationException">See <see cref="AddSection{T}"/>.</exception>
+#if NET
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2026",
+        Justification = "Reflection is only used when T is a concrete class; pass the interface type for trim safety.")]
+#endif
+    public async Task<T> AddSectionAsync<T>(T section, CancellationToken cancellationToken = default) where T : IIniSection
+    {
+        if (section is null) throw new ArgumentNullException(nameof(section));
+        var keyType = SectionStore.ResolveKeyType(typeof(T), section.GetType());
+
+        if (_holdsGate.Value)
+        {
+            await AddSectionUnderGateAsync(keyType, section, cancellationToken).ConfigureAwait(false);
+            return section;
+        }
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        _holdsGate.Value = true;
+        try
+        {
+            await AddSectionUnderGateAsync(keyType, section, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _holdsGate.Value = false;
+            _gate.Release();
+        }
         return section;
     }
 
 #if NET
     /// <summary>
-    /// Registers a section instance without loading any values from disk,
-    /// inferring the section interface type at runtime.
+    /// Registers a section instance, inferring the section interface type at runtime.
+    /// Otherwise identical to <see cref="AddSection{T}"/>.
     /// </summary>
     /// <remarks>
     /// Prefer the generic overload <see cref="AddSection{T}"/> for explicit control and
@@ -757,8 +834,106 @@ public sealed class IniConfig : IDisposable
     public IIniSection AddSection(IIniSection section)
     {
         if (section is null) throw new ArgumentNullException(nameof(section));
-        Sections.Set(SectionStore.ResolveKeyType(section.GetType(), section.GetType()), section);
+        AddSectionCore(SectionStore.ResolveKeyType(section.GetType(), section.GetType()), section);
         return section;
+    }
+
+    private void AddSectionCore(Type keyType, IIniSection section)
+    {
+        if (_holdsGate.Value)
+        {
+            // Called from a hook or listener of a running operation (e.g. a host section's IAfterLoad that
+            // loads plugins): this flow already owns the gate.
+            AddSectionUnderGate(keyType, section);
+            return;
+        }
+
+        _gate.Wait();
+        _holdsGate.Value = true;
+        try
+        {
+            AddSectionUnderGate(keyType, section);
+        }
+        finally
+        {
+            _holdsGate.Value = false;
+            _gate.Release();
+        }
+    }
+
+    private void AddSectionUnderGate(Type keyType, IIniSection section)
+    {
+        if (!IsLoaded)
+        {
+            RegisterBeforeLoad(keyType, section);
+            return;
+        }
+
+        var sections = PrepareLateRegistration(keyType, section);
+        ApplySnapshot(sections, _retained!, updateMetadata: false);
+        ApplyValueSources(sections);
+        ClearDirtyFlags(sections);
+        Sections.Set(keyType, section);
+        RunAfterLoadHooks(sections);
+        NotifySectionAdded(section, loaded: true);
+    }
+
+    private async Task AddSectionUnderGateAsync(Type keyType, IIniSection section, CancellationToken cancellationToken)
+    {
+        if (!IsLoaded)
+        {
+            RegisterBeforeLoad(keyType, section);
+            return;
+        }
+
+        var sections = PrepareLateRegistration(keyType, section);
+        ApplySnapshot(sections, _retained!, updateMetadata: false);
+        await ApplyValueSourcesAsync(sections, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        ClearDirtyFlags(sections);
+        Sections.Set(keyType, section);
+        await RunAfterLoadHooksAsync(sections, cancellationToken).ConfigureAwait(false);
+        NotifySectionAdded(section, loaded: true);
+    }
+
+    private void RegisterBeforeLoad(Type keyType, IIniSection section)
+    {
+        ThrowIfSectionNameTaken(keyType, section);
+        // Until the load populates it, the section returns its [DefaultValue]s rather than default(T).
+        ResetSection(section);
+        Sections.Set(keyType, section);
+        NotifySectionAdded(section, loaded: false);
+    }
+
+    private IIniSection[] PrepareLateRegistration(Type keyType, IIniSection section)
+    {
+        if (!AllowLateRegistration)
+            throw new InvalidOperationException(
+                $"Section '{keyType.Name}' cannot be added to '{FileName}' after it has been loaded. " +
+                $"Register it before Load()/Build(), or enable {nameof(IniConfigBuilder)}.{nameof(IniConfigBuilder.AllowLateSectionRegistration)}().");
+        if (Sections.ContainsKey(keyType))
+            throw new InvalidOperationException(
+                $"A section of type '{keyType.Name}' is already registered with '{FileName}'. " +
+                "Replacing a loaded section would leave other code holding the old instance; use GetSection/TryGetSection instead.");
+        ThrowIfSectionNameTaken(keyType, section);
+        return new[] { section };
+    }
+
+    private void ThrowIfSectionNameTaken(Type keyType, IIniSection section)
+    {
+        var sameName = Sections.FindByName(section.SectionName);
+        if (sameName != null && !(Sections.TryGetValue(keyType, out var sameType) && ReferenceEquals(sameType, sameName)))
+            throw new InvalidOperationException(
+                $"Section name '{section.SectionName}' of '{keyType.Name}' is already used by another registered section of '{FileName}'.");
+    }
+
+    private void NotifySectionAdded(IIniSection section, bool loaded)
+    {
+        foreach (var listener in Listeners)
+        {
+            if (listener is IIniConfigSectionListener sectionListener)
+                sectionListener.OnSectionAdded(section.SectionName, loaded);
+        }
     }
 
     // ── Load (initial / deferred) ─────────────────────────────────────────────
@@ -798,6 +973,7 @@ public sealed class IniConfig : IDisposable
                 ApplySnapshot(sections, snapshot, updateMetadata: true);
                 ApplyValueSources(sections);
                 ClearDirtyFlags(sections);
+                Retain(snapshot);
                 _loadState = StateLoaded;
                 RunAfterLoadHooks(sections);
                 NotifyFileResult(snapshot);
@@ -848,6 +1024,7 @@ public sealed class IniConfig : IDisposable
                 ApplySnapshot(sections, snapshot, updateMetadata: true);
                 await ApplyValueSourcesAsync(sections, cancellationToken).ConfigureAwait(false);
                 ClearDirtyFlags(sections);
+                Retain(snapshot);
                 _loadState = StateLoaded;
                 await RunAfterLoadHooksAsync(sections, cancellationToken).ConfigureAwait(false);
                 NotifyFileResult(snapshot);
@@ -924,6 +1101,7 @@ public sealed class IniConfig : IDisposable
     /// </param>
     private LayerSnapshot ReadLayers(bool resolveUserFile)
     {
+        Interlocked.Increment(ref LayerReadCount);
         var defaults = new List<IniFile>();
         foreach (var path in DefaultFilePaths)
         {
@@ -949,6 +1127,7 @@ public sealed class IniConfig : IDisposable
     /// <summary>Asynchronous variant of <see cref="ReadLayers"/>.</summary>
     private async Task<LayerSnapshot> ReadLayersAsync(bool resolveUserFile, CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref LayerReadCount);
         var defaults = new List<IniFile>();
         foreach (var path in DefaultFilePaths)
         {
@@ -971,6 +1150,30 @@ public sealed class IniConfig : IDisposable
         }
 
         return new LayerSnapshot(defaults, userPath, user, constants);
+    }
+
+    /// <summary>Keeps the file data that later registrations and saves need, and nothing more.</summary>
+    private void Retain(LayerSnapshot snapshot)
+    {
+        if (AllowLateRegistration)
+            _retained = snapshot;
+        else if (PreserveUnknownSections)
+            _retained = new LayerSnapshot(Array.Empty<IniFile>(), snapshot.UserFilePath, snapshot.User, Array.Empty<IniFile>());
+        else
+            _retained = null;
+    }
+
+    /// <summary>After a successful save the written file is what is on disk: keep it as the retained user layer.</summary>
+    private void RetainWrittenFile(IniFile written)
+    {
+        var retained = _retained;
+        if (retained == null && !PreserveUnknownSections)
+            return;
+        _retained = new LayerSnapshot(
+            retained?.Defaults ?? Array.Empty<IniFile>(),
+            LoadedFromPath,
+            written,
+            retained?.Constants ?? Array.Empty<IniFile>());
     }
 
     private string? GetUserFilePathToRead(bool resolveUserFile)
@@ -1005,7 +1208,7 @@ public sealed class IniConfig : IDisposable
             ApplyIniFile(constants, sections, isConstant: true);
     }
 
-    private void ResetSection(IIniSection section)
+    internal void ResetSection(IIniSection section)
     {
         if (section is IniSectionBase sectionBase)
         {
@@ -1147,47 +1350,21 @@ public sealed class IniConfig : IDisposable
 
     private IniFile BuildIniFile(IReadOnlyList<IIniSection> sections)
     {
-        var iniFile = new Parsing.IniFile();
+        // With PreserveUnknownSections the retained user file is the starting point, so sections nobody
+        // registered, keys a section does not declare, the section order and existing comments survive.
+        var baseFile = PreserveUnknownSections ? _retained?.User : null;
+        var iniFile = baseFile?.Clone() ?? new Parsing.IniFile();
         iniFile.AssignmentSeparator = WriterOptions.AssignmentSeparator;
+
         foreach (var section in sections)
         {
             if (section is IniSectionBase sectionBase)
             {
-                var sectionDesc = sectionBase.GetSectionDescription();
-                var sectionComments = sectionDesc != null
-                    ? (IReadOnlyList<string>)new[] { sectionDesc }
-                    : Array.Empty<string>();
-                var iniSection = new Parsing.IniSection(section.SectionName, sectionComments)
-                {
-                    WriterOptionsOverride = sectionBase.GetSectionWriterOptions()
-                };
-                iniFile.AddSection(iniSection);
-                var describedSubKeyDictionaries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-                foreach (var rawKvp in sectionBase.GetAllRawValues())
-                {
-                    var propDesc = sectionBase.GetPropertyDescription(rawKvp.Key);
-                    if (propDesc == null)
-                    {
-                        var keySeparatorIndex = rawKvp.Key.IndexOf('.');
-                        if (keySeparatorIndex > 0)
-                        {
-                            var prefixKey = rawKvp.Key.Substring(0, keySeparatorIndex);
-                            propDesc = sectionBase.GetPropertyDescription(prefixKey);
-                            if (propDesc != null && !describedSubKeyDictionaries.Add(prefixKey))
-                                propDesc = null;
-                        }
-                    }
-                    var propComments = propDesc != null
-                        ? (IReadOnlyList<string>)new[] { propDesc }
-                        : Array.Empty<string>();
-                    iniSection.SetEntry(new Parsing.IniEntry(rawKvp.Key, rawKvp.Value, propComments)
-                    {
-                        WriterOptionsOverride = sectionBase.GetPropertyWriterOptions(rawKvp.Key)
-                    });
-                }
+                var built = BuildSection(sectionBase, iniFile.KeyComparer);
+                var existing = iniFile.GetSection(section.SectionName);
+                iniFile.AddSection(existing == null ? built : MergeSection(existing, built, iniFile.KeyComparer));
             }
-            else
+            else if (iniFile.GetSection(section.SectionName) == null)
             {
                 // Non-generated sections: add an empty section placeholder to the file.
                 iniFile.AddSection(new Parsing.IniSection(section.SectionName, Array.Empty<string>()));
@@ -1207,7 +1384,85 @@ public sealed class IniConfig : IDisposable
             iniFile.PrependSection(metaSection);
         }
 
+        // Keys before the first [Section] (the global "" section) are written without a header,
+        // so that section must stay first, or its keys would end up in the section above them.
+        var globalSection = iniFile.GetSection(string.Empty);
+        if (globalSection != null)
+            iniFile.PrependSection(globalSection);
+
         return iniFile;
+    }
+
+    /// <summary>Builds the file representation of one registered section from its current values.</summary>
+    private static Parsing.IniSection BuildSection(IniSectionBase sectionBase, StringComparer keyComparer)
+    {
+        var sectionDesc = sectionBase.GetSectionDescription();
+        var sectionComments = sectionDesc != null
+            ? (IReadOnlyList<string>)new[] { sectionDesc }
+            : Array.Empty<string>();
+        var iniSection = new Parsing.IniSection(sectionBase.SectionName, sectionComments, keyComparer)
+        {
+            WriterOptionsOverride = sectionBase.GetSectionWriterOptions()
+        };
+        var describedSubKeyDictionaries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var rawKvp in sectionBase.GetAllRawValues())
+        {
+            var propDesc = sectionBase.GetPropertyDescription(rawKvp.Key);
+            if (propDesc == null)
+            {
+                var keySeparatorIndex = rawKvp.Key.IndexOf('.');
+                if (keySeparatorIndex > 0)
+                {
+                    var prefixKey = rawKvp.Key.Substring(0, keySeparatorIndex);
+                    propDesc = sectionBase.GetPropertyDescription(prefixKey);
+                    if (propDesc != null && !describedSubKeyDictionaries.Add(prefixKey))
+                        propDesc = null;
+                }
+            }
+            var propComments = propDesc != null
+                ? (IReadOnlyList<string>)new[] { propDesc }
+                : Array.Empty<string>();
+            iniSection.SetEntry(new Parsing.IniEntry(rawKvp.Key, rawKvp.Value, propComments)
+            {
+                WriterOptionsOverride = sectionBase.GetPropertyWriterOptions(rawKvp.Key)
+            });
+        }
+        return iniSection;
+    }
+
+    /// <summary>
+    /// Merges the freshly built <paramref name="built"/> section into the <paramref name="existing"/> one from the
+    /// retained file: existing keys keep their position and comments and get the new value, new keys are appended.
+    /// Keys the section does not write (undeclared keys, removed sub-keys) are dropped, exactly as without
+    /// preservation, so migrations that rename keys still clean up the old ones.
+    /// </summary>
+    private static Parsing.IniSection MergeSection(Parsing.IniSection existing, Parsing.IniSection built, StringComparer keyComparer)
+    {
+        var comments = existing.Comments.Count > 0 ? existing.Comments : built.Comments;
+        var merged = new Parsing.IniSection(existing.Name, comments, keyComparer)
+        {
+            WriterOptionsOverride = built.WriterOptionsOverride ?? existing.WriterOptionsOverride
+        };
+
+        foreach (var entry in existing.Entries)
+        {
+            var update = built.GetEntry(entry.Key);
+            if (update != null)
+            {
+                merged.SetEntry(new Parsing.IniEntry(entry.Key, update.Value, entry.Comments.Count > 0 ? entry.Comments : update.Comments)
+                {
+                    WriterOptionsOverride = update.WriterOptionsOverride
+                });
+            }
+        }
+
+        foreach (var entry in built.Entries)
+        {
+            if (!merged.ContainsKey(entry.Key))
+                merged.SetEntry(entry);
+        }
+        return merged;
     }
 
     private void ApplyIniFile(IniFile iniFile, IReadOnlyList<IIniSection> sections, bool isConstant = false, bool isDefault = false)

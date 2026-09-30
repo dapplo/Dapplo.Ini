@@ -55,6 +55,10 @@ public sealed class IniConfigBuilder
     // Global EmptyWhenNull flag — applied to all sections/properties at runtime
     private bool _globalEmptyWhenNull;
 
+    // Late section registration and preservation of sections nobody registered
+    private bool _allowLateSectionRegistration;
+    private bool _preserveUnknownSections;
+
     // Parser options (null = use IniParserOptions.Default)
     private Parsing.IniParserOptions? _parserOptions;
     // Writer options (null = use IniWriterOptions.Default)
@@ -408,6 +412,58 @@ public sealed class IniConfigBuilder
         return this;
     }
 
+    // ── late registration / unknown sections ─────────────────────────────────
+
+    /// <summary>
+    /// Allows sections to be added with <see cref="IniConfig.AddSection{T}"/> /
+    /// <see cref="IniConfig.AddSectionAsync{T}"/> <em>after</em> the configuration has been loaded.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// With this option the parsed content of every file layer (defaults files, the user file and
+    /// constants files) is kept in memory after each load and reload. A section added later goes
+    /// through the same life cycle a load applies — reset to compiled defaults, defaults files, user
+    /// file, constants (protected), value sources and <see cref="IAfterLoad"/> — from that retained
+    /// data, without reading any file again.
+    /// </para>
+    /// <para>
+    /// Typical use: a plugin host that must read its own settings (e.g. which plugins to load) before
+    /// the plugins can register their sections. See the wiki page <em>Plugin-Registrations</em>.
+    /// </para>
+    /// <para>
+    /// This option implies <see cref="PreserveUnknownSections"/>: sections in the file that are not
+    /// registered (yet) are written back unchanged on save.
+    /// </para>
+    /// <para>
+    /// Cost: the parsed files stay in memory for the lifetime of the configuration, which is roughly
+    /// proportional to the size of the files on disk. Without this option nothing extra is kept, and
+    /// <see cref="IniConfig.AddSection{T}"/> after the load throws <see cref="InvalidOperationException"/>.
+    /// </para>
+    /// </remarks>
+    public IniConfigBuilder AllowLateSectionRegistration()
+    {
+        _allowLateSectionRegistration = true;
+        _preserveUnknownSections = true;
+        return this;
+    }
+
+    /// <summary>
+    /// Writes sections that are present in the INI file but not registered (for example the settings
+    /// of a plugin that is not loaded in this session) back unchanged on save, instead of dropping them.
+    /// </summary>
+    /// <remarks>
+    /// The parsed user file is kept in memory to do this. Registered sections are updated in place, so
+    /// their position in the file and the comments above existing keys are kept too. Keys in a registered
+    /// section that its interface does not declare are still removed on save, as without this option,
+    /// so migrations that rename keys keep working.
+    /// This is implied by <see cref="AllowLateSectionRegistration"/>.
+    /// </remarks>
+    public IniConfigBuilder PreserveUnknownSections()
+    {
+        _preserveUnknownSections = true;
+        return this;
+    }
+
     // ── writer options ─────────────────────────────────────────────────────────
 
     /// <summary>
@@ -753,6 +809,8 @@ public sealed class IniConfigBuilder
         config.UnknownKeyHandler = _unknownKeyCallback;
         config.MetadataConfig = _metadataConfig;
         config.GlobalEmptyWhenNull = _globalEmptyWhenNull;
+        config.AllowLateRegistration = _allowLateSectionRegistration;
+        config.PreserveUnknownSections = _preserveUnknownSections;
         config.WriterOptions = (_writerOptions ?? Parsing.IniWriterOptions.Default).Clone();
         config.ParserOptions = _parserOptions ?? Parsing.IniParserOptions.Default;
 
@@ -763,9 +821,13 @@ public sealed class IniConfigBuilder
         config.ValueSourcesAsync.AddRange(_valueSourcesAsync);
         config.Listeners.AddRange(_listeners);
 
-        // Seed sections (no I/O — Load() will reset and populate them)
+        // Seed sections (no I/O — Load() will reset and populate them). Resetting them now means that
+        // code which reads a section before the load sees its [DefaultValue]s instead of default(T).
         foreach (var kvp in _sections)
+        {
+            config.ResetSection(kvp.Value);
             config.Sections.Set(kvp.Key, kvp.Value);
+        }
 
         return config;
     }
