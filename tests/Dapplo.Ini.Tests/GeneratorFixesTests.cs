@@ -99,6 +99,28 @@ namespace Dapplo.Ini.Tests
         string? Name { get; set; }
     }
 
+    /// <summary>Non-generic IDataValidation implemented in a partial class, combined with attributes.</summary>
+    [IniSection("PlainValidation")]
+    public interface IPlainValidationSettings : IIniSection, IDataValidation
+    {
+        [Range(1, 10)]
+        [IniValue(DefaultValue = "5")]
+        int Level { get; set; }
+
+        [IniValue(DefaultValue = "ok")]
+        string? Code { get; set; }
+    }
+
+    /// <summary>The natural way to implement the non-generic interface: a public method.</summary>
+    public partial class PlainValidationSettingsImpl
+    {
+        public IEnumerable<string> ValidateProperty(string propertyName)
+        {
+            if (propertyName == nameof(Code) && Code == "bad")
+                yield return "Code must not be 'bad'.";
+        }
+    }
+
     /// <summary>An interface without the "I" prefix: its name must be kept as-is.</summary>
     public interface Interval : IIniSection
     {
@@ -212,6 +234,23 @@ namespace Dapplo.Ini.Tests
 
             section.Optional = null;
             Assert.Empty(errors.GetErrors(nameof(IValidationFormsSettings.Optional)).Cast<object>());
+        }
+
+        [Fact]
+        public void NonGenericDataValidation_WithAttributes_CombinesBothRuleSets()
+        {
+            var section = new PlainValidationSettingsImpl();
+            using var config = IniConfigRegistry.ForFile("plain-validation.ini")
+                .AddSearchPath(_tempDir)
+                .RegisterSection<IPlainValidationSettings>(section)
+                .Build();
+            var errors = (INotifyDataErrorInfo)section;
+
+            section.Level = 50;
+            section.Code = "bad";
+
+            Assert.NotEmpty(errors.GetErrors(nameof(IPlainValidationSettings.Level)).Cast<object>());
+            Assert.Equal(new object[] { "Code must not be 'bad'." }, errors.GetErrors(nameof(IPlainValidationSettings.Code)).Cast<object>());
         }
 
         [Fact]

@@ -53,34 +53,40 @@ auto-save).
 
 ---
 
-## Section registrations — `IIniConfigSectionListener`
+## Extended notifications — `IIniConfigExtendedListener`
 
-A listener can additionally implement the optional `IIniConfigSectionListener` interface to
-be told when `IniConfig.AddSection<T>()` / `AddSectionAsync<T>()` registers a section:
+A listener can additionally implement the optional `IIniConfigExtendedListener` interface:
 
 ```csharp
-public interface IIniConfigSectionListener
+public interface IIniConfigExtendedListener
 {
+    // AddSection<T>() / AddSectionAsync<T>() registered a section
     void OnSectionAdded(string sectionName, bool loaded);
+
+    // A value source supplied a value for a key set by a constants file; constants win, the value was not applied
+    void OnValueSourceIgnored(string sectionName, string key, string? ignoredValue);
 }
 ```
 
-`loaded` is `true` when the configuration was already loaded and the section was populated
-right away (late registration, see [[Plugin-Registrations]]), and `false` when the section
-was registered before the load and will be populated by it.  Sections passed to the builder's
-`RegisterSection<T>()` are not reported.
+- `OnSectionAdded`: `loaded` is `true` when the configuration was already loaded and the section
+  was populated right away (late registration, see [[Plugin-Registrations]]), and `false` when the
+  section was registered before the load and will be populated by it. Sections passed to the
+  builder's `RegisterSection<T>()` are not reported.
+- `OnValueSourceIgnored`: see [[External-Value-Sources]].
 
-It is a separate interface (rather than a new member on `IIniConfigListener`) so that existing
-listeners keep compiling — .NET Framework has no default interface members.  Register it
-with the usual `AddListener`:
+It is a separate interface (rather than new members on `IIniConfigListener`) so that existing
+listeners keep compiling — .NET Framework has no default interface members. The abstract class
+`IniConfigListenerBase` implements both interfaces with empty virtual methods, so you only override
+what you need:
 
 ```csharp
-public sealed class PluginAudit : IIniConfigListener, IIniConfigSectionListener
+public sealed class PluginAudit : IniConfigListenerBase
 {
-    public void OnSectionAdded(string sectionName, bool loaded)
+    public override void OnSectionAdded(string sectionName, bool loaded)
         => Log.Info($"[Dapplo.Ini] Section [{sectionName}] added ({(loaded ? "after" : "before")} load)");
 
-    // … IIniConfigListener members …
+    public override void OnValueSourceIgnored(string sectionName, string key, string? ignoredValue)
+        => Log.Warn($"[Dapplo.Ini] [{sectionName}] {key} is fixed by a constants file; value source ignored");
 }
 ```
 

@@ -1001,11 +1001,7 @@ public sealed class IniConfig : IDisposable
 
     private void NotifySectionAdded(IIniSection section, bool loaded)
     {
-        foreach (var listener in Listeners)
-        {
-            if (listener is IIniConfigSectionListener sectionListener)
-                sectionListener.OnSectionAdded(section.SectionName, loaded);
-        }
+        NotifyExtendedListeners(l => l.OnSectionAdded(section.SectionName, loaded));
     }
 
     // ── Load (initial / deferred) ─────────────────────────────────────────────
@@ -1354,11 +1350,15 @@ public sealed class IniConfig : IDisposable
             {
                 foreach (var key in section.GetKeys())
                 {
+                    if (!source.TryGetValue(section.SectionName, key, out var value))
+                        continue;
                     // Constants (admin-forced values) win over value sources.
                     if (section.IsConstant(key))
+                    {
+                        NotifyExtendedListeners(l => l.OnValueSourceIgnored(section.SectionName, key, value));
                         continue;
-                    if (source.TryGetValue(section.SectionName, key, out var value))
-                        section.SetRawValue(key, value);
+                    }
+                    section.SetRawValue(key, value);
                 }
             }
         }
@@ -1378,12 +1378,16 @@ public sealed class IniConfig : IDisposable
             {
                 foreach (var key in section.GetKeys())
                 {
-                    if (section.IsConstant(key))
-                        continue;
                     var (found, value) = await source.TryGetValueAsync(
                         section.SectionName, key, cancellationToken).ConfigureAwait(false);
-                    if (found)
-                        section.SetRawValue(key, value);
+                    if (!found)
+                        continue;
+                    if (section.IsConstant(key))
+                    {
+                        NotifyExtendedListeners(l => l.OnValueSourceIgnored(section.SectionName, key, value));
+                        continue;
+                    }
+                    section.SetRawValue(key, value);
                 }
             }
         }
@@ -1400,6 +1404,17 @@ public sealed class IniConfig : IDisposable
         if (Listeners.Count == 0) return;
         foreach (var listener in Listeners)
             notify(listener);
+    }
+
+    /// <summary>Notifies the listeners that also implement <see cref="IIniConfigExtendedListener"/>.</summary>
+    private void NotifyExtendedListeners(Action<IIniConfigExtendedListener> notify)
+    {
+        if (Listeners.Count == 0) return;
+        foreach (var listener in Listeners)
+        {
+            if (listener is IIniConfigExtendedListener extended)
+                notify(extended);
+        }
     }
 
     // Key stored in Exception.Data once an exception has been reported to the listeners,

@@ -282,6 +282,33 @@ public sealed class RoundTripAndParsingTests : IDisposable
         Assert.Equal("from source", section.UserValue);
     }
 
+    [Fact]
+    public void ValueSource_ForConstantKey_IsReportedToExtendedListeners()
+    {
+        WriteIni("vs-report.ini", "[ConstantsTest]");
+        var constants = WriteIni("vs-report-constants.ini", "[ConstantsTest]\nAdminValue = admin");
+        var source = new DictionaryValueSource();
+        source.SetValue("ConstantsTest", "AdminValue", "from source");
+        var listener = new IgnoredValueListener();
+
+        using var config = IniConfigRegistry.ForFile("vs-report.ini")
+            .AddSearchPath(_tempDir)
+            .AddConstantsFile(constants)
+            .AddValueSource(source)
+            .AddListener(listener)
+            .RegisterSection<IConstantsSettings>(new ConstantsSettingsImpl())
+            .Build();
+
+        Assert.Equal(new[] { ("ConstantsTest", "AdminValue", (string?)"from source") }, listener.Ignored);
+    }
+
+    private sealed class IgnoredValueListener : IniConfigListenerBase
+    {
+        public List<(string, string, string?)> Ignored { get; } = new();
+        public override void OnValueSourceIgnored(string sectionName, string key, string? ignoredValue)
+            => Ignored.Add((sectionName, key, ignoredValue));
+    }
+
     // ── File monitoring ───────────────────────────────────────────────────────
 
     [Fact]

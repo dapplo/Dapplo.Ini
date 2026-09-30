@@ -721,7 +721,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             sb.AppendLine("        }");
             sb.AppendLine("        private void RunValidation(string propertyName)");
             sb.AppendLine("        {");
-            sb.AppendLine("            var errors = ValidateProperty(propertyName);");
+            sb.AppendLine("            var errors = CollectValidationErrors(propertyName);");
             sb.AppendLine("            var errorList = new System.Collections.Generic.List<string>(errors);");
             sb.AppendLine("            if (errorList.Count == 0)");
             sb.AppendLine("                _validationErrors.Remove(propertyName);");
@@ -1496,13 +1496,18 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             sb.AppendLine("        }");
             sb.AppendLine();
 
-            // Emit explicit IDataValidation.ValidateProperty bridge.
-            sb.AppendLine("        System.Collections.Generic.IEnumerable<string> Dapplo.Ini.Interfaces.IDataValidation.ValidateProperty(string propertyName)");
-            sb.AppendLine("            => ValidateProperty(propertyName);");
-            sb.AppendLine();
+            // Emit the explicit IDataValidation.ValidateProperty bridge — unless the consumer implements the
+            // non-generic IDataValidation in a partial class, which then provides ValidateProperty itself.
+            if (!m.ImplementsDataValidation)
+            {
+                sb.AppendLine("        System.Collections.Generic.IEnumerable<string> Dapplo.Ini.Interfaces.IDataValidation.ValidateProperty(string propertyName)");
+                sb.AppendLine("            => CollectValidationErrors(propertyName);");
+                sb.AppendLine();
+            }
 
-            // Emit the private ValidateProperty helper, merging attribute rules with any consumer rules.
-            sb.AppendLine("        private System.Collections.Generic.IEnumerable<string> ValidateProperty(string propertyName)");
+            // Emit the private helper, merging attribute rules with any consumer rules. It has its own name,
+            // so it never clashes with a ValidateProperty method the consumer writes in a partial class.
+            sb.AppendLine("        private System.Collections.Generic.IEnumerable<string> CollectValidationErrors(string propertyName)");
             sb.AppendLine("        {");
             sb.AppendLine("            foreach (var __e in ValidateAttributeRules(propertyName)) yield return __e;");
             if (m.ImplementsDataValidationGeneric)
@@ -1517,8 +1522,8 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             sb.AppendLine("        System.Collections.Generic.IEnumerable<string> Dapplo.Ini.Interfaces.IDataValidation.ValidateProperty(string propertyName)");
             sb.AppendLine($"            => {ifaceFqn}.ValidateProperty(this, propertyName);");
             sb.AppendLine();
-            // Provide the internal ValidateProperty helper used by RunValidation()
-            sb.AppendLine("        private System.Collections.Generic.IEnumerable<string> ValidateProperty(string propertyName)");
+            // Provide the helper used by RunValidation()
+            sb.AppendLine("        private System.Collections.Generic.IEnumerable<string> CollectValidationErrors(string propertyName)");
             sb.AppendLine($"            => {ifaceFqn}.ValidateProperty(this, propertyName);");
             sb.AppendLine();
         }
@@ -1526,7 +1531,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         {
             // Non-generic: consumer implements ValidateProperty(string) in a partial class.
             // Wire RunValidation() to it.
-            sb.AppendLine("        private System.Collections.Generic.IEnumerable<string> ValidateProperty(string propertyName)");
+            sb.AppendLine("        private System.Collections.Generic.IEnumerable<string> CollectValidationErrors(string propertyName)");
             sb.AppendLine("            => ((Dapplo.Ini.Interfaces.IDataValidation)this).ValidateProperty(propertyName);");
             sb.AppendLine();
         }

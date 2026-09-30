@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `IniConfigBuilder.PreserveUnknownSections()`: `Save()` starts from the parsed user file, so sections nobody registered (e.g. of an excluded or not-yet-loaded plugin) are written back unchanged with their comments; registered sections keep their position and existing comments; undeclared keys of registered sections are still removed.
 - `IniConfig.TryGetSection<T>(out T?)`, `IniConfigRegistry.TryGetSection<T>(fileName, out T?)` and `IniConfigRegistry.TryGetSection<T>(out T?)` (searches all registered configs).
 - `IniConfig.IsLoaded`.
-- `IIniConfigSectionListener.OnSectionAdded(sectionName, loaded)` — optional interface a listener can implement to be told about `AddSection` registrations (separate interface because `net48` has no default interface members).
+- `IIniConfigExtendedListener` — optional listener interface (separate because `net48` has no default interface members) with `OnSectionAdded(sectionName, loaded)` for `AddSection` registrations and `OnValueSourceIgnored(sectionName, key, value)` when a constant wins over a value source; `IniConfigListenerBase` implements all listener callbacks as empty virtual methods.
 - Converters for `short`, `ushort`, `sbyte` and `char`; `bool` also reads `1`/`0`, `yes`/`no`, `on`/`off`.
 - Generator: generic async hooks `IAfterLoadAsync<T>`, `IBeforeSaveAsync<T>`, `IAfterSaveAsync<T>` are bridged; properties inherited from base section interfaces are implemented; nested section interfaces are supported; `[DefaultValue(typeof(T), "…")]` and array defaults work.
 - Reload raises `PropertyChanged` (for `INotifyPropertyChanged` sections) for every value the reload changed, after the reload has completed, on the reloading thread.
@@ -34,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Load`, `Reload`, `Save` and `AddSection` are serialised by one lifecycle gate. `Save()` now **waits** for a running operation instead of silently returning; `Save()` from inside a save hook returns immediately; `Save()` from a load/reload hook or listener runs directly.
 - `Load()` / `Reload()` (and async variants) called from a hook or listener of a running operation throw `InvalidOperationException`.
 - Dirty flags are cleared **before** the `IAfterLoad` hooks: changes made in hooks (migrations) stay dirty and are saved, also by auto-save.
-- Constants win over value sources: value sources are skipped for keys set by a constants file.
+- Constants win over value sources: value sources are skipped for keys set by a constants file (reported via `IIniConfigExtendedListener.OnValueSourceIgnored`).
 - `AddSection<T>()` after the load throws `InvalidOperationException` unless `AllowLateSectionRegistration()` is enabled. After the load, adding an already registered type throws; a different type with an already used `SectionName` throws (also before the load). Before the load, registering the same type again still replaces it.
 - Sections registered before the load (builder `RegisterSection` + `Create()`, or `AddSection` before `Load`) return their `[DefaultValue]`s instead of `default(T)`.
 - `InitialLoadTask` completes for `Create()` + `Load()` / `LoadAsync()` too (previously only `BuildAsync`), and faults when the load fails.
@@ -56,7 +56,7 @@ Other changes:
 - File monitoring also reacts to `Created` and `Renamed` events (editors that save by replacing the file).
 - `Uri` keeps relative URIs and is written as `OriginalString`; empty list elements are `""` on all frameworks; string-keyed dictionaries read from the inline `key=value,…` form are case-insensitive.
 - Transactions: `Commit()` marks changes dirty, updates raw values and raises the property events; only properties assigned during the transaction are committed. Setters no longer round-trip through converters and check constants before changing anything.
-- Generator: `[Range]` works on `double`, `long`, `decimal`, nullable types and the `typeof` form; `[MaxLength]` on lists; `[RegularExpression]` on non-strings.
+- Generator: `[Range]` works on `double`, `long`, `decimal`, nullable types and the `typeof` form; `[MaxLength]` on lists; `[RegularExpression]` on non-strings; the non-generic `IDataValidation` can be implemented with a normal public `ValidateProperty` method in a partial class, also together with validation attributes (previously a duplicate-member compile error or endless recursion).
 - i18n: the fallback chain loads every parent culture (`zh`, `zh-Hant`, then `zh-Hant-TW`); translations are swapped atomically; values are trimmed after `=`.
 - Project renamed from `Dapplo.IniConfig` / `Dapplo.Ini.Config` to **`Dapplo.Ini`**; all namespaces updated accordingly.
 - `IniConfig`, `IniConfigRegistry`, and `IniConfigBuilder` moved to the `Dapplo.Ini` namespace; `IniSectionBase` remains in `Dapplo.Ini.Configuration`.

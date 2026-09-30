@@ -97,7 +97,7 @@ For the following three capabilities there is no standard .NET attribute; use
 
 | `[IniValue]` property | Purpose |
 |---|---|
-| `NotifyPropertyChanged = true` | Raises `INotifyPropertyChanged` / `INotifyPropertyChanging` on every assignment |
+| `SuppressPropertyChanged = true` / `SuppressPropertyChanging = true` | Suppresses the change events for this property (events are enabled for all properties by extending `INotifyPropertyChanged` / `INotifyPropertyChanging` on the section interface) |
 | `Transactional = true` | Property participates in `Begin` / `Commit` / `Rollback` — requires `ITransactional` |
 | `RuntimeOnly = true` | Property is never loaded from or saved to the INI file but its default **is** restored by `ResetToDefaults` on every reload |
 | `EmptyWhenNull = true` | When absent from the file, returns `string.Empty`, an empty list, an empty array, or an empty dictionary instead of `null`. See [[Empty-When-Null]]. |
@@ -107,11 +107,10 @@ For the following three capabilities there is no standard .NET attribute; use
 
 ```csharp
 [IniSection("AppState")]
-public interface IAppStateSettings : IIniSection
+public interface IAppStateSettings : IIniSection, INotifyPropertyChanged
 {
-    // Raises property-change events (no standard attribute equivalent)
+    // Raises PropertyChanged (enabled by INotifyPropertyChanged on the interface)
     [DefaultValue("MyApp")]
-    [IniValue(NotifyPropertyChanged = true)]
     string? AppName { get; set; }
 
     // Never persisted — default is reset on every Reload(); use for session-scoped values

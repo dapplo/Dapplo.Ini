@@ -183,8 +183,8 @@ Rules:
   `IAfterLoad` that starts plugins) runs inline, as part of that operation.
 - `IniConfig.IsLoaded` tells whether the first load has completed; `TryGetSection<T>()`
   checks for an optional plugin section without throwing.
-- A listener that also implements `IIniConfigSectionListener` is notified of every
-  `AddSection` — see [[Listeners]].
+- A listener that also implements `IIniConfigExtendedListener` (or derives from
+  `IniConfigListenerBase`) is notified of every `AddSection` — see [[Listeners]].
 - The option implies `PreserveUnknownSections()` (see below).
 
 **Cost:** the parsed files stay in memory for the lifetime of the `IniConfig` — roughly

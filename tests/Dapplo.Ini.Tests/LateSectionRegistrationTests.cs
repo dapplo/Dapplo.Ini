@@ -485,16 +485,9 @@ public sealed class LateSectionRegistrationTests : IDisposable
             Assert.Equal(section.SectionName, saved.GetSection(section.SectionName)!.GetValue("Value"));
     }
 
-    private sealed class SectionListener : IIniConfigListener, IIniConfigSectionListener
+    private sealed class SectionListener : IniConfigListenerBase
     {
         public List<(string, bool)> Added { get; } = new();
-        public void OnSectionAdded(string sectionName, bool loaded) => Added.Add((sectionName, loaded));
-        public void OnFileLoaded(string filePath) { }
-        public void OnFileNotFound(string fileName) { }
-        public void OnSaved(string filePath) { }
-        public void OnReloaded(string filePath) { }
-        public void OnError(string operation, Exception exception) { }
-        public void OnUnknownKey(string sectionName, string key, string? rawValue) { }
-        public void OnValueConversionFailed(string sectionName, string key, string? rawValue, Exception exception) { }
+        public override void OnSectionAdded(string sectionName, bool loaded) => Added.Add((sectionName, loaded));
     }
 }

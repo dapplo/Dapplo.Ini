@@ -82,7 +82,7 @@ var config = await IniConfigRegistry.ForFile("myapp.ini")
 Value sources are applied after the user file and constants files.
 When multiple sources are registered, they are applied in registration order with the
 last one winning.  Async sources are applied **after** all sync sources.
-Keys that a constants file has set are skipped — a value source never overrides a constant.
+Keys that a constants file has set are skipped — a value source never overrides a constant. Listeners implementing `IIniConfigExtendedListener` are told about each skipped value via `OnValueSourceIgnored` (see [[Listeners]]).
 
 > **Important:** Async value sources (`IValueSourceAsync`) are only consulted during
 > `BuildAsync()`, `LoadAsync()`, `ReloadAsync()` and `AddSectionAsync()`.  The synchronous
