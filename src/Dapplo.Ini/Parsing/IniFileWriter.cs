@@ -20,10 +20,15 @@ public static class IniFileWriter
     /// </remarks>
     public static void WriteFile(string filePath, IniFile iniFile, Encoding? encoding = null, IniWriterOptions? options = null)
     {
-        var tempPath = CreateTempPath(filePath);
+        if (MustWriteInPlace(filePath, out var tempPath, out var tempStream))
+        {
+            using var inPlace = new StreamWriter(filePath, append: false, encoding ?? Encoding.UTF8);
+            Write(inPlace, iniFile, options);
+            return;
+        }
         try
         {
-            using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            using (var stream = tempStream!)
             {
                 using (var writer = new StreamWriter(stream, encoding ?? Encoding.UTF8, 4096, leaveOpen: true))
                 {
@@ -31,11 +36,11 @@ public static class IniFileWriter
                 }
                 stream.Flush(flushToDisk: true);
             }
-            ReplaceFile(tempPath, filePath);
+            ReplaceFile(tempPath!, filePath);
         }
         catch
         {
-            TryDelete(tempPath);
+            TryDelete(tempPath!);
             throw;
         }
     }
@@ -47,21 +52,59 @@ public static class IniFileWriter
     {
         var content = WriteToString(iniFile, options);
         var bytes = (encoding ?? Encoding.UTF8).GetPreamble().Concat((encoding ?? Encoding.UTF8).GetBytes(content)).ToArray();
-        var tempPath = CreateTempPath(filePath);
+        if (MustWriteInPlace(filePath, out var tempPath, out var tempStream))
+        {
+            using var inPlace = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.Read, 4096, FileOptions.Asynchronous);
+            await inPlace.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
+            return;
+        }
         try
         {
-            using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous))
+            using (var stream = tempStream!)
             {
                 await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
                 stream.Flush(flushToDisk: true);
             }
-            ReplaceFile(tempPath, filePath);
+            ReplaceFile(tempPath!, filePath);
         }
         catch
         {
-            TryDelete(tempPath);
+            TryDelete(tempPath!);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Decides between the atomic temp-file-and-replace strategy and writing the file in place, and opens
+    /// the temp file for the former. The file is written in place when it is a symbolic link (replacing it
+    /// would turn the link into a plain file) or when no temp file can be created next to it (for example
+    /// when only the file itself, not its folder, is writable).
+    /// </summary>
+    private static bool MustWriteInPlace(string filePath, out string? tempPath, out FileStream? tempStream)
+    {
+        tempPath = null;
+        tempStream = null;
+        try
+        {
+            if (File.Exists(filePath) && (File.GetAttributes(filePath) & FileAttributes.ReparsePoint) != 0)
+                return true;
+        }
+        catch (IOException)
+        {
+            // Attributes unavailable: try the normal path.
+        }
+
+        var candidate = CreateTempPath(filePath);
+        try
+        {
+            tempStream = new FileStream(candidate, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous);
+        }
+        catch (Exception ex) when ((ex is UnauthorizedAccessException || ex is IOException) && ex is not DirectoryNotFoundException && File.Exists(filePath))
+        {
+            return true;
+        }
+        tempPath = candidate;
+        return false;
     }
 
     private static string CreateTempPath(string filePath)
@@ -73,6 +116,14 @@ public static class IniFileWriter
 
     private static void ReplaceFile(string tempPath, string filePath)
     {
+#if NET
+        // Keep the permissions of the existing file (a new file would get the default umask).
+        if (!OperatingSystem.IsWindows() && File.Exists(filePath))
+        {
+            try { File.SetUnixFileMode(tempPath, File.GetUnixFileMode(filePath)); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best effort */ }
+        }
+#endif
         if (!File.Exists(filePath))
         {
             try

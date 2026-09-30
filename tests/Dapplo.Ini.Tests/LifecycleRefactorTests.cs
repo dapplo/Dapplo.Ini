@@ -378,6 +378,91 @@ public sealed class LifecycleRefactorTests : IDisposable
         Assert.Equal("b", section.Name);
     }
 
+    // ── Review follow-ups ─────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task WorkStartedDuringLoad_ThatOutlivesIt_UsesTheGateNormally()
+    {
+        WriteIni("leak.ini", "[ReloadSection]\nValue = x");
+        var listener = new CallbackListener();
+        var config = IniConfigRegistry.ForFile("leak.ini")
+            .AddSearchPath(_tempDir)
+            .AddListener(listener)
+            .RegisterSection<IReloadSettings>(new ReloadSettingsImpl())
+            .Create();
+        Task? later = null;
+        // The started task inherits the load's execution context; once the load is over it must not
+        // behave as if it still held the gate.
+        listener.FileLoaded = () => later = Task.Run(async () =>
+        {
+            await Task.Delay(100);
+            config.Reload();
+        });
+
+        config.Load();
+        await later!;
+    }
+
+    [Fact]
+    public void PropertyChangedHandlerDuringReload_CanSave()
+    {
+        var path = WriteIni("npc-save.ini", "[General]\nAppName = before");
+        var section = new GeneralSettingsImpl();
+        using var config = IniConfigRegistry.ForFile("npc-save.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IGeneralSettings>(section)
+            .Build();
+        section.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(IGeneralSettings.AppName) && section.AppName == "after")
+            {
+                section.MaxRetries = 7;
+                config.Save();
+            }
+        };
+
+        File.WriteAllText(path, "[General]\nAppName = after");
+        config.Reload();
+
+        Assert.Contains("MaxRetries = 7", File.ReadAllText(path));
+        Assert.False(section.HasChanges);
+    }
+
+    [Fact]
+    public async Task PostLoadSetupFailure_FaultsInitialLoadTask()
+    {
+        var config = IniConfigRegistry.ForFile("setup-fails.ini")
+            .SetWritablePath(Path.Combine(_tempDir, "missing-folder", "setup-fails.ini"))
+            .MonitorFile()
+            .RegisterSection<IReloadSettings>(new ReloadSettingsImpl())
+            .Create();
+
+        await Assert.ThrowsAnyAsync<Exception>(() => config.LoadAsync());
+
+        Assert.True(config.InitialLoadTask.IsFaulted);
+        Assert.False(config.IsLoaded);
+    }
+
+    [Fact]
+    public void Commit_AfterReload_KeepsReloadedValuesOfUntouchedProperties()
+    {
+        var path = WriteIni("tx-reload.ini", "[UserSettings]\nUsername = alice\nPassword = old");
+        var section = new UserSettingsImpl();
+        using var config = IniConfigRegistry.ForFile("tx-reload.ini")
+            .AddSearchPath(_tempDir)
+            .RegisterSection<IUserSettings>(section)
+            .Build();
+
+        section.Begin();
+        section.Username = "bob";
+        File.WriteAllText(path, "[UserSettings]\nUsername = alice\nPassword = new");
+        config.Reload();
+        section.Commit();
+
+        Assert.Equal("bob", section.Username);
+        Assert.Equal("new", section.Password);
+    }
+
     private sealed class CallbackListener : IIniConfigListener
     {
         public Action? FileLoaded { get; set; }

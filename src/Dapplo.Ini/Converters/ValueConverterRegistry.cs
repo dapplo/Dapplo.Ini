@@ -19,6 +19,9 @@ public static class ValueConverterRegistry
     // element converters, so they are dropped whenever a converter is registered and rebuilt on demand.
     private static readonly ConcurrentDictionary<Type, byte> _composed = new();
 
+    // Serialises Register with the bookkeeping of composed converters.
+    private static readonly object _registrationLock = new();
+
     // Generic type definitions used for collection/dictionary detection
     private static readonly HashSet<Type> _listLikeGenericDefinitions = new()
     {
@@ -65,13 +68,16 @@ public static class ValueConverterRegistry
     public static void Register(IValueConverter converter)
     {
         if (converter is null) throw new ArgumentNullException(nameof(converter));
-        _converters[converter.TargetType] = converter;
-        _composed.TryRemove(converter.TargetType, out _);
-        // Composed converters captured the previous element converters: rebuild them on the next lookup.
-        foreach (var composedType in _composed.Keys)
+        lock (_registrationLock)
         {
-            if (_composed.TryRemove(composedType, out _))
-                _converters.TryRemove(composedType, out _);
+            _converters[converter.TargetType] = converter;
+            _composed.TryRemove(converter.TargetType, out _);
+            // Composed converters captured the previous element converters: rebuild them on the next lookup.
+            foreach (var composedType in _composed.Keys)
+            {
+                if (_composed.TryRemove(composedType, out _))
+                    _converters.TryRemove(composedType, out _);
+            }
         }
     }
 
@@ -166,10 +172,15 @@ public static class ValueConverterRegistry
 
     private static IValueConverter AddComposed(Type type, IValueConverter converter)
     {
-        // Use GetOrAdd so that only the first writer wins; all callers then get the winner.
-        var winner = _converters.GetOrAdd(type, converter);
-        _composed.TryAdd(type, 0);
-        return winner;
+        lock (_registrationLock)
+        {
+            // Only the first writer wins; all callers then get the winner. Only a converter this registry
+            // composed is marked as composed — never one the application registered in the meantime.
+            var winner = _converters.GetOrAdd(type, converter);
+            if (ReferenceEquals(winner, converter))
+                _composed.TryAdd(type, 0);
+            return winner;
+        }
     }
 
 #if NET

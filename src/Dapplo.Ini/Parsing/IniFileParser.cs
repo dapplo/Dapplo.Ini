@@ -310,9 +310,10 @@ public static class IniFileParser
     }
 
     /// <summary>
-    /// Inverse of the writer's quote escaping without escape sequences: a run of backslashes directly
-    /// before a quote, or at the end of the value, is halved (an odd run also loses the backslash that
-    /// escaped the quote). Other backslashes are kept as they are.
+    /// Inverse of the writer's quote escaping without escape sequences. The writer turns n backslashes before
+    /// a quote into 2n+1 and n backslashes at the end into 2n, so: an odd run before a quote becomes (run-1)/2
+    /// backslashes and the quote, an even run at the end is halved. Anything else was not written by the
+    /// writer (e.g. a hand-written <c>"C:\Temp\"</c>) and is kept as it is.
     /// </summary>
     private static string UnescapeQuote(string value, char quoteChar)
     {
@@ -333,7 +334,9 @@ public static class IniFileParser
             while (i < value.Length && value[i] == '\\')
                 i++;
             var run = i - start;
-            if (i == value.Length || value[i] == quoteChar)
+            if (i < value.Length && value[i] == quoteChar && run % 2 == 1)
+                sb.Append('\\', (run - 1) / 2);
+            else if (i == value.Length && run % 2 == 0)
                 sb.Append('\\', run / 2);
             else
                 sb.Append('\\', run);
@@ -398,14 +401,13 @@ public static class IniFileParser
         if (string.IsNullOrEmpty(delimiters))
             delimiters = "=:";
 
-        // Delimiters are tried in the configured order: with the default "=:" a line that contains an
-        // '=' is split there, so keys such as "http://host" or "C:\path" keep their colon.
+        var result = -1;
         foreach (var delimiter in delimiters)
         {
             var index = line.IndexOf(delimiter);
-            if (index > 0)
-                return index;
+            if (index > 0 && (result < 0 || index < result))
+                result = index;
         }
-        return -1;
+        return result;
     }
 }

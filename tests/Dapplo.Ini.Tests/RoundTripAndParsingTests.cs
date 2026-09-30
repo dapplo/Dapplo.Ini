@@ -239,12 +239,17 @@ public sealed class RoundTripAndParsingTests : IDisposable
     }
 
     [Fact]
-    public void Parse_KeyWithColon_SplitsAtEqualsSign()
+    public void Parse_ColonStyleLineWithEqualsInValue_SplitsAtTheColon()
     {
-        var parsed = IniFileParser.Parse("[S]\nhttp://host = 1\nplain: 2");
+        var parsed = IniFileParser.Parse("[S]\nConnectionString: Server=x;Db=y");
+        Assert.Equal("Server=x;Db=y", parsed.GetSection("S")!.GetValue("ConnectionString"));
+    }
 
-        Assert.Equal("1", parsed.GetSection("S")!.GetValue("http://host"));
-        Assert.Equal("2", parsed.GetSection("S")!.GetValue("plain"));
+    [Fact]
+    public void QuotedValues_HandWrittenPathEndingWithBackslash_IsKept()
+    {
+        var parsed = IniFileParser.Parse("[S]\nDir = \"C:\\Temp\\\"", new IniParserOptions { QuotedValues = true });
+        Assert.Equal("C:\\Temp\\", parsed.GetSection("S")!.GetValue("Dir"));
     }
 
     [Fact]

@@ -119,10 +119,47 @@ public sealed class IniConfig : IDisposable
     // Serialises Load, Reload, Save and (late) section registration, sync and async alike.
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    // True in the execution flow that currently holds the gate: lifecycle hooks and listeners that run
+    // Identifies the execution flow that currently holds the gate: lifecycle hooks and listeners that run
     // inside an operation see it, so a nested Save() can run directly and a nested Reload() fails fast
-    // instead of deadlocking.
-    private readonly AsyncLocal<bool> _holdsGate = new();
+    // instead of deadlocking. AsyncLocal values are copied into work started from that flow (Task.Run,
+    // timers, posted continuations), so the flow is only treated as the holder while its owner token is
+    // still the active one: copies that outlive the operation see an inactive token and use the gate.
+    private sealed class GateOwner
+    {
+        public volatile bool Active = true;
+    }
+
+    private readonly AsyncLocal<GateOwner?> _gateOwner = new();
+    private volatile GateOwner? _currentOwner;
+
+    private bool HoldsGate => _gateOwner.Value is { Active: true } owner && ReferenceEquals(owner, _currentOwner);
+
+    private GateOwner EnterGate()
+    {
+        _gate.Wait();
+        return ClaimGate();
+    }
+
+    private async Task<GateOwner> EnterGateAsync(CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        return ClaimGate();
+    }
+
+    private GateOwner ClaimGate()
+    {
+        var owner = new GateOwner();
+        _currentOwner = owner;
+        return owner;
+    }
+
+    private void ExitGate(GateOwner owner)
+    {
+        owner.Active = false;
+        _currentOwner = null;
+        _gateOwner.Value = null;
+        _gate.Release();
+    }
 
     // Re-entrance guard for Save itself (e.g. an IBeforeSave hook that calls Save()).
     private int _isSaving;
@@ -244,7 +281,7 @@ public sealed class IniConfig : IDisposable
 
     private void ThrowIfInsideLifecycle(string operation)
     {
-        if (_holdsGate.Value)
+        if (HoldsGate)
             throw new InvalidOperationException(
                 $"{operation}() cannot be called from a lifecycle hook or listener while another load, reload or save " +
                 $"of '{FileName}' is running. Mark the section dirty instead, or call {operation}() after the operation has finished.");
@@ -261,23 +298,22 @@ public sealed class IniConfig : IDisposable
     /// <exception cref="InvalidOperationException">Thrown when the file path is not known.</exception>
     public void Save()
     {
-        if (_holdsGate.Value)
+        if (HoldsGate)
         {
             // Called from a hook or listener of an operation this flow already runs: we own the gate.
             SaveCore();
             return;
         }
 
-        _gate.Wait();
-        _holdsGate.Value = true;
+        var owner = EnterGate();
+        _gateOwner.Value = owner;
         try
         {
             SaveCore();
         }
         finally
         {
-            _holdsGate.Value = false;
-            _gate.Release();
+            ExitGate(owner);
         }
     }
 
@@ -341,22 +377,21 @@ public sealed class IniConfig : IDisposable
     /// <exception cref="InvalidOperationException">Thrown when the file path is not known.</exception>
     public async Task SaveAsync(CancellationToken cancellationToken = default)
     {
-        if (_holdsGate.Value)
+        if (HoldsGate)
         {
             await SaveCoreAsync(cancellationToken).ConfigureAwait(false);
             return;
         }
 
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        _holdsGate.Value = true;
+        var owner = await EnterGateAsync(cancellationToken).ConfigureAwait(false);
+        _gateOwner.Value = owner;
         try
         {
             await SaveCoreAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
-            _holdsGate.Value = false;
-            _gate.Release();
+            ExitGate(owner);
         }
     }
 
@@ -493,19 +528,20 @@ public sealed class IniConfig : IDisposable
     public void Reload()
     {
         ThrowIfInsideLifecycle(nameof(Reload));
-        _gate.Wait();
-        _holdsGate.Value = true;
+        IReadOnlyList<IIniSection> sections;
+        object?[]?[] before;
+        var owner = EnterGate();
+        _gateOwner.Value = owner;
         try
         {
             try
             {
                 _postponedReloadPending = false;
                 var snapshot = ReadLayers(resolveUserFile: false);
-                var sections = Sections.Values;
-                var before = CaptureForChangeNotification(sections);
+                sections = Sections.Values;
+                before = CaptureForChangeNotification(sections);
                 ApplySnapshot(sections, snapshot, updateMetadata: true);
                 ApplyValueSources(sections);
-                RaiseChangeNotifications(sections, before);
                 ClearDirtyFlags(sections);
                 Retain(snapshot);
                 RunAfterLoadHooks(sections);
@@ -518,10 +554,12 @@ public sealed class IniConfig : IDisposable
         }
         finally
         {
-            _holdsGate.Value = false;
-            _gate.Release();
+            ExitGate(owner);
         }
 
+        // Raised after the gate is released, so handlers can save, register sections or marshal to a
+        // UI thread that is waiting for the gate, without deadlocking or disturbing the reload.
+        RaiseChangeNotifications(sections, before);
         Reloaded?.Invoke(this, EventArgs.Empty);
         NotifyListeners(l => l.OnReloaded(LoadedFromPath ?? FileName));
     }
@@ -540,19 +578,20 @@ public sealed class IniConfig : IDisposable
     public async Task ReloadAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfInsideLifecycle(nameof(ReloadAsync));
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        _holdsGate.Value = true;
+        IReadOnlyList<IIniSection> sections;
+        object?[]?[] before;
+        var owner = await EnterGateAsync(cancellationToken).ConfigureAwait(false);
+        _gateOwner.Value = owner;
         try
         {
             try
             {
                 _postponedReloadPending = false;
                 var snapshot = await ReadLayersAsync(resolveUserFile: false, cancellationToken).ConfigureAwait(false);
-                var sections = Sections.Values;
-                var before = CaptureForChangeNotification(sections);
+                sections = Sections.Values;
+                before = CaptureForChangeNotification(sections);
                 ApplySnapshot(sections, snapshot, updateMetadata: true);
                 await ApplyValueSourcesAsync(sections, cancellationToken).ConfigureAwait(false);
-                RaiseChangeNotifications(sections, before);
                 ClearDirtyFlags(sections);
                 Retain(snapshot);
                 await RunAfterLoadHooksAsync(sections, cancellationToken).ConfigureAwait(false);
@@ -565,10 +604,12 @@ public sealed class IniConfig : IDisposable
         }
         finally
         {
-            _holdsGate.Value = false;
-            _gate.Release();
+            ExitGate(owner);
         }
 
+        // Raised after the gate is released, so handlers can save, register sections or marshal to a
+        // UI thread that is waiting for the gate, without deadlocking or disturbing the reload.
+        RaiseChangeNotifications(sections, before);
         Reloaded?.Invoke(this, EventArgs.Empty);
         NotifyListeners(l => l.OnReloaded(LoadedFromPath ?? FileName));
     }
@@ -739,15 +780,15 @@ public sealed class IniConfig : IDisposable
                 return;
             if (!_gate.Wait(0))
                 return;
-            _holdsGate.Value = true;
+            var owner = ClaimGate();
+            _gateOwner.Value = owner;
             try
             {
                 RunInBackground("Save", SaveCore);
             }
             finally
             {
-                _holdsGate.Value = false;
-                _gate.Release();
+                ExitGate(owner);
             }
         }, null, interval, interval);
     }
@@ -816,7 +857,10 @@ public sealed class IniConfig : IDisposable
     /// <see cref="IAfterLoadAsync"/> hooks are preferred over <see cref="IAfterLoad"/>.
     /// </summary>
     /// <param name="section">The concrete section instance to register.</param>
-    /// <param name="cancellationToken">Token to cancel the async operation. A section is only registered when it completes.</param>
+    /// <param name="cancellationToken">
+    /// Token to cancel the async operation. When it is cancelled before the section's values have been applied,
+    /// the section is not registered; cancellation during <see cref="IAfterLoadAsync"/> hooks leaves it registered.
+    /// </param>
     /// <returns>The <paramref name="section"/> instance.</returns>
     /// <exception cref="InvalidOperationException">See <see cref="AddSection{T}"/>.</exception>
 #if NET
@@ -828,22 +872,21 @@ public sealed class IniConfig : IDisposable
         if (section is null) throw new ArgumentNullException(nameof(section));
         var keyType = SectionStore.ResolveKeyType(typeof(T), section.GetType());
 
-        if (_holdsGate.Value)
+        if (HoldsGate)
         {
             await AddSectionUnderGateAsync(keyType, section, cancellationToken).ConfigureAwait(false);
             return section;
         }
 
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        _holdsGate.Value = true;
+        var owner = await EnterGateAsync(cancellationToken).ConfigureAwait(false);
+        _gateOwner.Value = owner;
         try
         {
             await AddSectionUnderGateAsync(keyType, section, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
-            _holdsGate.Value = false;
-            _gate.Release();
+            ExitGate(owner);
         }
         return section;
     }
@@ -870,7 +913,7 @@ public sealed class IniConfig : IDisposable
 
     private void AddSectionCore(Type keyType, IIniSection section)
     {
-        if (_holdsGate.Value)
+        if (HoldsGate)
         {
             // Called from a hook or listener of a running operation (e.g. a host section's IAfterLoad that
             // loads plugins): this flow already owns the gate.
@@ -878,16 +921,15 @@ public sealed class IniConfig : IDisposable
             return;
         }
 
-        _gate.Wait();
-        _holdsGate.Value = true;
+        var owner = EnterGate();
+        _gateOwner.Value = owner;
         try
         {
             AddSectionUnderGate(keyType, section);
         }
         finally
         {
-            _holdsGate.Value = false;
-            _gate.Release();
+            ExitGate(owner);
         }
     }
 
@@ -991,8 +1033,9 @@ public sealed class IniConfig : IDisposable
     public IniConfig Load()
     {
         ThrowIfInsideLifecycle(nameof(Load));
-        _gate.Wait();
-        _holdsGate.Value = true;
+        var wasLoaded = IsLoaded;
+        var owner = EnterGate();
+        _gateOwner.Value = owner;
         try
         {
             try
@@ -1005,11 +1048,14 @@ public sealed class IniConfig : IDisposable
                 ClearDirtyFlags(sections);
                 Retain(snapshot);
                 _loadState = StateLoaded;
-                RunAfterLoadHooks(sections);
                 NotifyFileResult(snapshot);
+                RunAfterLoadHooks(sections);
+                RunPostLoadSetupOnce();
             }
             catch (Exception ex)
             {
+                if (!wasLoaded)
+                    _loadState = StateNotLoaded;
                 NotifyError("Load", ex);
                 _initialLoad.TrySetException(ex);
                 throw;
@@ -1017,11 +1063,9 @@ public sealed class IniConfig : IDisposable
         }
         finally
         {
-            _holdsGate.Value = false;
-            _gate.Release();
+            ExitGate(owner);
         }
 
-        RunPostLoadSetupOnce();
         _initialLoad.TrySetResult(true);
         return this;
     }
@@ -1042,8 +1086,9 @@ public sealed class IniConfig : IDisposable
     public async Task<IniConfig> LoadAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfInsideLifecycle(nameof(LoadAsync));
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        _holdsGate.Value = true;
+        var wasLoaded = IsLoaded;
+        var owner = await EnterGateAsync(cancellationToken).ConfigureAwait(false);
+        _gateOwner.Value = owner;
         try
         {
             try
@@ -1056,11 +1101,14 @@ public sealed class IniConfig : IDisposable
                 ClearDirtyFlags(sections);
                 Retain(snapshot);
                 _loadState = StateLoaded;
-                await RunAfterLoadHooksAsync(sections, cancellationToken).ConfigureAwait(false);
                 NotifyFileResult(snapshot);
+                await RunAfterLoadHooksAsync(sections, cancellationToken).ConfigureAwait(false);
+                RunPostLoadSetupOnce();
             }
             catch (Exception ex)
             {
+                if (!wasLoaded)
+                    _loadState = StateNotLoaded;
                 NotifyError("Load", ex);
                 _initialLoad.TrySetException(ex);
                 throw;
@@ -1068,11 +1116,9 @@ public sealed class IniConfig : IDisposable
         }
         finally
         {
-            _holdsGate.Value = false;
-            _gate.Release();
+            ExitGate(owner);
         }
 
-        RunPostLoadSetupOnce();
         _initialLoad.TrySetResult(true);
         return this;
     }
@@ -1109,14 +1155,23 @@ public sealed class IniConfig : IDisposable
         if (Interlocked.Exchange(ref _postLoadSetupDone, 1) != 0)
             return;
 
-        if (ShouldLockFile)
-            AcquireFileLock();
-        if (ShouldMonitorFile)
-            StartMonitoring(PendingMonitorCallback);
-        if (ShouldSaveOnExit)
-            EnableSaveOnExit();
-        if (ConfiguredAutoSaveInterval.HasValue)
-            StartAutoSave(ConfiguredAutoSaveInterval.Value);
+        try
+        {
+            if (ShouldLockFile)
+                AcquireFileLock();
+            if (ShouldMonitorFile && _watcher == null)
+                StartMonitoring(PendingMonitorCallback);
+            if (ShouldSaveOnExit && _processExitHandler == null)
+                EnableSaveOnExit();
+            if (ConfiguredAutoSaveInterval.HasValue && _autoSaveTimer == null)
+                StartAutoSave(ConfiguredAutoSaveInterval.Value);
+        }
+        catch
+        {
+            // Let the next successful load try again (steps that already succeeded are skipped).
+            Interlocked.Exchange(ref _postLoadSetupDone, 0);
+            throw;
+        }
     }
 
     // ── Reading the layers ────────────────────────────────────────────────────
@@ -1617,7 +1672,7 @@ public sealed class IniConfig : IDisposable
 
         // Let an operation that is already running (e.g. an auto-save) finish before the lock is released,
         // unless Dispose is called from inside that operation.
-        if (!_holdsGate.Value && _gate.Wait(TimeSpan.FromSeconds(5)))
+        if (!HoldsGate && _gate.Wait(TimeSpan.FromSeconds(5)))
             _gate.Release();
 
         ReleaseFileLock();

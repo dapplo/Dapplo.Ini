@@ -768,7 +768,10 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 sb.AppendLine($"        private bool {fieldName}HasRawEntries;");
             }
             if (usesTx)
-                sb.AppendLine($"        private {p.TypeFullName} {txFieldName}; // transaction pending value");
+                {
+                    sb.AppendLine($"        private {p.TypeFullName} {txFieldName}; // transaction pending value");
+                    sb.AppendLine($"        private bool {txFieldName}Touched; // set when the property is assigned during a transaction");
+                }
 
             // Property
             sb.AppendLine($"        public {p.TypeFullName} {p.Name}");
@@ -851,6 +854,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                     if (usesTx)
                     {
                         sb.AppendLine($"                {txFieldName} = __value;");
+                        sb.AppendLine($"                if (_isInTransaction) {txFieldName}Touched = true;");
                         sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = __value; {fieldName}HasRawEntries = true; if (__value != null) foreach (var __kvp in __value) SetRawValueFromProperty($\"{keyNameForSet}.{{__kvp.Key}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value)); }}");
                     }
                     else
@@ -864,6 +868,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 {
                     var convertToRawValue = BuildConvertToRawCall(p, "__value");
                     sb.AppendLine($"                {txFieldName} = __value;");
+                    sb.AppendLine($"                if (_isInTransaction) {txFieldName}Touched = true;");
                     sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = __value; SetRawValueFromProperty(\"{keyNameForSet}\", {convertToRawValue}); }}");
                 }
                 else
@@ -1268,7 +1273,10 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             sb.AppendLine("            _isInTransaction = true;");
             // Snapshot current values into Tx fields
             foreach (var p in txProps)
+            {
                 sb.AppendLine($"            _{Camel(p.Name)}Tx = _{Camel(p.Name)};");
+                sb.AppendLine($"            _{Camel(p.Name)}TxTouched = false;");
+            }
             sb.AppendLine("        }");
             sb.AppendLine();
 
@@ -1284,7 +1292,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 string tx = $"{field}Tx";
                 bool changing = m.ImplementsINotifyPropertyChanging && !p.SuppressPropertyChanging;
                 bool changed  = m.ImplementsINotifyPropertyChanged  && !p.SuppressPropertyChanged;
-                sb.AppendLine($"            if (!EqualityComparer<{p.TypeFullName}>.Default.Equals({field}, {tx}))");
+                // Only properties assigned during the transaction are committed: a reload that happened in the
+                // meantime must not be overwritten with the values captured by Begin().
+                sb.AppendLine($"            if ({tx}Touched && !EqualityComparer<{p.TypeFullName}>.Default.Equals({field}, {tx}))");
                 sb.AppendLine("            {");
                 if (changing)
                     sb.AppendLine($"                PropertyChanging?.Invoke(this, new PropertyChangingEventArgs(nameof({p.Name})));");
@@ -1305,6 +1315,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 if (changed)
                     sb.AppendLine($"                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof({p.Name})));");
                 sb.AppendLine("            }");
+                sb.AppendLine($"            {tx}Touched = false;");
             }
             sb.AppendLine("        }");
             sb.AppendLine();
@@ -1314,6 +1325,8 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             sb.AppendLine("            if (!_isInTransaction) return;");
             sb.AppendLine("            _isInTransaction = false;");
             // Discard Tx changes - old values remain in backing fields
+            foreach (var p in txProps)
+                sb.AppendLine($"            _{Camel(p.Name)}TxTouched = false;");
             sb.AppendLine("        }");
             sb.AppendLine();
         }
