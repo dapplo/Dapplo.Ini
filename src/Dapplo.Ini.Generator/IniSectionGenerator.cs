@@ -1028,67 +1028,79 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         sb.AppendLine("        }");
         sb.AppendLine();
 
+        // ── Key index ─────────────────────────────────────────────────────
+        // Keys are matched case-insensitively through a static dictionary (and a short list of sub-key prefixes)
+        // instead of switching on key.ToLowerInvariant(), which allocated a string per lookup.
+        var keyIndex = new Dictionary<PropertyModel, int>();
+        foreach (var p in m.Properties)
+            if (!p.IsIgnored) keyIndex[p] = keyIndex.Count;
+        sb.AppendLine($"        private static readonly System.Collections.Generic.Dictionary<string, int> __keyIndex = new System.Collections.Generic.Dictionary<string, int>({keyIndex.Count}, System.StringComparer.OrdinalIgnoreCase)");
+        sb.AppendLine("        {");
+        foreach (var kv in keyIndex)
+            sb.AppendLine($"            [\"{EscapeString(kv.Key.KeyName ?? kv.Key.Name)}\"] = {kv.Value},");
+        sb.AppendLine("        };");
+        var subKeyProps = keyIndex.Where(kv => kv.Key.IsSubKeyDictionary).ToList();
+        sb.AppendLine($"        private static readonly string[] __subKeyPrefixes = new string[] {{ {string.Join(", ", subKeyProps.Select(kv => $"\"{EscapeString(kv.Key.KeyName ?? kv.Key.Name)}.\""))} }};");
+        sb.AppendLine($"        private static readonly int[] __subKeyIndexes = new int[] {{ {string.Join(", ", subKeyProps.Select(kv => kv.Value))} }};");
+        sb.AppendLine("        private static int __KeyIndex(string key) => key != null && __keyIndex.TryGetValue(key, out var __index) ? __index : -1;");
+        sb.AppendLine("        private static int __SubKeyIndex(string key)");
+        sb.AppendLine("        {");
+        sb.AppendLine("            if (key == null) return -1;");
+        sb.AppendLine("            for (var __i = 0; __i < __subKeyPrefixes.Length; __i++)");
+        sb.AppendLine("                if (key.StartsWith(__subKeyPrefixes[__i], System.StringComparison.OrdinalIgnoreCase)) return __subKeyIndexes[__i];");
+        sb.AppendLine("            return -1;");
+        sb.AppendLine("        }");
+        sb.AppendLine();
+
         // ── OnRawValueSet ─────────────────────────────────────────────────
         sb.AppendLine("        protected override void OnRawValueSet(string key, string? rawValue)");
         sb.AppendLine("        {");
-        sb.AppendLine("            switch (key.ToLowerInvariant())");
-        sb.AppendLine("            {");
-        foreach (var p in m.Properties)
         {
-            // [IgnoreDataMember] and RuntimeOnly properties are not loaded from INI.
-            if (p.IsIgnored || p.IsRuntimeOnly) continue;
+            var exact = new List<(int, string[])>();
+            var subKey = new List<(int, string[])>();
+            foreach (var p in m.Properties)
+            {
+                // [IgnoreDataMember] and RuntimeOnly properties are not loaded from INI.
+                if (p.IsIgnored || p.IsRuntimeOnly) continue;
 
-            string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
-            string fieldName = $"_{Camel(p.Name)}";
-            if (p.IsSubKeyDictionary)
-            {
-                // Sub-key pattern: "propertyname.subkey"
-                sb.AppendLine($"                case var __sk when __sk.StartsWith(\"{EscapeString(keyName)}.\", System.StringComparison.Ordinal):");
-                // First sub-key clears the compiled defaults so file data fully replaces them.
-                sb.AppendLine($"                    if (!{fieldName}HasRawEntries) {{ {fieldName} = new System.Collections.Generic.Dictionary<string, {p.DictionaryValueTypeFullName}>(System.StringComparer.OrdinalIgnoreCase); {fieldName}HasRawEntries = true; }}");
-                sb.AppendLine($"                    if ({fieldName} == null) {fieldName} = new System.Collections.Generic.Dictionary<string, {p.DictionaryValueTypeFullName}>(System.StringComparer.OrdinalIgnoreCase);");
-                sb.AppendLine($"                    {fieldName}[DecodeSubKey(key.Substring({keyName.Length + 1}))] = ConvertFromRaw<{p.DictionaryValueTypeFullName}>(rawValue);");
-                sb.AppendLine("                    break;");
-            }
-            else
-            {
-                sb.AppendLine($"                case \"{EscapeString(keyName)}\":");
-                string rawArg;
-                if (p.EmptyWhenNull)
-                    rawArg = "rawValue ?? \"\"";
-                else if (!p.IsValueType)
-                    // Honour the runtime GlobalEmptyWhenNull flag for reference-type properties
-                    // that don't have compile-time EmptyWhenNull.
-                    rawArg = "GlobalEmptyWhenNull ? rawValue ?? \"\" : rawValue";
+                string keyName = p.KeyName ?? p.Name;
+                string fieldName = $"_{Camel(p.Name)}";
+                if (p.IsSubKeyDictionary)
+                {
+                    // Sub-key pattern: "propertyname.subkey". The first sub-key clears the compiled defaults so file
+                    // data fully replaces them.
+                    subKey.Add((keyIndex[p], new[]
+                    {
+                        $"if (!{fieldName}HasRawEntries) {{ {fieldName} = new System.Collections.Generic.Dictionary<string, {p.DictionaryValueTypeFullName}>(System.StringComparer.OrdinalIgnoreCase); {fieldName}HasRawEntries = true; }}",
+                        $"if ({fieldName} == null) {fieldName} = new System.Collections.Generic.Dictionary<string, {p.DictionaryValueTypeFullName}>(System.StringComparer.OrdinalIgnoreCase);",
+                        $"{fieldName}[DecodeSubKey(key.Substring({keyName.Length + 1}))] = ConvertFromRaw<{p.DictionaryValueTypeFullName}>(rawValue);",
+                        "return;"
+                    }));
+                }
                 else
-                    rawArg = "rawValue";
-                sb.AppendLine($"                    {fieldName} = {BuildConvertFromRawCall(p, rawArg)};");
-                sb.AppendLine("                    break;");
+                {
+                    string rawArg;
+                    if (p.EmptyWhenNull)
+                        rawArg = "rawValue ?? \"\"";
+                    else if (!p.IsValueType)
+                        // Honour the runtime GlobalEmptyWhenNull flag for reference-type properties
+                        // that don't have compile-time EmptyWhenNull.
+                        rawArg = "GlobalEmptyWhenNull ? rawValue ?? \"\" : rawValue";
+                    else
+                        rawArg = "rawValue";
+                    exact.Add((keyIndex[p], new[] { $"{fieldName} = {BuildConvertFromRawCall(p, rawArg)};", "return;" }));
+                }
             }
+            EmitKeyDispatch(sb, exact, subKey);
         }
-        sb.AppendLine("                default: break;");
-        sb.AppendLine("            }");
         sb.AppendLine("        }");
         sb.AppendLine();
 
         // ── IsKnownKey ────────────────────────────────────────────────────
         sb.AppendLine("        public override bool IsKnownKey(string key)");
         sb.AppendLine("        {");
-        sb.AppendLine("            switch (key.ToLowerInvariant())");
-        sb.AppendLine("            {");
-        foreach (var p in m.Properties)
-        {
-            // [IgnoreDataMember] and RuntimeOnly properties are not known INI keys.
-            if (p.IsIgnored || p.IsRuntimeOnly) continue;
-
-            string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
-            if (p.IsSubKeyDictionary)
-                sb.AppendLine($"                case var __k when __k.StartsWith(\"{EscapeString(keyName)}.\", System.StringComparison.Ordinal):  return true;");
-            else
-                sb.AppendLine($"                case \"{EscapeString(keyName)}\": return true;");
-        }
-        sb.AppendLine("                default: return false;");
-        sb.AppendLine("            }");
+        // [IgnoreDataMember] and RuntimeOnly properties are not known INI keys.
+        EmitKeyDispatch(sb, m.Properties.Where(p => !p.IsIgnored && !p.IsRuntimeOnly), keyIndex, _ => "return true;", "return false;");
         sb.AppendLine("        }");
         sb.AppendLine();
 
@@ -1154,23 +1166,15 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         var metaProps = m.Properties.Where(p => !p.IsIgnored).ToList();
         if (metaProps.Count > 0)
         {
-            sb.AppendLine("            switch (key.ToLowerInvariant())");
-            sb.AppendLine("            {");
-            foreach (var p in metaProps)
+            // typeof() cannot be used on nullable reference types (CS8639).
+            // For value types int? is Nullable<int> and typeof(int?) is valid.
+            EmitKeyDispatch(sb, metaProps, keyIndex, p =>
             {
-                string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
-                // typeof() cannot be used on nullable reference types (CS8639).
-                // For value types int? is Nullable<int> and typeof(int?) is valid.
                 string typeofArg = (!p.IsValueType && p.TypeFullName.EndsWith("?"))
                     ? p.TypeFullName.Substring(0, p.TypeFullName.Length - 1)
                     : p.TypeFullName;
-                if (p.IsSubKeyDictionary)
-                    sb.AppendLine($"                case var __pt when __pt.StartsWith(\"{EscapeString(keyName)}.\", System.StringComparison.Ordinal):  return typeof({typeofArg});");
-                else
-                    sb.AppendLine($"                case \"{EscapeString(keyName)}\": return typeof({typeofArg});");
-            }
-            sb.AppendLine("                default: return null;");
-            sb.AppendLine("            }");
+                return $"return typeof({typeofArg});";
+            }, "return null;");
         }
         else
         {
@@ -1185,16 +1189,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         var valueProps = m.Properties.Where(p => !p.IsIgnored).ToList();
         if (valueProps.Count > 0)
         {
-            sb.AppendLine("            switch (key.ToLowerInvariant())");
-            sb.AppendLine("            {");
-            foreach (var p in valueProps)
-            {
-                string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
-                string fieldName = $"_{Camel(p.Name)}";
-                sb.AppendLine($"                case \"{EscapeString(keyName)}\": return {fieldName};");
-            }
-            sb.AppendLine("                default: return null;");
-            sb.AppendLine("            }");
+            // Matches the property key itself, also for sub-key dictionaries (the whole dictionary).
+            EmitKeyDispatch(sb, valueProps.Select(p => (keyIndex[p], new[] { $"return _{Camel(p.Name)};" })).ToList(),
+                new List<(int, string[])>(), "return null;");
         }
         else
         {
@@ -1217,19 +1214,10 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             !p.IsIgnored && !p.IsReadOnly && !p.IsRuntimeOnly && p.Description != null);
         if (hasPropertyDescriptions)
         {
-            sb.AppendLine("            switch (key.ToLowerInvariant())");
-            sb.AppendLine("            {");
-            foreach (var p in m.Properties)
-            {
-                if (p.IsIgnored || p.IsReadOnly || p.IsRuntimeOnly || p.Description == null) continue;
-                string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
-                if (p.IsSubKeyDictionary)
-                    sb.AppendLine($"                case \"{EscapeString(keyName)}\": return \"{EscapeString(p.Description)}\";");
-                else
-                    sb.AppendLine($"                case \"{EscapeString(keyName)}\": return \"{EscapeString(p.Description)}\";");
-            }
-            sb.AppendLine("                default: return null;");
-            sb.AppendLine("            }");
+            EmitKeyDispatch(sb,
+                m.Properties.Where(p => !p.IsIgnored && !p.IsReadOnly && !p.IsRuntimeOnly && p.Description != null)
+                    .Select(p => (keyIndex[p], new[] { $"return \"{EscapeString(p.Description!)}\";" })).ToList(),
+                new List<(int, string[])>(), "return null;");
         }
         else
         {
@@ -1268,19 +1256,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         {
             sb.AppendLine("        public override Dapplo.Ini.Parsing.IniWriterOptionsOverride? GetPropertyWriterOptions(string key)");
             sb.AppendLine("        {");
-            sb.AppendLine("            switch (key.ToLowerInvariant())");
-            sb.AppendLine("            {");
-            foreach (var p in writerOverrideProps)
-            {
-                string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
-                var assignments = BuildWriterOverrideAssignments(p.WriterQuoteValues, p.WriterEscapeSequences, p.WriterComments);
-                if (p.IsSubKeyDictionary)
-                    sb.AppendLine($"                case var __pwo when __pwo.StartsWith(\"{EscapeString(keyName)}.\", System.StringComparison.Ordinal): return new Dapplo.Ini.Parsing.IniWriterOptionsOverride {{ {assignments} }};");
-                else
-                    sb.AppendLine($"                case \"{EscapeString(keyName)}\": return new Dapplo.Ini.Parsing.IniWriterOptionsOverride {{ {assignments} }};");
-            }
-            sb.AppendLine("                default: return null;");
-            sb.AppendLine("            }");
+            EmitKeyDispatch(sb, writerOverrideProps, keyIndex, p =>
+                $"return new Dapplo.Ini.Parsing.IniWriterOptionsOverride {{ {BuildWriterOverrideAssignments(p.WriterQuoteValues, p.WriterEscapeSequences, p.WriterComments)} }};",
+                "return null;");
             sb.AppendLine("        }");
             sb.AppendLine();
         }
@@ -1305,18 +1283,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         {
             sb.AppendLine("        public override bool IsIgnoreDefaultsKey(string key)");
             sb.AppendLine("        {");
-            sb.AppendLine("            switch (key.ToLowerInvariant())");
-            sb.AppendLine("            {");
-            foreach (var p in ignoreDefaultsProps)
-            {
-                string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
-                if (p.IsSubKeyDictionary)
-                    sb.AppendLine($"                case var __idk when __idk.StartsWith(\"{EscapeString(keyName)}.\", System.StringComparison.Ordinal):  return true;");
-                else
-                    sb.AppendLine($"                case \"{EscapeString(keyName)}\": return true;");
-            }
-            sb.AppendLine("                default: return false;");
-            sb.AppendLine("            }");
+            EmitKeyDispatch(sb, ignoreDefaultsProps, keyIndex, _ => "return true;", "return false;");
             sb.AppendLine("        }");
             sb.AppendLine();
         }
@@ -1329,18 +1296,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         {
             sb.AppendLine("        public override bool IsIgnoreConstantsKey(string key)");
             sb.AppendLine("        {");
-            sb.AppendLine("            switch (key.ToLowerInvariant())");
-            sb.AppendLine("            {");
-            foreach (var p in ignoreConstantsProps)
-            {
-                string keyName = (p.KeyName ?? p.Name).ToLowerInvariant();
-                if (p.IsSubKeyDictionary)
-                    sb.AppendLine($"                case var __ick when __ick.StartsWith(\"{EscapeString(keyName)}.\", System.StringComparison.Ordinal):  return true;");
-                else
-                    sb.AppendLine($"                case \"{EscapeString(keyName)}\": return true;");
-            }
-            sb.AppendLine("                default: return false;");
-            sb.AppendLine("            }");
+            EmitKeyDispatch(sb, ignoreConstantsProps, keyIndex, _ => "return true;", "return false;");
             sb.AppendLine("        }");
             sb.AppendLine();
         }
@@ -1630,6 +1586,45 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
 
     private static string Camel(string name)
         => name.Length == 0 ? name : char.ToLowerInvariant(name[0]) + name.Substring(1);
+
+    /// <summary>
+    /// Emits a dispatch on the property key without allocating: <c>switch (__KeyIndex(key))</c> for exact keys, then
+    /// <c>switch (__SubKeyIndex(key))</c> for <c>Property.subkey</c> keys of sub-key dictionaries (matched by prefix,
+    /// the property key itself is not matched for those), then <paramref name="defaultStatement"/>.
+    /// Every case statement must end with <c>return</c>.
+    /// </summary>
+    private static void EmitKeyDispatch(StringBuilder sb, IEnumerable<PropertyModel> properties, Dictionary<PropertyModel, int> keyIndex,
+        System.Func<PropertyModel, string> statement, string defaultStatement)
+    {
+        var exact = new List<(int, string[])>();
+        var subKey = new List<(int, string[])>();
+        foreach (var p in properties)
+            (p.IsSubKeyDictionary ? subKey : exact).Add((keyIndex[p], new[] { statement(p) }));
+        EmitKeyDispatch(sb, exact, subKey, defaultStatement);
+    }
+
+    private static void EmitKeyDispatch(StringBuilder sb, List<(int Index, string[] Statements)> exact, List<(int Index, string[] Statements)> subKey,
+        string? defaultStatement = null)
+    {
+        EmitSwitch(sb, "__KeyIndex(key)", exact);
+        EmitSwitch(sb, "__SubKeyIndex(key)", subKey);
+        if (defaultStatement != null)
+            sb.AppendLine($"            {defaultStatement}");
+    }
+
+    private static void EmitSwitch(StringBuilder sb, string expression, List<(int Index, string[] Statements)> cases)
+    {
+        if (cases.Count == 0) return;
+        sb.AppendLine($"            switch ({expression})");
+        sb.AppendLine("            {");
+        foreach (var (index, statements) in cases)
+        {
+            sb.AppendLine($"                case {index}:");
+            foreach (var statement in statements)
+                sb.AppendLine($"                    {statement}");
+        }
+        sb.AppendLine("            }");
+    }
 
     private static string EscapeString(string s) => GeneratorText.EscapeString(s);
 

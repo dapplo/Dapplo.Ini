@@ -3,6 +3,7 @@
 
 using System.Globalization;
 using System.Text;
+using Dapplo.Ini.Parsing;
 using System.Text.RegularExpressions;
 using Dapplo.Ini.Interfaces;
 using Dapplo.Ini.Internationalization.Interfaces;
@@ -106,6 +107,9 @@ public sealed class LanguageConfig : IDisposable
     // apply and report in a Batch, which runs after the gate is released.
 
     private readonly SemaphoreSlim _gate = new(1, 1);
+
+    // Only used under the gate.
+    private readonly TranslationLoader _loader = new();
 
     /// <summary>Listener notifications and actions of one operation, run after the gate is released.</summary>
     private sealed class Batch
@@ -237,7 +241,7 @@ public sealed class LanguageConfig : IDisposable
                 while (latest != null && !ReferenceEquals(latest, entry.Applied))
                 {
                     entry.Applied = latest;
-                    entry.Section.UpdateTranslations(latest);
+                    entry.Section.ApplyBuiltTranslations(latest);
                     latest = entry.Latest;
                 }
             }
@@ -414,31 +418,42 @@ public sealed class LanguageConfig : IDisposable
     public bool TryGetTranslation(string key, out string? value)
     {
         value = null;
-        if (string.IsNullOrWhiteSpace(key)) return false;
+        if (key is null) return false;
+        var trimmed = key.AsSpan().Trim();
+        if (trimmed.IsEmpty) return false;
 
+        // Allocation-free: spans, loops instead of LINQ, keys normalized in a stack buffer by the section.
         var entries = _entries;
-        var trimmed = key.Trim();
         var dot = trimmed.IndexOf('.');
         if (dot > 0 && dot < trimmed.Length - 1)
         {
-            var prefix = trimmed.Substring(0, dot);
-            var scoped = entries.Where(e => string.Equals(e.Section.ModuleName, prefix, StringComparison.OrdinalIgnoreCase))
-                .Concat(entries.Where(e => string.Equals(e.Section.SectionName, prefix, StringComparison.OrdinalIgnoreCase)))
-                .ToList();
-            if (scoped.Count > 0)
+            var prefix = trimmed.Slice(0, dot);
+            var scopedKey = trimmed.Slice(dot + 1);
+            var scoped = false;
+            foreach (var entry in entries)
             {
-                var scopedKey = LanguageSectionBase.NormalizeKey(trimmed.Substring(dot + 1));
-                foreach (var entry in scoped)
-                    if (entry.Section.TryGetNormalized(scopedKey, out value))
-                        return true;
+                if (entry.Section.ModuleName is not { } module || !prefix.Equals(module.AsSpan(), StringComparison.OrdinalIgnoreCase)) continue;
+                scoped = true;
+                if (entry.Section.TryGetByKey(scopedKey, out value)) return true;
+            }
+            foreach (var entry in entries)
+            {
+                if (!prefix.Equals(entry.Section.SectionName.AsSpan(), StringComparison.OrdinalIgnoreCase)) continue;
+                scoped = true;
+                if (entry.Section.TryGetByKey(scopedKey, out value)) return true;
+            }
+            if (scoped)
+            {
                 value = null;
                 return false;
             }
         }
 
-        var normalizedKey = LanguageSectionBase.NormalizeKey(trimmed);
-        foreach (var entry in entries.Where(e => e.Section.ModuleName == null).Concat(entries.Where(e => e.Section.ModuleName != null)))
-            if (entry.Section.TryGetNormalized(normalizedKey, out value))
+        foreach (var entry in entries)
+            if (entry.Section.ModuleName == null && entry.Section.TryGetByKey(trimmed, out value))
+                return true;
+        foreach (var entry in entries)
+            if (entry.Section.ModuleName != null && entry.Section.TryGetByKey(trimmed, out value))
                 return true;
 
         value = null;
@@ -510,7 +525,7 @@ public sealed class LanguageConfig : IDisposable
 
             var lateEntry = CreateEntry(typeof(T), baseSection, path);
             ValidateDirectories(lateEntry);
-            lateEntry.Latest = BuildTranslations(lateEntry, GetLoadChain(_currentLanguage), new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), batch);
+            BuildEntries(new[] { lateEntry }, _currentLanguage, batch);
             CompleteLateRegistration(lateEntry, batch);
         });
         return section;
@@ -540,8 +555,7 @@ public sealed class LanguageConfig : IDisposable
 
             var lateEntry = CreateEntry(typeof(T), baseSection, path);
             ValidateDirectories(lateEntry);
-            lateEntry.Latest = await BuildTranslationsAsync(lateEntry, GetLoadChain(_currentLanguage),
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), batch, cancellationToken).ConfigureAwait(false);
+            await BuildEntriesAsync(new[] { lateEntry }, _currentLanguage, batch, cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             CompleteLateRegistration(lateEntry, batch);
         }, cancellationToken).ConfigureAwait(false);
@@ -837,33 +851,25 @@ public sealed class LanguageConfig : IDisposable
             .ToList();
     }
 
-    /// <summary>Reads <c>Description</c> from the <c>[__language__]</c> section, stopping at the end of that section.</summary>
+    /// <summary>
+    /// Reads <c>Description</c> from the <c>[__language__]</c> section, stopping at the end of that section.
+    /// Lines are read through a pooled buffer; only the description itself is allocated.
+    /// </summary>
     private static string? ReadDescription(string filePath)
     {
         try
         {
-            using var reader = new StreamReader(filePath, Encoding.UTF8);
-            var inSection = false;
-            string? line;
-            while ((line = reader.ReadLine()) != null)
+            using var reader = PooledLineReader.OpenFile(filePath);
+            var state = 0;   // 0 = before, 1 = in [__language__], 2 = done
+            string? description = null;
+            while (state < 2)
             {
-                var trimmed = line.Trim();
-                if (trimmed.Length == 0 || trimmed[0] == ';' || trimmed[0] == '#') continue;
-                if (trimmed[0] == '[')
-                {
-                    if (inSection) return null;
-                    var close = trimmed.IndexOf(']');
-                    inSection = close > 1 && string.Equals(trimmed.Substring(1, close - 1).Trim(), LanguageSectionName, StringComparison.OrdinalIgnoreCase);
-                    continue;
-                }
-                if (!inSection) continue;
-
-                var eq = trimmed.IndexOf('=');
-                if (eq <= 0 || LanguageSectionBase.NormalizeKey(trimmed.Substring(0, eq)) != DescriptionKey) continue;
-                var description = UnescapeValue(trimmed.Substring(eq + 1).Trim());
-                return string.IsNullOrWhiteSpace(description) ? null : description;
+                while (state < 2 && reader.TryReadLine(out var line))
+                    state = ReadDescriptionLine(line, state, ref description);
+                if (reader.IsCompleted) break;
+                if (state < 2) reader.Fill();
             }
-            return null;
+            return description;
         }
         catch (IOException)
         {
@@ -873,6 +879,31 @@ public sealed class LanguageConfig : IDisposable
         {
             return null;
         }
+    }
+
+    private static int ReadDescriptionLine(ReadOnlySpan<char> line, int state, ref string? description)
+    {
+        var trimmed = line.Trim();
+        if (trimmed.IsEmpty || trimmed[0] == ';' || trimmed[0] == '#') return state;
+        if (trimmed[0] == '[')
+        {
+            if (state == 1) return 2;
+            var close = trimmed.IndexOf(']');
+            return close > 1 && trimmed.Slice(1, close - 1).Trim().Equals(LanguageSectionName.AsSpan(), StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        }
+        if (state != 1) return state;
+
+        var eq = trimmed.IndexOf('=');
+        if (eq <= 0) return state;
+        Span<char> key = stackalloc char[Math.Min(eq, LanguageSectionBase.MaxStackKeyLength)];
+        if (eq > key.Length) return state;
+        if (!key.Slice(0, LanguageSectionBase.NormalizeKey(trimmed.Slice(0, eq), key)).SequenceEqual(DescriptionKey.AsSpan())) return state;
+
+        var raw = trimmed.Slice(eq + 1).Trim();
+        var buffer = new char[raw.Length];
+        var value = new string(buffer, 0, UnescapeValue(raw, buffer));
+        if (!string.IsNullOrWhiteSpace(value)) description = value;
+        return 2;
     }
 
     // ── Language resolution ───────────────────────────────────────────────────
@@ -1070,27 +1101,112 @@ public sealed class LanguageConfig : IDisposable
     /// </summary>
     private SectionEntry[] BuildAll(string language, Batch batch)
     {
-        var chain = GetLoadChain(language);
-        var fileCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var entries = _entries;
-        var built = entries.Select(entry => BuildTranslations(entry, chain, fileCache, batch)).ToList();
-        for (var i = 0; i < entries.Length; i++)
-            entries[i].Latest = built[i];
+        BuildEntries(entries, language, batch);
         return entries;
     }
 
     private async Task<SectionEntry[]> BuildAllAsync(string language, Batch batch, CancellationToken cancellationToken)
     {
-        var chain = GetLoadChain(language);
-        var fileCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var entries = _entries;
-        var built = new List<Dictionary<string, string>>(entries.Length);
-        foreach (var entry in entries)
-            built.Add(await BuildTranslationsAsync(entry, chain, fileCache, batch, cancellationToken).ConfigureAwait(false));
-        cancellationToken.ThrowIfCancellationRequested();
-        for (var i = 0; i < entries.Length; i++)
-            entries[i].Latest = built[i];
+        await BuildEntriesAsync(entries, language, batch, cancellationToken).ConfigureAwait(false);
         return entries;
+    }
+
+    /// <summary>
+    /// The plan of a build: the targets, grouped by the files they read (same module and directories), and per
+    /// group and language of the chain the files to apply (lowest priority first).
+    /// </summary>
+    private sealed class BuildPlan
+    {
+        public BuildPlan(LanguageConfig config, IReadOnlyList<SectionEntry> entries, string language)
+        {
+            Entries = entries;
+            Chain = config.GetLoadChain(language);
+            Targets = new TranslationLoader.Target[entries.Count];
+            GroupOf = new int[entries.Count];
+            for (var i = 0; i < entries.Count; i++)
+            {
+                var entry = entries[i];
+                Targets[i] = new TranslationLoader.Target(i, entry.Section.SectionName, entry.Latest ?? entry.Section.CurrentTranslations);
+                var group = Groups.FindIndex(g => g.Module == entry.Section.ModuleName && ReferenceEquals(g.Directories, entry.Directories));
+                if (group < 0)
+                {
+                    group = Groups.Count;
+                    Groups.Add((entry.Section.ModuleName, entry.Directories, new List<TranslationLoader.Target>()));
+                }
+                Groups[group].Targets.Add(Targets[i]);
+                GroupOf[i] = group;
+            }
+            Files = new IReadOnlyList<string>[Groups.Count, Chain.Count];
+            for (var g = 0; g < Groups.Count; g++)
+                for (var c = 0; c < Chain.Count; c++)
+                    Files[g, c] = config.ResolveLanguageFiles(Groups[g].Directories, Groups[g].Module, Chain[c]);
+        }
+
+        public IReadOnlyList<SectionEntry> Entries { get; }
+        public IReadOnlyList<string> Chain { get; }
+        public TranslationLoader.Target[] Targets { get; }
+        public int[] GroupOf { get; }
+        public List<(string? Module, IReadOnlyList<string> Directories, List<TranslationLoader.Target> Targets)> Groups { get; } = new();
+        public IReadOnlyList<string>[,] Files { get; }
+    }
+
+    private void BuildEntries(IReadOnlyList<SectionEntry> entries, string language, Batch batch)
+    {
+        var plan = new BuildPlan(this, entries, language);
+        var loader = _loader;   // builds run under the gate: its scratch collections are reused
+        // Most specific language and highest priority file first; see TranslationLoader.
+        for (var c = plan.Chain.Count - 1; c >= 0; c--)
+            for (var g = 0; g < plan.Groups.Count; g++)
+            {
+                var files = plan.Files[g, c];
+                for (var f = files.Count - 1; f >= 0; f--)
+                    loader.ReadFile(files[f], plan.Groups[g].Targets);
+            }
+        loader.Reset();
+        Publish(plan, batch);
+    }
+
+    private async Task BuildEntriesAsync(IReadOnlyList<SectionEntry> entries, string language, Batch batch, CancellationToken cancellationToken)
+    {
+        var plan = new BuildPlan(this, entries, language);
+        var loader = _loader;   // builds run under the gate: its scratch collections are reused
+        for (var c = plan.Chain.Count - 1; c >= 0; c--)
+            for (var g = 0; g < plan.Groups.Count; g++)
+            {
+                var files = plan.Files[g, c];
+                for (var f = files.Count - 1; f >= 0; f--)
+                    await loader.ReadFileAsync(files[f], plan.Groups[g].Targets, cancellationToken).ConfigureAwait(false);
+            }
+        loader.Reset();
+        cancellationToken.ThrowIfCancellationRequested();
+        Publish(plan, batch);
+    }
+
+    /// <summary>
+    /// Publishes the built translations as the sections' latest (under the gate) and reports the files per
+    /// section in the order they apply: per language of the chain, lowest priority first.
+    /// </summary>
+    private void Publish(BuildPlan plan, Batch batch)
+    {
+        for (var i = 0; i < plan.Entries.Count; i++)
+        {
+            var entry = plan.Entries[i];
+            entry.Latest = plan.Targets[i].Result;
+            for (var c = 0; c < plan.Chain.Count; c++)
+            {
+                var files = plan.Files[plan.GroupOf[i], c];
+                if (files.Count == 0)
+                {
+                    var fileName = GetFileName(entry.Section.ModuleName, plan.Chain[c]);
+                    batch.Notify(l => l.OnFileNotFound(fileName));
+                    continue;
+                }
+                foreach (var filePath in files)
+                    batch.Notify(l => l.OnFileLoaded(filePath));
+            }
+        }
     }
 
     /// <summary>
@@ -1124,72 +1240,6 @@ public sealed class LanguageConfig : IDisposable
     {
         for (var hyphen = language.IndexOf('-'); hyphen > 0; hyphen = language.IndexOf('-', hyphen + 1))
             yield return language.Substring(0, hyphen);
-    }
-
-    /// <summary>Builds the complete translations of one section for a load chain.</summary>
-    private Dictionary<string, string> BuildTranslations(SectionEntry entry, IReadOnlyList<string> chain, Dictionary<string, string> fileCache, Batch batch)
-    {
-        var section = entry.Section;
-        var translations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var ietf in chain)
-        {
-            var files = ResolveLanguageFiles(entry.Directories, section.ModuleName, ietf);
-            if (files.Count == 0)
-            {
-                var fileName = GetFileName(section.ModuleName, ietf);
-                batch.Notify(l => l.OnFileNotFound(fileName));
-                continue;
-            }
-
-            foreach (var filePath in files)
-            {
-                if (!fileCache.TryGetValue(filePath, out var content))
-                {
-                    content = File.ReadAllText(filePath, Encoding.UTF8);
-                    fileCache[filePath] = content;
-                }
-                ParseAndApply(translations, content, section.SectionName);
-                batch.Notify(l => l.OnFileLoaded(filePath));
-            }
-        }
-        return translations;
-    }
-
-    private async Task<Dictionary<string, string>> BuildTranslationsAsync(
-        SectionEntry entry, IReadOnlyList<string> chain, Dictionary<string, string> fileCache, Batch batch, CancellationToken cancellationToken)
-    {
-        var section = entry.Section;
-        var translations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var ietf in chain)
-        {
-            var files = ResolveLanguageFiles(entry.Directories, section.ModuleName, ietf);
-            if (files.Count == 0)
-            {
-                var fileName = GetFileName(section.ModuleName, ietf);
-                batch.Notify(l => l.OnFileNotFound(fileName));
-                continue;
-            }
-
-            foreach (var filePath in files)
-            {
-                if (!fileCache.TryGetValue(filePath, out var content))
-                {
-#if NET
-                    content = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
-#else
-                    using (var reader = new StreamReader(filePath, Encoding.UTF8))
-                    {
-                        content = await reader.ReadToEndAsync().ConfigureAwait(false);
-                    }
-                    cancellationToken.ThrowIfCancellationRequested();
-#endif
-                    fileCache[filePath] = content;
-                }
-                ParseAndApply(translations, content, section.SectionName);
-                batch.Notify(l => l.OnFileLoaded(filePath));
-            }
-        }
-        return translations;
     }
 
     private string GetFileName(string? moduleName, string ietf)
@@ -1229,80 +1279,45 @@ public sealed class LanguageConfig : IDisposable
         return files;
     }
 
-    /// <summary>
-    /// Parses a full <c>.ini</c> file and applies matching key=value entries to the target dictionary.
-    /// Only keys inside the <c>[<paramref name="sectionName"/>]</c> block are read.
-    /// Keys outside any section header (or in a different section) are silently ignored.
-    /// Only whole lines starting with <c>;</c> or <c>#</c> are comments; these characters inside a value are kept.
-    /// </summary>
-    /// <param name="target">Target dictionary.</param>
-    /// <param name="content">Raw file content.</param>
-    /// <param name="sectionName">
-    /// The section header to match. Only keys inside this section are loaded.
-    /// </param>
-    /// <param name="allowReservedSection">
-    /// <c>true</c> to read the reserved <c>[__language__]</c> section; otherwise it is never matched.
-    /// </param>
-    private static void ParseAndApply(IDictionary<string, string> target, string content, string sectionName, bool allowReservedSection = false)
-    {
-        bool inScope = false;  // keys outside sections are never in scope
-
-        var span = content.AsSpan();
-        while (!span.IsEmpty)
-        {
-            var line = ReadLine(ref span).Trim();
-            if (line.IsEmpty) continue;
-
-            var first = line[0];
-
-            if (first == ';' || first == '#') continue;
-
-            if (first == '[')
-            {
-                var closeIdx = line.IndexOf(']');
-                if (closeIdx > 1)
-                {
-                    var header = line.Slice(1, closeIdx - 1).Trim().ToString();
-                    inScope = string.Equals(header, sectionName, StringComparison.OrdinalIgnoreCase)
-                              && (allowReservedSection || !string.Equals(header, LanguageSectionName, StringComparison.OrdinalIgnoreCase));
-                }
-                continue;
-            }
-
-            if (!inScope) continue;
-
-            var eq = line.IndexOf('=');
-            if (eq <= 0) continue;
-
-            var rawKey = line.Slice(0, eq).TrimEnd().ToString();
-            var normalizedKey = LanguageSectionBase.NormalizeKey(rawKey);
-            var rawValue = line.Slice(eq + 1).TrimStart().ToString();
-            var value = UnescapeValue(rawValue);
-
-            target[normalizedKey] = value;
-        }
-    }
-
     /// <summary>Processes escape sequences: <c>\n</c>, <c>\t</c>, <c>\\</c>.</summary>
     internal static string UnescapeValue(string raw)
     {
         if (raw.IndexOf('\\') < 0) return raw;
+        var buffer = new char[raw.Length];
+        return new string(buffer, 0, UnescapeValue(raw.AsSpan(), buffer));
+    }
 
-        var sb = new StringBuilder(raw.Length);
-        for (var i = 0; i < raw.Length; i++)
+    /// <summary>
+    /// Processes escape sequences (<c>\n</c>, <c>\t</c>, <c>\\</c>; other backslashes are kept) from
+    /// <paramref name="raw"/> into <paramref name="destination"/> (at least as long as <paramref name="raw"/>)
+    /// without allocating. Returns the length written.
+    /// </summary>
+    internal static int UnescapeValue(ReadOnlySpan<char> raw, Span<char> destination)
+    {
+        var backslash = raw.IndexOf('\\');
+        if (backslash < 0)
         {
-            if (raw[i] == '\\' && i + 1 < raw.Length)
+            raw.CopyTo(destination);
+            return raw.Length;
+        }
+
+        raw.Slice(0, backslash).CopyTo(destination);
+        var length = backslash;
+        for (var i = backslash; i < raw.Length; i++)
+        {
+            var c = raw[i];
+            if (c == '\\' && i + 1 < raw.Length)
             {
                 switch (raw[i + 1])
                 {
-                    case 'n': sb.Append('\n'); i++; continue;
-                    case 't': sb.Append('\t'); i++; continue;
-                    case '\\': sb.Append('\\'); i++; continue;
+                    case 'n': destination[length++] = '\n'; i++; continue;
+                    case 't': destination[length++] = '\t'; i++; continue;
+                    case '\\': destination[length++] = '\\'; i++; continue;
                 }
             }
-            sb.Append(raw[i]);
+            destination[length++] = c;
         }
-        return sb.ToString();
+        return length;
     }
 
     // ── File name helpers ─────────────────────────────────────────────────────
@@ -1427,26 +1442,6 @@ public sealed class LanguageConfig : IDisposable
             ThenApply(batch, entries);
             batch.Then(RaiseLanguageChanged);
         }, rethrow: false);
-    }
-
-    // ── Line reader ───────────────────────────────────────────────────────────
-
-    private static ReadOnlySpan<char> ReadLine(ref ReadOnlySpan<char> remaining)
-    {
-        var newLine = remaining.IndexOfAny('\r', '\n');
-        if (newLine < 0)
-        {
-            var line = remaining;
-            remaining = ReadOnlySpan<char>.Empty;
-            return line;
-        }
-
-        var result = remaining.Slice(0, newLine);
-        remaining = remaining.Slice(newLine + 1);
-        if (!remaining.IsEmpty && remaining[0] == '\n')
-            remaining = remaining.Slice(1);
-
-        return result;
     }
 
     // ── IDisposable ───────────────────────────────────────────────────────────

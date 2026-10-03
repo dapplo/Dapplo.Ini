@@ -177,7 +177,11 @@ public abstract class IniSectionBase : IIniSection
             if (encode)
             {
                 sb ??= new StringBuilder(key, 0, i, key.Length + 8);
-                sb.Append('%').Append(((int)c).ToString("X2", System.Globalization.CultureInfo.InvariantCulture));
+                sb.Append('%');
+                if (c <= 0xFF)
+                    sb.Append(HexDigits[c >> 4]).Append(HexDigits[c & 0xF]);
+                else
+                    sb.Append(((int)c).ToString("X2", System.Globalization.CultureInfo.InvariantCulture));   // as before
             }
             else
             {
@@ -197,7 +201,7 @@ public abstract class IniSectionBase : IIniSection
         {
             if (encoded[i] == '%' && i + 2 < encoded.Length && IsHex(encoded[i + 1]) && IsHex(encoded[i + 2]))
             {
-                sb.Append((char)Convert.ToInt32(encoded.Substring(i + 1, 2), 16));
+                sb.Append((char)(HexValue(encoded[i + 1]) * 16 + HexValue(encoded[i + 2])));
                 i += 2;
             }
             else
@@ -207,6 +211,10 @@ public abstract class IniSectionBase : IIniSection
         }
         return sb.ToString();
     }
+
+    private const string HexDigits = "0123456789ABCDEF";
+
+    private static int HexValue(char c) => c <= '9' ? c - '0' : (c | 0x20) - 'a' + 10;
 
     private static bool IsHex(char c) => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 
@@ -411,6 +419,22 @@ public abstract class IniSectionBase : IIniSection
     // ── Converter helpers (used by generated code) ────────────────────────────
 
     /// <summary>
+    /// Converts with the typed converter interface when the converter has it, so value types are not boxed;
+    /// otherwise through the untyped interface. Same result either way: the converter gets <c>default</c>, and
+    /// a <c>null</c> result becomes <paramref name="defaultValue"/>.
+    /// </summary>
+    private static T? ConvertFrom<T>(IValueConverter converter, string? raw, T? defaultValue)
+    {
+        if (converter is IValueConverter<T> typedConverter)
+        {
+            var typed = typedConverter.ConvertFromString(raw, default);
+            return typed is null ? defaultValue : typed;
+        }
+        var result = converter.ConvertFromString(raw);
+        return result is T value ? value : defaultValue;
+    }
+
+    /// <summary>
     /// Converts a raw INI string to <typeparamref name="T"/> using the registered converter.
     /// Falls back to <paramref name="defaultValue"/> when the raw value is absent or conversion
     /// fails.  When a <see cref="ConversionFailedCallback"/> is registered (i.e. the value is
@@ -427,8 +451,7 @@ public abstract class IniSectionBase : IIniSection
         if (converter == null) return defaultValue;
         try
         {
-            var result = converter.ConvertFromString(raw);
-            return result is T typed ? typed : defaultValue;
+            return ConvertFrom(converter, raw, defaultValue);
         }
         catch (Exception ex)
         {
@@ -458,8 +481,7 @@ public abstract class IniSectionBase : IIniSection
         if (converter == null) return defaultValue;
         try
         {
-            var result = converter.ConvertFromString(raw);
-            return result is T typed ? typed : defaultValue;
+            return ConvertFrom(converter, raw, defaultValue);
         }
         catch (Exception ex)
         {

@@ -298,6 +298,11 @@ applies the translations of the latest operation, so all sections end up in the 
 While one thread applies texts to a section, another thread that switched the language returns at
 once and the first one applies the newer texts too. Reading translations never waits.
 
+Loading is designed to create little garbage: files are streamed through a pooled buffer (never read
+into one large string), each file is read once for all sections, overridden fallback texts are skipped,
+and on .NET 9+ strings of the previous load are reused, so a reload of unchanged files allocates no
+strings. Lookups (`TryGetTranslation`, the indexer, `ContainsKey`) do not allocate.
+
 When reading a language file fails, the switch is not committed: `CurrentLanguage` and all sections
 keep the previous language. When a listener or a `PropertyChanged` / `LanguageChanged` handler throws,
 the remaining handlers and sections still run, every failure is reported via `OnError`, and the first

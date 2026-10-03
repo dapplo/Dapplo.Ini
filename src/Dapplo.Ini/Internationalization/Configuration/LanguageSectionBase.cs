@@ -47,6 +47,14 @@ public abstract class LanguageSectionBase : ILanguageSection, IReadOnlyDictionar
     /// <param name="newTranslations">The new dictionary of normalized key to translated value.</param>
     public virtual void UpdateTranslations(IReadOnlyDictionary<string, string> newTranslations)
     {
+        // A dictionary built by the LanguageConfig is never changed after it was handed over: use it as is
+        // instead of copying it (the generated override passes the same instance on to this method).
+        if (ReferenceEquals(newTranslations, _handOver))
+        {
+            _translations = _handOver;
+            return;
+        }
+
         var updated = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var kvp in newTranslations)
         {
@@ -105,15 +113,129 @@ public abstract class LanguageSectionBase : ILanguageSection, IReadOnlyDictionar
     /// </summary>
     public static string NormalizeKey(string key)
     {
-        var span = key.AsSpan().Trim();
-        var sb = new System.Text.StringBuilder(span.Length);
-        foreach (var ch in span)
+        if (key is null) throw new ArgumentNullException(nameof(key));
+        if (key.Length <= MaxStackKeyLength)
+        {
+            Span<char> buffer = stackalloc char[key.Length];
+            var length = NormalizeKey(key.AsSpan(), buffer);
+            return buffer.Slice(0, length).ToString();
+        }
+
+        var pooled = System.Buffers.ArrayPool<char>.Shared.Rent(key.Length);
+        try
+        {
+            var length = NormalizeKey(key.AsSpan(), pooled);
+            return new string(pooled, 0, length);
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<char>.Shared.Return(pooled);
+        }
+    }
+
+    /// <summary>Keys up to this length are normalized in a stack buffer.</summary>
+    internal const int MaxStackKeyLength = 256;
+
+    /// <summary>
+    /// Normalizes <paramref name="key"/> into <paramref name="destination"/> (at least as long as the key) without
+    /// allocating: trims whitespace, removes <c>_</c> and <c>-</c>, lower-cases. Returns the length written.
+    /// </summary>
+    internal static int NormalizeKey(ReadOnlySpan<char> key, Span<char> destination)
+    {
+        key = key.Trim();
+        var length = 0;
+        foreach (var ch in key)
         {
             if (ch != '_' && ch != '-')
-                sb.Append(char.ToLowerInvariant(ch));
+                destination[length++] = char.ToLowerInvariant(ch);
         }
-        return sb.ToString();
+        return length;
     }
+
+    /// <summary>
+    /// <c>true</c> when looking up <paramref name="key"/> in the (case-insensitive) translations needs no
+    /// normalization: no <c>_</c> or <c>-</c> and no surrounding whitespace.
+    /// </summary>
+    private static bool IsLookupReady(string key)
+        => key.Length > 0
+           && !char.IsWhiteSpace(key[0]) && !char.IsWhiteSpace(key[key.Length - 1])
+           && key.IndexOf('_') < 0 && key.IndexOf('-') < 0;
+
+    /// <summary>
+    /// Looks up a key as given by a caller (normalized first). Allocates nothing for keys without <c>_</c>, <c>-</c>
+    /// or surrounding whitespace; on .NET 9+ never.
+    /// </summary>
+    private bool TryGetByKey(string key, out string? value)
+    {
+        var translations = _translations;
+        if (IsLookupReady(key))
+            return TryGet(translations, key, out value);
+#if NET9_0_OR_GREATER
+        return TryGetByKey(key.AsSpan(), out value);
+#else
+        return TryGet(translations, NormalizeKey(key), out value);
+#endif
+    }
+
+    /// <summary>Looks up a key as given by a caller, from a span (e.g. a part of <c>module.key</c>).</summary>
+    internal bool TryGetByKey(ReadOnlySpan<char> key, out string? value)
+    {
+        if (key.Length > MaxStackKeyLength)
+            return TryGet(_translations, NormalizeKey(key.ToString()), out value);
+        Span<char> buffer = stackalloc char[key.Length];
+        var length = NormalizeKey(key, buffer);
+        return TryGetNormalized(buffer.Slice(0, length), out value);
+    }
+
+    /// <summary>Looks up an already normalized key; allocation-free on .NET 9+.</summary>
+    internal bool TryGetNormalized(ReadOnlySpan<char> normalizedKey, out string? value)
+    {
+#if NET9_0_OR_GREATER
+        if (_translations.GetAlternateLookup<ReadOnlySpan<char>>().TryGetValue(normalizedKey, out var found))
+        {
+            value = found;
+            return true;
+        }
+        value = null;
+        return false;
+#else
+        return TryGet(_translations, normalizedKey.ToString(), out value);
+#endif
+    }
+
+    private static bool TryGet(Dictionary<string, string> translations, string key, out string? value)
+    {
+        if (translations.TryGetValue(key, out var found))
+        {
+            value = found;
+            return true;
+        }
+        value = null;
+        return false;
+    }
+
+    // Set by ApplyBuiltTranslations for the duration of one UpdateTranslations call (one applier per section).
+    private Dictionary<string, string>? _handOver;
+
+    /// <summary>
+    /// Applies translations built by a <see cref="LanguageConfig"/> (a new case-insensitive dictionary that is never
+    /// changed afterwards) through <see cref="UpdateTranslations"/>, without copying them.
+    /// </summary>
+    internal void ApplyBuiltTranslations(Dictionary<string, string> translations)
+    {
+        _handOver = translations;
+        try
+        {
+            UpdateTranslations(translations);
+        }
+        finally
+        {
+            _handOver = null;
+        }
+    }
+
+    /// <summary>The current translations (never modified after being published), for building the next set.</summary>
+    internal Dictionary<string, string> CurrentTranslations => _translations;
 
     // ── IReadOnlyDictionary<string, string> ──────────────────────────────────
 
@@ -121,7 +243,7 @@ public abstract class LanguageSectionBase : ILanguageSection, IReadOnlyDictionar
     /// Returns the translated value for the given key (normalized before lookup).
     /// Returns <c>###key###</c> when the key is not found.
     /// </summary>
-    public string this[string key] => GetTranslation(NormalizeKey(key), key);
+    public string this[string key] => TryGetByKey(key, out var value) ? value! : $"###{key}###";
 
     /// <summary>
     /// Formats the translation for <paramref name="key"/> using the supplied arguments. Never throws:
@@ -131,7 +253,7 @@ public abstract class LanguageSectionBase : ILanguageSection, IReadOnlyDictionar
     /// </summary>
     public string Format(string key, params object[] args)
     {
-        if (key is null || !_translations.TryGetValue(NormalizeKey(key), out var format))
+        if (key is null || !TryGetByKey(key, out var format))
         {
             Owner?.ReportTranslationNotFound(SectionName, key ?? "");
             return $"###{key}###";
@@ -139,29 +261,18 @@ public abstract class LanguageSectionBase : ILanguageSection, IReadOnlyDictionar
 
         try
         {
-            return string.Format(format, args);
+            return string.Format(format!, args);
         }
         catch (Exception ex)
         {
             Owner?.ReportFormatFailed(SectionName, key, ex);
-            return format;
+            return format!;
         }
     }
 
     /// <summary>The configuration this section is registered with (for diagnostics), or <c>null</c>.</summary>
     internal LanguageConfig? Owner { get; set; }
 
-    /// <summary>Looks up an already normalized key.</summary>
-    internal bool TryGetNormalized(string normalizedKey, out string? value)
-    {
-        if (_translations.TryGetValue(normalizedKey, out var found))
-        {
-            value = found;
-            return true;
-        }
-        value = null;
-        return false;
-    }
 
     /// <inheritdoc/>
     public IEnumerable<string> Keys
@@ -176,11 +287,15 @@ public abstract class LanguageSectionBase : ILanguageSection, IReadOnlyDictionar
 
     /// <inheritdoc/>
     public bool ContainsKey(string key)
-        => _translations.ContainsKey(NormalizeKey(key));
+        => TryGetByKey(key, out _);
 
     /// <inheritdoc/>
     public bool TryGetValue(string key, out string value)
-        => _translations.TryGetValue(NormalizeKey(key), out value!);
+    {
+        var found = TryGetByKey(key, out var translation);
+        value = translation!;
+        return found;
+    }
 
     /// <inheritdoc/>
     public IEnumerator<KeyValuePair<string, string>> GetEnumerator()
