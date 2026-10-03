@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+Internationalization improvements for Greenshot's move from XML language files to `Dapplo.Ini.Internationalization`.
+All new behaviour is opt-in; existing code keeps working.
+
+### Added
+- `LanguageConfigBuilder.AllowLateSectionRegistration()`: `LanguageConfig.RegisterSection<T>()` after the load loads that one section right away for the current language and fallback chain; new `LanguageConfig.RegisterSectionAsync<T>()` does the same asynchronously. Other sections are not reloaded and `LanguageChanged` is not raised; later language switches and file-change reloads include the section (with `MonitorFiles()` its directory is watched from then on). Without the option a section registered after the load still stays empty until the next load/switch, but this is now reported via `IIniConfigExtendedListener.OnSectionAdded(name, loaded: false)` and `IIniConfigListener.OnError("RegisterSection", …)` (not thrown).
+- `LanguageConfigBuilder.MergeSearchPaths()`: for every tag of the load chain the language file of every search path is read, lowest priority first, so a higher priority path overrides single keys (e.g. a partial user file in `%APPDATA%`). A section with its own path is only merged when that path is one of the search paths.
+- Reserved `[__language__]` section with `Description=…` in a language file; `LanguageConfig.GetLanguages()` returns `LanguageInfo` (`Ietf`, `NativeName`, `Description`, `HasBaseFile`, `DisplayName`), sorted by tag. `GetAvailableLanguages()` now returns the description when present, otherwise the native name, otherwise the tag.
+- `LanguageConfig.ResolveLanguage(requested)`: exact match, legacy tags without hyphen (`ptBR` → `pt-BR`), region/parent/child with the same language subtag (`de` → `de-DE`, `de-AT` → `de`/`de-DE`, `zh-Hant-TW` → `zh-TW`, `zh-HK` → `zh-TW`; private-use variants like `de-x-franconia` only on an exact match), else the base language. `LanguageConfigBuilder.ResolveLanguages()` applies it to `WithCurrentLanguage` and `SetLanguage`; `LanguageConfig.RequestedLanguage` keeps the requested tag.
+- `LanguageConfig.TryGetTranslation(key, out value)` / `GetTranslation(key)` look up a key without knowing its section; `module.key` / `section.key` only search that module or section. `LanguageConfigRegistry.TryGetTranslation(...)` / `GetTranslation(key)` for the single-config case.
+- `ILanguageConfigListener` (`OnLanguageResolved`, `OnTranslationNotFound`, `OnFormatFailed`) and `LanguageConfigListenerBase`.
+- `LanguageConfig.IsLoaded`.
+
+### Changed
+- `LanguageSectionBase.Format(key, args)` never throws: a missing key returns the `###key###` sentinel, a translation that cannot be formatted is returned unformatted; both are reported via `ILanguageConfigListener`.
+- `LanguageConfig` serialises reading the files for load, language switch, file-change reload and section registration; registering on a plugin thread is safe while other threads switch the language or read translations (previously this could corrupt the section list). Translations are applied and `PropertyChanged`, `LanguageChanged` and listeners are raised after that lock is released, on the calling thread, so handlers may marshal to the UI thread, switch the language or register sections; every section ends up in the language of the latest operation. Listener callbacks of an operation (`OnFileLoaded`, `OnFileNotFound`, …) are raised when its files have been read, before the translations are applied. A failed or cancelled language switch keeps the previous language (previously `CurrentLanguage` already returned the new one). When a listener or handler throws, the rest of the operation still runs (all sections are updated), every failure is reported via `OnError`, and the first is re-thrown.
+- Language file monitoring also reacts to created, deleted and renamed files (in the folders that exist at load time).
+- The files of one load are read once, even when several sections use the same file.
+- Generator: the `UpdateTranslations` override of `INotifyPropertyChanged` language sections is table-driven instead of using two locals per property; for 600 properties the first language load no longer spends ~100 ms in the JIT. Events and their order are unchanged.
+
+**Behaviour changes** — check these when upgrading:
+- `GetAvailableLanguages()`: module files (`{basename}.{module}.{ietf}.ini`) no longer add languages of their own (unless every registered section is a module section), the name of a registered module is no longer taken for a tag (`greenshot.box.ini` with a registered `box` module), only tags with a two or three letter language subtag are listed, and the result is sorted by tag. The second tuple value is the file's `[__language__]` description when there is one.
+- A section named `__language__` cannot be registered (`ArgumentException`).
+- `LanguageConfig.RegisterSection` now notifies `IIniConfigExtendedListener.OnSectionAdded(name, loaded)` (also before the load, with `loaded: false`), like `IniConfig.AddSection`.
+
+### Fixed
+- Wiki: module sections are only read from their module file; the page claimed a fallback to the main file.
+
+---
+
 ## [1.1]
 
 ### Added

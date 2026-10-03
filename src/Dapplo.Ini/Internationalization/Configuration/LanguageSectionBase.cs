@@ -123,9 +123,45 @@ public abstract class LanguageSectionBase : ILanguageSection, IReadOnlyDictionar
     /// </summary>
     public string this[string key] => GetTranslation(NormalizeKey(key), key);
 
-    /// <summary>Formats the translation for <paramref name="key"/> using the supplied arguments.</summary>
+    /// <summary>
+    /// Formats the translation for <paramref name="key"/> using the supplied arguments. Never throws:
+    /// a missing key returns the <c>###key###</c> sentinel, a translation that cannot be formatted (bad format
+    /// string, too few arguments) is returned unformatted. Both are reported via
+    /// <see cref="Interfaces.ILanguageConfigListener"/> of the <see cref="LanguageConfig"/> the section is registered with.
+    /// </summary>
     public string Format(string key, params object[] args)
-        => string.Format(this[key], args);
+    {
+        if (key is null || !_translations.TryGetValue(NormalizeKey(key), out var format))
+        {
+            Owner?.ReportTranslationNotFound(SectionName, key ?? "");
+            return $"###{key}###";
+        }
+
+        try
+        {
+            return string.Format(format, args);
+        }
+        catch (Exception ex)
+        {
+            Owner?.ReportFormatFailed(SectionName, key, ex);
+            return format;
+        }
+    }
+
+    /// <summary>The configuration this section is registered with (for diagnostics), or <c>null</c>.</summary>
+    internal LanguageConfig? Owner { get; set; }
+
+    /// <summary>Looks up an already normalized key.</summary>
+    internal bool TryGetNormalized(string normalizedKey, out string? value)
+    {
+        if (_translations.TryGetValue(normalizedKey, out var found))
+        {
+            value = found;
+            return true;
+        }
+        value = null;
+        return false;
+    }
 
     /// <inheritdoc/>
     public IEnumerable<string> Keys

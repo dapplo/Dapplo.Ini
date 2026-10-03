@@ -138,6 +138,10 @@ LanguageConfigRegistry.ForFile("myapp")        // "myapp" and "myapp.ini" are eq
     .Build();
 ```
 
+`ILanguageConfigListener` (namespace `Dapplo.Ini.Internationalization.Interfaces`) adds callbacks only a
+language configuration raises. Derive from `LanguageConfigListenerBase` to get empty implementations of all
+callbacks of `IIniConfigListener`, `IIniConfigExtendedListener` and `ILanguageConfigListener`.
+
 Events fired by `LanguageConfig`:
 
 | Event | Notes |
@@ -145,7 +149,11 @@ Events fired by `LanguageConfig`:
 | `OnFileLoaded` | Per language file (base/fallback and active language files are separate calls). |
 | `OnFileNotFound` | When a language file does not exist for a given IETF tag. |
 | `OnReloaded` | On `SetLanguage()` / `SetLanguageAsync()` and file-change monitoring. The value passed is the IETF language tag, not a file path. |
-| `OnError` | On any load or language-switch failure. |
+| `OnError` | On any load or language-switch failure. `"RegisterSection"`: a section was registered after the load without `AllowLateSectionRegistration()`, so it stays empty until the next load or language switch (never thrown). |
+| `OnSectionAdded` (`IIniConfigExtendedListener`) | For `LanguageConfig.RegisterSection` / `RegisterSectionAsync` (not for builder sections). `loaded: true` when the section was loaded right away (`AllowLateSectionRegistration()`), `false` when it is loaded by the coming `Load()` — or, after the load without that option, not at all until the next switch. |
+| `OnLanguageResolved` (`ILanguageConfigListener`) | With `ResolveLanguages()`: the requested and the resolved tag, on every load and language switch. |
+| `OnTranslationNotFound` (`ILanguageConfigListener`) | `GetTranslation(key)` or `Format(key, …)` returned the `###key###` sentinel. |
+| `OnFormatFailed` (`ILanguageConfigListener`) | `Format(key, …)` could not format the text (bad format string, too few arguments) and returned it unformatted. |
 | `OnSaved` | Not called — language files are read-only. |
 | `OnUnknownKey` | Not called — `LanguageConfig` accepts any key in the file. |
 | `OnValueConversionFailed` | Not called — `LanguageConfig` stores all values as raw strings. |

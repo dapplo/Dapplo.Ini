@@ -159,6 +159,30 @@ public static class LanguageConfigRegistry
         => Get().GetSectionByModule(moduleName);
 
     /// <summary>
+    /// Looks up a translation by key in the single registered language configuration, without knowing its section.
+    /// See <see cref="LanguageConfig.TryGetTranslation"/> for the key format (<c>module.key</c>) and search order.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when no language configuration is registered, or when more than one is registered.
+    /// </exception>
+    public static bool TryGetTranslation(string key, out string? value)
+        => Get().TryGetTranslation(key, out value);
+
+    /// <summary>
+    /// Looks up a translation by key in the configuration registered for <paramref name="basename"/>.
+    /// See <see cref="LanguageConfig.TryGetTranslation"/>.
+    /// </summary>
+    public static bool TryGetTranslation(string basename, string key, out string? value)
+        => Get(basename).TryGetTranslation(key, out value);
+
+    /// <summary>
+    /// Returns the translation for <paramref name="key"/> from the single registered language configuration, or the
+    /// <c>###key###</c> sentinel. See <see cref="LanguageConfig.GetTranslation"/>.
+    /// </summary>
+    public static string GetTranslation(string key)
+        => Get().GetTranslation(key);
+
+    /// <summary>
     /// Attempts to return the <see cref="LanguageConfig"/> registered for <paramref name="basename"/>.
     /// Returns <c>false</c> when not found.
     /// </summary>
