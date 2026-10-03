@@ -55,14 +55,13 @@ public sealed class BoolConverter : ValueConverterBase<bool>
         if (string.IsNullOrWhiteSpace(raw)) return defaultValue;
         var value = raw!.Trim();
         if (bool.TryParse(value, out var result)) return result;
-        // Common hand-written alternatives
-        switch (value.ToLowerInvariant())
-        {
-            case "1": case "yes": case "on": return true;
-            case "0": case "no": case "off": return false;
-        }
+        // Common hand-written alternatives (compared without allocating a lower-case copy)
+        if (value == "1" || IsWord(value, "yes") || IsWord(value, "on")) return true;
+        if (value == "0" || IsWord(value, "no") || IsWord(value, "off")) return false;
         return bool.Parse(value); // throws a FormatException with the usual message
     }
+
+    private static bool IsWord(string value, string word) => string.Equals(value, word, StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>Converts <see cref="short"/>.</summary>

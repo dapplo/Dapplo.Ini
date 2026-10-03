@@ -55,7 +55,10 @@ public interface IIniConfigListener
 
     /// <summary>
     /// Called when an exception is thrown during a load, reload, or save operation.
-    /// The exception is always re-thrown after all listeners have been notified.
+    /// For calls made by your code the exception is re-thrown after all listeners have been notified.
+    /// A few problems are only reported here and never thrown: <c>"OverrideDirectory"</c> (see
+    /// <see cref="IniConfigBuilder.SetOverrideDirectory"/>), <c>"RegisterSection"</c> (see
+    /// <see cref="Internationalization.Configuration.LanguageConfig.RegisterSection{T}"/>) and errors of background work.
     /// </summary>
     /// <param name="operation">
     /// A short description of the operation that failed (e.g. <c>"Load"</c>, <c>"Save"</c>,

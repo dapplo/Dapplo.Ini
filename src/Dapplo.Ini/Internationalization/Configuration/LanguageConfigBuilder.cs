@@ -28,6 +28,9 @@ public sealed class LanguageConfigBuilder
     private string? _currentLanguage;
     private string? _fallbackLanguage;
     private bool _monitorFiles;
+    private bool _allowLateSectionRegistration;
+    private bool _mergeSearchPaths;
+    private bool _resolveLanguages;
 
     // Registered sections: type → (instance, optional override directory)
     private readonly List<(Type Type, LanguageSectionBase Section, string? Directory)> _sections = new();
@@ -135,6 +138,67 @@ public sealed class LanguageConfigBuilder
     }
 
     /// <summary>
+    /// Allows <see cref="LanguageConfig.RegisterSection{T}"/> / <see cref="LanguageConfig.RegisterSectionAsync{T}"/>
+    /// after the configuration is loaded: the section is then loaded right away for the current language and its
+    /// fallback chain. Same idea as <see cref="IniConfigBuilder.AllowLateSectionRegistration"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Typical use: plugins that are started after the host has loaded the language configuration and shown UI.
+    /// Only the new section reads files; other sections are not reloaded and
+    /// <see cref="LanguageConfig.LanguageChanged"/> is not raised. Later language switches and file-change reloads
+    /// include the section. Registration is safe while other threads read translations.
+    /// </para>
+    /// <para>
+    /// Without this option a section registered after the load stays empty until the next load or language switch;
+    /// that is reported via <see cref="IIniConfigExtendedListener.OnSectionAdded"/> (<c>loaded: false</c>) and
+    /// <see cref="IIniConfigListener.OnError"/> (operation <c>"RegisterSection"</c>).
+    /// </para>
+    /// </remarks>
+    public LanguageConfigBuilder AllowLateSectionRegistration()
+    {
+        _allowLateSectionRegistration = true;
+        return this;
+    }
+
+    /// <summary>
+    /// Merges a language file across all search paths instead of using only the first search path that has it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For every IETF tag of the load chain the file is read from every search path that has it, lowest priority
+    /// (last added) first, so a file in a higher priority path overrides single keys instead of replacing the whole
+    /// file. Example: a user file in <c>%APPDATA%</c> that only corrects three German texts.
+    /// </para>
+    /// <para>
+    /// A section registered with its own path keeps that path (no merge with the search paths), unless that path is
+    /// also one of the search paths; then the section uses all search paths. File monitoring watches every search path
+    /// that exists at load time.
+    /// </para>
+    /// </remarks>
+    public LanguageConfigBuilder MergeSearchPaths()
+    {
+        _mergeSearchPaths = true;
+        return this;
+    }
+
+    /// <summary>
+    /// Resolves a requested language to an available one (see <see cref="LanguageConfig.ResolveLanguage"/>) when
+    /// loading (<see cref="WithCurrentLanguage"/>) and on <see cref="LanguageConfig.SetLanguage"/>.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="LanguageConfig.CurrentLanguage"/> then returns the resolved tag and
+    /// <see cref="LanguageConfig.RequestedLanguage"/> the requested one; listeners implementing
+    /// <see cref="Interfaces.ILanguageConfigListener"/> get <c>OnLanguageResolved(requested, resolved)</c>.
+    /// Example: <c>de</c> → <c>de-DE</c>, <c>ptBR</c> → <c>pt-BR</c>, an unknown tag → the base language.
+    /// </remarks>
+    public LanguageConfigBuilder ResolveLanguages()
+    {
+        _resolveLanguages = true;
+        return this;
+    }
+
+    /// <summary>
     /// Registers a language section on the builder.
     /// The section name and optional module name are read from the section's
     /// <see cref="LanguageSectionBase.SectionName"/> and <see cref="LanguageSectionBase.ModuleName"/>
@@ -217,7 +281,8 @@ public sealed class LanguageConfigBuilder
             _monitorFiles,
             _searchPaths,
             sections,
-            _listeners);
+            _listeners,
+            new LanguageConfigOptions(_allowLateSectionRegistration, _mergeSearchPaths, _resolveLanguages));
 
         LanguageConfigRegistry.Register(_basename, config);
         return config;

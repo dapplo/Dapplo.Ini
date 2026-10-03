@@ -92,5 +92,35 @@ public interface INpcBothLanguage : System.ComponentModel.INotifyPropertyChanged
     string SaveButton { get; }
 }
 
+/// <summary>
+/// A plugin section like Greenshot's Imgur plugin: module file <c>{basename}.imgur.{ietf}.ini</c>, section <c>[Imgur]</c>,
+/// live language switch via INotifyPropertyChanged.
+/// </summary>
+[IniLanguageSection("Imgur", ModuleName = "imgur")]
+public interface IImgurLanguage : System.ComponentModel.INotifyPropertyChanged
+{
+    string History { get; }
+    string Upload { get; }
+}
 
+/// <summary>A plugin section with a three letter module name, which could be mistaken for a language tag.</summary>
+[IniLanguageSection("Box", ModuleName = "box")]
+public interface IBoxLanguage
+{
+    string Upload { get; }
+}
 
+/// <summary>A second host section in the base file.</summary>
+[IniLanguageSection("Editor")]
+public interface IEditorLanguage
+{
+    string Title { get; }
+    string Undo { get; }
+}
+
+/// <summary>Uses the reserved section name, which must be rejected on registration.</summary>
+[IniLanguageSection("__language__")]
+public interface IReservedLanguage
+{
+    string Description { get; }
+}

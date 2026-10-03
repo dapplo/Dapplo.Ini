@@ -320,83 +320,7 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
 
         if (m.ImplementsINotifyPropertyChanged || m.ImplementsINotifyPropertyChanging)
         {
-            sb.AppendLine();
-            sb.AppendLine("        public override void UpdateTranslations(IReadOnlyDictionary<string, string> newTranslations)");
-            sb.AppendLine("        {");
-
-            int index = 0;
-            foreach (var p in m.Properties)
-            {
-                bool canChange = (m.ImplementsINotifyPropertyChanged && !p.SuppressPropertyChanged)
-                                 || (m.ImplementsINotifyPropertyChanging && !p.SuppressPropertyChanging);
-                if (canChange)
-                {
-                    sb.AppendLine($"            var __new_{index} = GetTranslation(newTranslations, \"{EscapeString(p.NormalizedKey)}\", nameof({p.Name}));");
-                    sb.AppendLine($"            bool __changed_{index} = !string.Equals({p.Name}, __new_{index}, System.StringComparison.Ordinal);");
-                }
-                index++;
-            }
-
-            sb.AppendLine("            bool __hasAnyDictChange = Count != newTranslations.Count;");
-            sb.AppendLine("            if (!__hasAnyDictChange)");
-            sb.AppendLine("            {");
-            sb.AppendLine("                foreach (var __kvp in this)");
-            sb.AppendLine("                {");
-            sb.AppendLine("                    if (!newTranslations.TryGetValue(__kvp.Key, out var __val) || !string.Equals(__kvp.Value, __val, System.StringComparison.Ordinal))");
-            sb.AppendLine("                    {");
-            sb.AppendLine("                        __hasAnyDictChange = true;");
-            sb.AppendLine("                        break;");
-            sb.AppendLine("                    }");
-            sb.AppendLine("                }");
-            sb.AppendLine("            }");
-
-            if (m.ImplementsINotifyPropertyChanging)
-            {
-                sb.AppendLine("            var changingHandler = PropertyChanging;");
-                sb.AppendLine("            if (changingHandler != null)");
-                sb.AppendLine("            {");
-                index = 0;
-                foreach (var p in m.Properties)
-                {
-                    if (!p.SuppressPropertyChanging)
-                    {
-                        sb.AppendLine($"                if (__changed_{index}) changingHandler(this, new PropertyChangingEventArgs(nameof({p.Name})));");
-                    }
-                    index++;
-                }
-                sb.AppendLine("                if (__hasAnyDictChange) changingHandler(this, new PropertyChangingEventArgs(\"Item[]\"));");
-                sb.AppendLine("            }");
-            }
-
-            sb.AppendLine("            base.UpdateTranslations(newTranslations);");
-
-            if (m.ImplementsINotifyPropertyChanged)
-            {
-                sb.AppendLine("            var changedHandler = PropertyChanged;");
-                sb.AppendLine("            if (changedHandler != null)");
-                sb.AppendLine("            {");
-                sb.AppendLine("                bool __hasAnyPropChanged = false;");
-                index = 0;
-                foreach (var p in m.Properties)
-                {
-                    if (!p.SuppressPropertyChanged)
-                    {
-                        sb.AppendLine($"                if (__changed_{index})");
-                        sb.AppendLine("                {");
-                        sb.AppendLine($"                    changedHandler(this, new PropertyChangedEventArgs(nameof({p.Name})));");
-                        sb.AppendLine("                    __hasAnyPropChanged = true;");
-                        sb.AppendLine("                }");
-                    }
-                    index++;
-                }
-                sb.AppendLine("                if (__hasAnyPropChanged || __hasAnyDictChange)");
-                sb.AppendLine("                {");
-                sb.AppendLine("                    changedHandler(this, new PropertyChangedEventArgs(\"Item[]\"));");
-                sb.AppendLine("                }");
-                sb.AppendLine("            }");
-            }
-
-            sb.AppendLine("        }");
+            EmitUpdateTranslations(sb, m);
         }
 
         sb.AppendLine("    }");
@@ -406,6 +330,103 @@ public sealed class IniLanguageSectionGenerator : IIncrementalGenerator
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Emits the <c>UpdateTranslations</c> override that raises PropertyChanging/PropertyChanged for the texts that change.
+    /// </summary>
+    /// <remarks>
+    /// The per-property data is emitted as tables and processed in loops, so the method stays small for interfaces
+    /// with hundreds of properties (one local per property made the JIT of the first language load take ~100 ms for
+    /// 600 properties). Events are raised in property declaration order.
+    /// </remarks>
+    private static void EmitUpdateTranslations(StringBuilder sb, LanguageSectionModel m)
+    {
+        // Notification flags per property: 1 = PropertyChanged, 2 = PropertyChanging.
+        var flags = new StringBuilder(m.Properties.Count);
+        foreach (var p in m.Properties)
+        {
+            var flag = (m.ImplementsINotifyPropertyChanged && !p.SuppressPropertyChanged ? 1 : 0)
+                       | (m.ImplementsINotifyPropertyChanging && !p.SuppressPropertyChanging ? 2 : 0);
+            flags.Append((char)('0' + flag));
+        }
+
+        // Property names and normalized keys are C# identifiers (no commas), so they can be stored as one literal each.
+        sb.AppendLine();
+        sb.AppendLine($"        private static readonly string[] __names = \"{EscapeString(string.Join(",", m.Properties.Select(p => p.Name)))}\".Split(',');");
+        sb.AppendLine($"        private static readonly string[] __keys = \"{EscapeString(string.Join(",", m.Properties.Select(p => p.NormalizedKey)))}\".Split(',');");
+        sb.AppendLine($"        private const string __notify = \"{flags}\";");
+        sb.AppendLine();
+        sb.AppendLine("        public override void UpdateTranslations(IReadOnlyDictionary<string, string> newTranslations)");
+        sb.AppendLine("        {");
+        sb.AppendLine("            bool[]? __changed = null;");
+        sb.AppendLine("            if (__notify.Length > 0)");
+        sb.AppendLine("            {");
+        sb.AppendLine("                for (int i = 0; i < __notify.Length; i++)");
+        sb.AppendLine("                {");
+        sb.AppendLine("                    if (__notify[i] == '0') continue;");
+        sb.AppendLine("                    if (!string.Equals(GetTranslation(__keys[i], __names[i]), GetTranslation(newTranslations, __keys[i], __names[i]), System.StringComparison.Ordinal))");
+        sb.AppendLine("                    {");
+        sb.AppendLine("                        (__changed ??= new bool[__notify.Length])[i] = true;");
+        sb.AppendLine("                    }");
+        sb.AppendLine("                }");
+        sb.AppendLine("            }");
+        sb.AppendLine("            bool __hasAnyDictChange = Count != newTranslations.Count;");
+        sb.AppendLine("            if (!__hasAnyDictChange)");
+        sb.AppendLine("            {");
+        sb.AppendLine("                foreach (var __kvp in this)");
+        sb.AppendLine("                {");
+        sb.AppendLine("                    if (!newTranslations.TryGetValue(__kvp.Key, out var __val) || !string.Equals(__kvp.Value, __val, System.StringComparison.Ordinal))");
+        sb.AppendLine("                    {");
+        sb.AppendLine("                        __hasAnyDictChange = true;");
+        sb.AppendLine("                        break;");
+        sb.AppendLine("                    }");
+        sb.AppendLine("                }");
+        sb.AppendLine("            }");
+
+        if (m.ImplementsINotifyPropertyChanging)
+        {
+            sb.AppendLine("            var changingHandler = PropertyChanging;");
+            sb.AppendLine("            if (changingHandler != null)");
+            sb.AppendLine("            {");
+            sb.AppendLine("                if (__changed != null)");
+            sb.AppendLine("                {");
+            sb.AppendLine("                    for (int i = 0; i < __changed.Length; i++)");
+            sb.AppendLine("                    {");
+            sb.AppendLine("                        if (__changed[i] && (__notify[i] - '0' & 2) != 0) changingHandler(this, new PropertyChangingEventArgs(__names[i]));");
+            sb.AppendLine("                    }");
+            sb.AppendLine("                }");
+            sb.AppendLine("                if (__hasAnyDictChange) changingHandler(this, new PropertyChangingEventArgs(\"Item[]\"));");
+            sb.AppendLine("            }");
+        }
+
+        sb.AppendLine("            base.UpdateTranslations(newTranslations);");
+
+        if (m.ImplementsINotifyPropertyChanged)
+        {
+            sb.AppendLine("            var changedHandler = PropertyChanged;");
+            sb.AppendLine("            if (changedHandler != null)");
+            sb.AppendLine("            {");
+            sb.AppendLine("                bool __hasAnyPropChanged = false;");
+            sb.AppendLine("                if (__changed != null)");
+            sb.AppendLine("                {");
+            sb.AppendLine("                    for (int i = 0; i < __changed.Length; i++)");
+            sb.AppendLine("                    {");
+            sb.AppendLine("                        if (__changed[i] && (__notify[i] - '0' & 1) != 0)");
+            sb.AppendLine("                        {");
+            sb.AppendLine("                            changedHandler(this, new PropertyChangedEventArgs(__names[i]));");
+            sb.AppendLine("                            __hasAnyPropChanged = true;");
+            sb.AppendLine("                        }");
+            sb.AppendLine("                    }");
+            sb.AppendLine("                }");
+            sb.AppendLine("                if (__hasAnyPropChanged || __hasAnyDictChange)");
+            sb.AppendLine("                {");
+            sb.AppendLine("                    changedHandler(this, new PropertyChangedEventArgs(\"Item[]\"));");
+            sb.AppendLine("                }");
+            sb.AppendLine("            }");
+        }
+
+        sb.AppendLine("        }");
     }
 
     private static string EscapeString(string s) => GeneratorText.EscapeString(s);

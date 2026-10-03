@@ -1615,6 +1615,9 @@ public sealed class IniConfig : IDisposable
         return merged;
     }
 
+    // Created once instead of per section and load.
+    private Action<string, string, string?, Exception>? _conversionFailedCallback;
+
     private void ApplyIniFile(IniFile iniFile, IReadOnlyList<IIniSection> sections, bool isConstant = false, bool isDefault = false)
     {
         foreach (var section in sections)
@@ -1631,7 +1634,7 @@ public sealed class IniConfig : IDisposable
             // Wire the conversion-failed callback so IniSectionBase can report to listeners.
             if (sectionBase != null && Listeners.Count > 0)
             {
-                sectionBase.ConversionFailedCallback = (sName, key, raw, ex) =>
+                sectionBase.ConversionFailedCallback = _conversionFailedCallback ??= (sName, key, raw, ex) =>
                     NotifyListeners(l => l.OnValueConversionFailed(sName, key, raw, ex));
             }
 

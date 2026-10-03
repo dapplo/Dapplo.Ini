@@ -16,13 +16,20 @@ public interface IIniConfigExtendedListener
 {
     /// <summary>
     /// Called after a section has been registered via <see cref="IniConfig.AddSection{T}"/> /
-    /// <see cref="IniConfig.AddSectionAsync{T}"/> (not for sections registered on the builder).
+    /// <see cref="IniConfig.AddSectionAsync{T}"/>, or via
+    /// <see cref="Internationalization.Configuration.LanguageConfig.RegisterSection{T}"/> /
+    /// <see cref="Internationalization.Configuration.LanguageConfig.RegisterSectionAsync{T}"/>
+    /// (not for sections registered on the builder).
     /// </summary>
     /// <param name="sectionName">The INI section name of the registered section.</param>
     /// <param name="loaded">
     /// <c>true</c> when the configuration was already loaded and the section was populated right away
-    /// from the retained file data (see <see cref="IniConfigBuilder.AllowLateSectionRegistration"/>);
-    /// <c>false</c> when the section was registered before the load and will be populated by it.
+    /// (see <see cref="IniConfigBuilder.AllowLateSectionRegistration"/> and
+    /// <see cref="Internationalization.Configuration.LanguageConfigBuilder.AllowLateSectionRegistration"/>);
+    /// <c>false</c> when the section was registered before the load and will be populated by it. For a
+    /// <see cref="Internationalization.Configuration.LanguageConfig"/> section registered after the load without that option,
+    /// <c>false</c> means it stays empty until the next load or language switch (also reported via
+    /// <see cref="IIniConfigListener.OnError"/>).
     /// </param>
     void OnSectionAdded(string sectionName, bool loaded);
 

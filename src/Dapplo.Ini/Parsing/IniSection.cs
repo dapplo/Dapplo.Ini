@@ -31,7 +31,7 @@ public sealed class IniSection
     /// <summary>The entries in declaration order (preserves file order).</summary>
     public IReadOnlyList<IniEntry> Entries => _entriesOrdered;
 
-    private readonly List<IniEntry> _entriesOrdered = new();
+    private readonly List<IniEntry> _entriesOrdered;
 
     /// <summary>
     /// Initialises a new section.
@@ -44,10 +44,17 @@ public sealed class IniSection
     /// Pass <see cref="StringComparer.Ordinal"/> to enable case-sensitive key lookup.
     /// </param>
     public IniSection(string name, IReadOnlyList<string> comments, StringComparer? keyComparer = null)
+        : this(name, comments, keyComparer, 0)
+    {
+    }
+
+    /// <summary>Initialises a new section with room for <paramref name="capacity"/> entries (no re-allocations while parsing).</summary>
+    internal IniSection(string name, IReadOnlyList<string> comments, StringComparer? keyComparer, int capacity)
     {
         Name = name;
         Comments = comments;
-        _entries = new Dictionary<string, IniEntry>(keyComparer ?? StringComparer.OrdinalIgnoreCase);
+        _entries = new Dictionary<string, IniEntry>(capacity, keyComparer ?? StringComparer.OrdinalIgnoreCase);
+        _entriesOrdered = new List<IniEntry>(capacity);
     }
 
     /// <summary>Adds or replaces an entry.</summary>

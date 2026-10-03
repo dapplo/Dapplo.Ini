@@ -30,6 +30,16 @@ public static class IniFileParser
     /// </param>
     public static IniFile Parse(string content, IniParserOptions? options = null)
     {
+        if (content is null) throw new ArgumentNullException(nameof(content));
+        return Parse(content.AsSpan(), options);
+    }
+
+    /// <summary>
+    /// Parses INI content from a span (e.g. a pooled buffer). Only the keys, values, section names and comments
+    /// that end up in the <see cref="IniFile"/> are allocated.
+    /// </summary>
+    internal static IniFile Parse(ReadOnlySpan<char> content, IniParserOptions? options = null)
+    {
         options ??= IniParserOptions.Default;
 
         var sectionComparer = options.CaseSensitiveSections ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
@@ -37,9 +47,16 @@ public static class IniFileParser
 
         var iniFile = new IniFile(sectionComparer, keyComparer);
         // A byte order mark left in the string (e.g. from Encoding.GetString) is not whitespace.
-        var span = content.AsSpan();
+        var span = content;
         if (!span.IsEmpty && span[0] == '\uFEFF')
             span = span.Slice(1);
+
+        // Pre-pass (no allocations beyond a pooled array): the number of entries per section header, so every
+        // section's dictionary and list are created with the right size instead of growing (re-allocating) while parsing.
+        var sizes = CountEntriesPerSection(span, options.AssignmentDelimiters, out var headerCount);
+        var headerOrdinal = 0;
+        try
+        {
 
         IniSection? currentSection = null;
         var pendingComments = new List<string>();
@@ -102,12 +119,14 @@ public static class IniFileParser
                     }
                     else
                     {
-                        currentSection = new IniSection(sectionName, comments, keyComparer)
+                        currentSection = new IniSection(sectionName, comments, keyComparer,
+                            headerOrdinal < headerCount ? sizes[headerOrdinal + 1] : 0)
                         {
                             LeadingTrivia = TakeTrivia()
                         };
                         iniFile.AddSection(currentSection);
                     }
+                    headerOrdinal++;
                 }
                 else
                 {
@@ -121,20 +140,19 @@ public static class IniFileParser
             var assignmentIndex = FindAssignmentIndex(trimmed, options.AssignmentDelimiters);
             if (assignmentIndex > 0)
             {
-                var key   = trimmed.Slice(0, assignmentIndex).TrimEnd().ToString();
-                var value = trimmed.Slice(assignmentIndex + 1).TrimStart().ToString();
+                var key = trimmed.Slice(0, assignmentIndex).TrimEnd().ToString();
+                var rawValue = trimmed.Slice(assignmentIndex + 1).TrimStart();
 
-                // Line continuation: if value ends with '\', join the next line(s)
-                if (options.LineContinuation)
-                    value = ApplyLineContinuation(value, ref span);
+                // Line continuation: if value ends with '\', join the next line(s) (the only case with an extra string)
+                string? joined = null;
+                if (options.LineContinuation && EndsWithContinuation(rawValue))
+                {
+                    joined = ApplyLineContinuation(rawValue, ref span);
+                    rawValue = joined.AsSpan();
+                }
 
-                // Quoted values: strip surrounding quotes if present
-                if (options.QuotedValues)
-                    value = StripQuotes(value, unescapeQuotes: !options.EscapeSequences);
-
-                // Escape sequences: decode \n, \t, \\, etc.
-                if (options.EscapeSequences)
-                    value = DecodeEscapeSequences(value);
+                // Quotes and escape sequences are processed on the span: one string per value
+                var value = CreateValue(rawValue, options, joined);
 
                 // Ensure there is a section (global / no-section entries go into a synthetic "" section)
                 currentSection ??= iniFile.GetOrAddSection(string.Empty);
@@ -173,6 +191,48 @@ public static class IniFileParser
             iniFile.TrailingTrivia = pendingTrivia.ToArray();
 
         return iniFile;
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<int>.Shared.Return(sizes);
+        }
+    }
+
+    /// <summary>
+    /// Counts the lines that look like entries per section, without allocating anything but a pooled array:
+    /// index 0 holds the entries before the first header, index n the entries after the n-th header. Returns
+    /// the (rented) array; <paramref name="headerCount"/> is the number of headers. An over-estimate (e.g. a
+    /// continuation line) only reserves a little more room.
+    /// </summary>
+    private static int[] CountEntriesPerSection(ReadOnlySpan<char> content, string delimiters, out int headerCount)
+    {
+        var sizes = System.Buffers.ArrayPool<int>.Shared.Rent(16);
+        sizes[0] = 0;
+        headerCount = 0;
+        while (!content.IsEmpty)
+        {
+            var line = ReadLine(ref content).TrimStart();
+            if (line.IsEmpty) continue;
+            var first = line[0];
+            if (first == ';' || first == '#') continue;
+            if (first == '[')
+            {
+                if (line.IndexOf(']') <= 0) continue;   // "[Unclosed" is no section for the parser either
+                headerCount++;
+                if (headerCount >= sizes.Length)
+                {
+                    var larger = System.Buffers.ArrayPool<int>.Shared.Rent(sizes.Length * 2);
+                    Array.Copy(sizes, larger, headerCount);
+                    System.Buffers.ArrayPool<int>.Shared.Return(sizes);
+                    sizes = larger;
+                }
+                sizes[headerCount] = 0;
+                continue;
+            }
+            if (FindAssignmentIndex(line, delimiters) > 0)
+                sizes[headerCount]++;
+        }
+        return sizes;
     }
 
     /// <summary>
@@ -188,10 +248,9 @@ public static class IniFileParser
     /// </param>
     public static IniFile ParseFile(string filePath, Encoding? encoding = null, IniParserOptions? options = null)
     {
-        using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        using var reader = new StreamReader(stream, encoding ?? Encoding.UTF8);
-        var content = reader.ReadToEnd();
-        return Parse(content, options);
+        // Read into a pooled buffer and parse from it: no string for the whole content.
+        using var reader = PooledLineReader.OpenFile(filePath, encoding);
+        return Parse(reader.ReadToEnd(), options);
     }
 
     /// <summary>
@@ -208,22 +267,9 @@ public static class IniFileParser
     /// <param name="cancellationToken">Token to cancel the async operation.</param>
     public static async Task<IniFile> ParseFileAsync(string filePath, Encoding? encoding = null, IniParserOptions? options = null, CancellationToken cancellationToken = default)
     {
-        string content;
-#if NET
-        // FileOptions.Asynchronous enables true async I/O on platforms that support it.
-        var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite,
-            bufferSize: 4096, FileOptions.Asynchronous);
-        await using (fileStream.ConfigureAwait(false))
-        {
-            using var reader = new StreamReader(fileStream, encoding ?? Encoding.UTF8);
-            content = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
-        }
-#else
-        using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        using var reader = new StreamReader(stream, encoding ?? Encoding.UTF8);
-        content = await reader.ReadToEndAsync().ConfigureAwait(false);
-#endif
-        return Parse(content, options);
+        using var reader = PooledLineReader.OpenFile(filePath, encoding, asynchronous: true);
+        await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+        return Parse(reader.ReadToEnd(), options);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
@@ -255,20 +301,19 @@ public static class IniFileParser
     /// the backslash is replaced by the trimmed content of the next line(s) from
     /// <paramref name="remaining"/>.
     /// </summary>
-    private static string ApplyLineContinuation(string value, ref ReadOnlySpan<char> remaining)
+    private static string ApplyLineContinuation(scoped ReadOnlySpan<char> value, ref ReadOnlySpan<char> remaining)
     {
-        if (!EndsWithContinuation(value.AsSpan()))
-            return value;
 
         // Nothing to join (end of file, blank line or a section header): keep the value as written,
         // e.g. "Dir = C:\Temp\" directly followed by "[Next]".
         var lookAhead = remaining;
         var following = lookAhead.IsEmpty ? ReadOnlySpan<char>.Empty : ReadLine(ref lookAhead).Trim();
         if (following.IsEmpty || following[0] == '[')
-            return value;
+            return value.ToString();
 
         // Strip the trailing backslash from the initial segment.
-        var sb = new StringBuilder(value, 0, value.Length - 1, value.Length + 64);
+        var sb = new StringBuilder(value.Length + 64);
+        Append(sb, value.Slice(0, value.Length - 1));
         while (!remaining.IsEmpty)
         {
             // Never swallow a section header: stop before it without consuming it.
@@ -287,11 +332,11 @@ public static class IniFileParser
             if (EndsWithContinuation(nextLine))
             {
                 // This line also continues — append without trailing backslash
-                sb.Append(nextLine.Slice(0, nextLine.Length - 1).ToString());
+                Append(sb, nextLine.Slice(0, nextLine.Length - 1));
             }
             else
             {
-                sb.Append(nextLine.ToString());
+                Append(sb, nextLine);
                 break;
             }
         }
@@ -310,50 +355,72 @@ public static class IniFileParser
         return backslashes % 2 == 1;
     }
 
-    /// <summary>
-    /// Strips matching surrounding double-quote or single-quote characters from
-    /// <paramref name="value"/> when they are present.
-    /// </summary>
-    /// <param name="value">The raw value.</param>
-    /// <param name="unescapeQuotes">
-    /// When <c>true</c>, a quote character inside the value that is preceded by an odd number of
-    /// backslashes loses one backslash. This is the inverse of how <see cref="IniFileWriter"/> escapes
-    /// quotes when it quotes a value, so values round-trip even without escape-sequence decoding.
-    /// </param>
-    private static string StripQuotes(string value, bool unescapeQuotes)
+    private static void Append(StringBuilder sb, ReadOnlySpan<char> text)
     {
-        if (value.Length >= 2)
+#if NET
+        sb.Append(text);
+#else
+        foreach (var c in text) sb.Append(c);
+#endif
+    }
+
+    private const int MaxStackValueLength = 512;
+
+    /// <summary>
+    /// Creates the value string from the raw value: strips matching surrounding quotes (<see cref="IniParserOptions.QuotedValues"/>)
+    /// and decodes escape sequences (<see cref="IniParserOptions.EscapeSequences"/>) on the span, so only the final string
+    /// is allocated (or none, when <paramref name="rawString"/> already is the result).
+    /// </summary>
+    private static string CreateValue(ReadOnlySpan<char> raw, IniParserOptions options, string? rawString)
+    {
+        var value = raw;
+        var quoteChar = '\0';
+        if (options.QuotedValues && value.Length >= 2)
         {
             var first = value[0];
-            var last  = value[value.Length - 1];
-            if ((first == '"'  && last == '"') ||
-                (first == '\'' && last == '\''))
+            if ((first == '"' || first == '\'') && value[value.Length - 1] == first)
             {
-                var inner = value.Substring(1, value.Length - 2);
-                return unescapeQuotes ? UnescapeQuote(inner, first) : inner;
+                quoteChar = first;
+                value = value.Slice(1, value.Length - 2);
             }
         }
-        return value;
+
+        var decodeEscapes = options.EscapeSequences;
+        var unescapeQuotes = quoteChar != '\0' && !decodeEscapes;
+        if ((!decodeEscapes && !unescapeQuotes) || value.IndexOf('\\') < 0)
+            return rawString != null && value.Length == rawString.Length ? rawString : value.ToString();
+
+        char[]? pooled = null;
+        try
+        {
+            var buffer = value.Length <= MaxStackValueLength
+                ? stackalloc char[value.Length]
+                : (pooled = System.Buffers.ArrayPool<char>.Shared.Rent(value.Length));
+            var length = decodeEscapes ? DecodeEscapeSequences(value, buffer) : UnescapeQuote(value, quoteChar, buffer);
+            return buffer.Slice(0, length).ToString();
+        }
+        finally
+        {
+            if (pooled != null) System.Buffers.ArrayPool<char>.Shared.Return(pooled);
+        }
     }
 
     /// <summary>
     /// Inverse of the writer's quote escaping without escape sequences. The writer turns n backslashes before
     /// a quote into 2n+1 and n backslashes at the end into 2n, so: an odd run before a quote becomes (run-1)/2
     /// backslashes and the quote, an even run at the end is halved. Anything else was not written by the
-    /// writer (e.g. a hand-written <c>"C:\Temp\"</c>) and is kept as it is.
+    /// writer (e.g. a hand-written <c>"C:\Temp\"</c>) and is kept as it is. Writes into <paramref name="destination"/>
+    /// (at least as long as <paramref name="value"/>) and returns the length.
     /// </summary>
-    private static string UnescapeQuote(string value, char quoteChar)
+    private static int UnescapeQuote(ReadOnlySpan<char> value, char quoteChar, Span<char> destination)
     {
-        if (value.IndexOf('\\') < 0)
-            return value;
-
-        var sb = new StringBuilder(value.Length);
+        var length = 0;
         var i = 0;
         while (i < value.Length)
         {
             if (value[i] != '\\')
             {
-                sb.Append(value[i++]);
+                destination[length++] = value[i++];
                 continue;
             }
 
@@ -361,33 +428,34 @@ public static class IniFileParser
             while (i < value.Length && value[i] == '\\')
                 i++;
             var run = i - start;
+            int keep;
             if (i < value.Length && value[i] == quoteChar && run % 2 == 1)
-                sb.Append('\\', (run - 1) / 2);
+                keep = (run - 1) / 2;
             else if (i == value.Length && run % 2 == 0)
-                sb.Append('\\', run / 2);
+                keep = run / 2;
             else
-                sb.Append('\\', run);
+                keep = run;
+            destination.Slice(length, keep).Fill('\\');
+            length += keep;
         }
-        return sb.ToString();
+        return length;
     }
 
     /// <summary>
-    /// Decodes standard C-style escape sequences in <paramref name="value"/>.
+    /// Decodes standard C-style escape sequences from <paramref name="value"/> into <paramref name="destination"/>
+    /// (at least as long as <paramref name="value"/>) and returns the length.
     /// Unrecognised sequences are left unchanged (the backslash is preserved).
     /// </summary>
-    private static string DecodeEscapeSequences(string value)
+    private static int DecodeEscapeSequences(ReadOnlySpan<char> value, Span<char> destination)
     {
-        if (!value.Contains('\\'))
-            return value;
-
-        var sb = new StringBuilder(value.Length);
+        var length = 0;
         var i  = 0;
         while (i < value.Length)
         {
             var c = value[i];
             if (c != '\\' || i + 1 >= value.Length)
             {
-                sb.Append(c);
+                destination[length++] = c;
                 i++;
                 continue;
             }
@@ -395,30 +463,33 @@ public static class IniFileParser
             var next = value[i + 1];
             switch (next)
             {
-                case '\\': sb.Append('\\');  i += 2; break;
-                case 'n':  sb.Append('\n');  i += 2; break;
-                case 'r':  sb.Append('\r');  i += 2; break;
-                case 't':  sb.Append('\t');  i += 2; break;
-                case '0':  sb.Append('\0');  i += 2; break;
-                case '"':  sb.Append('"');   i += 2; break;
-                case '\'': sb.Append('\'');  i += 2; break;
-                case 'a':  sb.Append('\a');  i += 2; break;
-                case 'b':  sb.Append('\b');  i += 2; break;
+                case '\\': destination[length++] = '\\'; i += 2; break;
+                case 'n':  destination[length++] = '\n'; i += 2; break;
+                case 'r':  destination[length++] = '\r'; i += 2; break;
+                case 't':  destination[length++] = '\t'; i += 2; break;
+                case '0':  destination[length++] = '\0'; i += 2; break;
+                case '"':  destination[length++] = '"';  i += 2; break;
+                case '\'': destination[length++] = '\''; i += 2; break;
+                case 'a':  destination[length++] = '\a'; i += 2; break;
+                case 'b':  destination[length++] = '\b'; i += 2; break;
                 case 'x' when i + 3 < value.Length &&
                               IsHexDigit(value[i + 2]) && IsHexDigit(value[i + 3]):
-                    sb.Append((char)Convert.ToByte(value.Substring(i + 2, 2), 16));
+                    destination[length++] = (char)(HexValue(value[i + 2]) * 16 + HexValue(value[i + 3]));
                     i += 4;
                     break;
                 default:
                     // Unknown escape: keep as-is
-                    sb.Append('\\');
-                    sb.Append(next);
+                    destination[length++] = '\\';
+                    destination[length++] = next;
                     i += 2;
                     break;
             }
         }
-        return sb.ToString();
+        return length;
     }
+
+    private static int HexValue(char c)
+        => c <= '9' ? c - '0' : (c | 0x20) - 'a' + 10;
 
     private static bool IsHexDigit(char c)
         => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
