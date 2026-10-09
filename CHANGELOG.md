@@ -41,6 +41,7 @@ All new behaviour is opt-in; existing code keeps working.
 
 ### Fixed
 - Wiki: module sections are only read from their module file; the page claimed a fallback to the main file.
+- Generator: dictionary properties with `[IniValue(RuntimeOnly = true)]` or `[IgnoreDataMember]` no longer get the `_xHasRawEntries` field, which nothing reads for them and which caused warning CS0414 / CS0169 in every consumer.
 
 ---
 
