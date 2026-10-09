@@ -40,6 +40,7 @@ All new behaviour is opt-in; existing code keeps working.
 - `LanguageConfig.RegisterSection` now notifies `IIniConfigExtendedListener.OnSectionAdded(name, loaded)` (also before the load, with `loaded: false`), like `IniConfig.AddSection`.
 
 ### Fixed
+- The source generator emitted a `_<name>HasRawEntries` flag for dictionary properties marked `[IniValue(RuntimeOnly = true)]` or `[IgnoreDataMember]`, which these never read: every consumer got CS0414 (assigned but never used) or CS0169. The flag and its reset in `ResetToDefaults()` are now only emitted for dictionaries which are read from / written to the file.
 - Wiki: module sections are only read from their module file; the page claimed a fallback to the main file.
 
 ---

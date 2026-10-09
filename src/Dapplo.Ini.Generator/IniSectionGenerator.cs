@@ -841,12 +841,14 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
 
             // Backing field
             sb.AppendLine($"        private {p.TypeFullName} {fieldName};");
-            if (p.IsSubKeyDictionary)
+            if (p.IsSubKeyDictionary && !p.IsIgnored && !p.IsRuntimeOnly)
             {
                 // Flag that tracks whether any sub-key from the INI file (or a raw-value set) has
                 // been received since the last ResetToDefaults call.  The first sub-key received
                 // clears the default dictionary before adding the new entry, so file contents
                 // fully replace the compiled defaults (consistent with scalar property behaviour).
+                // Only for dictionaries which are read from / written to the file: [IgnoreDataMember] and
+                // RuntimeOnly dictionaries never read it, the field would cause CS0414 in every consumer.
                 sb.AppendLine($"        private bool {fieldName}HasRawEntries;");
             }
             if (usesTx)
@@ -996,7 +998,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             if (p.IsIgnored) continue;
 
             string fieldName = $"_{Camel(p.Name)}";
-            if (p.IsSubKeyDictionary)
+            if (p.IsSubKeyDictionary && !p.IsRuntimeOnly)
             {
                 // Reset the "file-has-overridden-defaults" flag so the next sub-key load
                 // starts fresh (clears the defaults before applying the file entries).

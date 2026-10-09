@@ -61,6 +61,46 @@ public sealed class GeneratorDiagnosticsTests
         Assert.Contains(result.GeneratedTrees, t => t.FilePath.EndsWith("Sample.SettingsImpl.g.cs"));
     }
 
+    /// <summary>
+    /// A RuntimeOnly (or [IgnoreDataMember]) dictionary is never read from the file: the generator must not emit the
+    /// HasRawEntries flag for it, which was only assigned (CS0414 in every consumer). The generated code compiles
+    /// without any warning, a persisted dictionary keeps its flag.
+    /// </summary>
+    [Fact]
+    public void RuntimeOnlyDictionary_GeneratesNoHasRawEntriesField_AndNoWarnings()
+    {
+        var compilation = CreateCompilation("""
+            using System.Collections.Generic;
+            using System.Runtime.Serialization;
+            using Dapplo.Ini.Attributes;
+            using Dapplo.Ini.Interfaces;
+            namespace Sample;
+            public interface IHistorySettings : IIniSection
+            {
+                Dictionary<string, string>? UploadHistory { get; set; }
+                [IniValue(RuntimeOnly = true)]
+                Dictionary<string, string>? RuntimeHistory { get; set; }
+                [IgnoreDataMember]
+                Dictionary<string, int>? IgnoredHistory { get; set; }
+            }
+            """);
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(new[] { new IniSectionGenerator().AsSourceGenerator() }, parseOptions: ParseOptions);
+        driver = driver.RunGeneratorsAndUpdateCompilation(compilation, out var output, out var generatorDiagnostics);
+        Assert.Empty(generatorDiagnostics);
+
+        var generated = Assert.Single(driver.GetRunResult().GeneratedTrees, t => t.FilePath.EndsWith("Sample.HistorySettingsImpl.g.cs"));
+        var code = generated.GetText().ToString();
+        Assert.Contains("_uploadHistoryHasRawEntries", code);
+        Assert.DoesNotContain("_runtimeHistoryHasRawEntries", code);
+        Assert.DoesNotContain("_ignoredHistoryHasRawEntries", code);
+
+        // "Warnings as errors" for the generated code: no warning at all may come from it
+        var generatedDiagnostics = output.GetDiagnostics()
+            .Where(d => d.Severity >= DiagnosticSeverity.Warning && d.Location.SourceTree == generated)
+            .ToList();
+        Assert.True(generatedDiagnostics.Count == 0, string.Join(Environment.NewLine, generatedDiagnostics));
+    }
+
     [Fact]
     public void DuplicateIniKey_IsReportedAsDINI001()
     {
