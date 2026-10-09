@@ -30,6 +30,26 @@ public sealed class GeneratorDiagnosticsTests
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable));
     }
 
+    /// <summary>
+    /// The warnings the compiler reports for the generated code (what TreatWarningsAsErrors would turn into errors)
+    /// </summary>
+    private static (ImmutableArray<Diagnostic> GeneratedCodeWarnings, ImmutableArray<Diagnostic> CompileErrors, GeneratorDriverRunResult Result)
+        RunAndCollectGeneratedWarnings(params string[] sources)
+    {
+        var compilation = CreateCompilation(sources);
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(
+            new ISourceGenerator[] { new IniSectionGenerator().AsSourceGenerator() },
+            parseOptions: ParseOptions);
+        driver = driver.RunGeneratorsAndUpdateCompilation(compilation, out var output, out _);
+        var result = driver.GetRunResult();
+        var generatedTrees = new HashSet<SyntaxTree>(result.GeneratedTrees);
+        var diagnostics = output.GetDiagnostics();
+        var warnings = diagnostics
+            .Where(d => d.Severity == DiagnosticSeverity.Warning && d.Location.SourceTree != null && generatedTrees.Contains(d.Location.SourceTree))
+            .ToImmutableArray();
+        return (warnings, diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).ToImmutableArray(), result);
+    }
+
     private static (ImmutableArray<Diagnostic> GeneratorDiagnostics, ImmutableArray<Diagnostic> CompileErrors, GeneratorDriverRunResult Result)
         Run(params string[] sources)
     {
@@ -59,6 +79,32 @@ public sealed class GeneratorDiagnosticsTests
         Assert.Empty(diagnostics);
         Assert.Empty(errors);
         Assert.Contains(result.GeneratedTrees, t => t.FilePath.EndsWith("Sample.SettingsImpl.g.cs"));
+    }
+
+    [Fact]
+    public void Dictionaries_RuntimeOnlyAndIgnored_GenerateNoUnusedFieldWarnings()
+    {
+        var (warnings, errors, result) = RunAndCollectGeneratedWarnings("""
+            using System.Collections.Generic;
+            using System.Runtime.Serialization;
+            using Dapplo.Ini.Attributes;
+            using Dapplo.Ini.Interfaces;
+            namespace Sample;
+            public interface ISettings : IIniSection
+            {
+                Dictionary<string, int>? Persisted { get; set; }
+                [IniValue(RuntimeOnly = true)] Dictionary<string, string>? RuntimeHistory { get; set; }
+                [IgnoreDataMember] Dictionary<string, string>? Ignored { get; set; }
+            }
+            """);
+
+        Assert.Empty(errors);
+        Assert.Empty(warnings);
+        var generated = Assert.Single(result.GeneratedTrees, t => t.FilePath.EndsWith("Sample.SettingsImpl.g.cs")).ToString();
+        // The persisted dictionary still tracks whether the file supplied entries
+        Assert.Contains("_persistedHasRawEntries", generated);
+        Assert.DoesNotContain("_runtimeHistoryHasRawEntries", generated);
+        Assert.DoesNotContain("_ignoredHasRawEntries", generated);
     }
 
     [Fact]

@@ -841,7 +841,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
 
             // Backing field
             sb.AppendLine($"        private {p.TypeFullName} {fieldName};");
-            if (p.IsSubKeyDictionary)
+            if (TracksRawEntries(p))
             {
                 // Flag that tracks whether any sub-key from the INI file (or a raw-value set) has
                 // been received since the last ResetToDefaults call.  The first sub-key received
@@ -996,7 +996,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             if (p.IsIgnored) continue;
 
             string fieldName = $"_{Camel(p.Name)}";
-            if (p.IsSubKeyDictionary)
+            if (TracksRawEntries(p))
             {
                 // Reset the "file-has-overridden-defaults" flag so the next sub-key load
                 // starts fresh (clears the defaults before applying the file entries).
@@ -1586,6 +1586,13 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
 
     private static string Camel(string name)
         => name.Length == 0 ? name : char.ToLowerInvariant(name[0]) + name.Substring(1);
+
+    /// <summary>
+    /// Only sub-key dictionaries which are read from and written to the INI file track whether the file supplied entries
+    /// (the <c>_xHasRawEntries</c> field). For [IgnoreDataMember] and RuntimeOnly dictionaries nothing would read the field,
+    /// which causes CS0414 / CS0169 in the generated code.
+    /// </summary>
+    private static bool TracksRawEntries(PropertyModel p) => p.IsSubKeyDictionary && !p.IsIgnored && !p.IsRuntimeOnly;
 
     /// <summary>
     /// Emits a dispatch on the property key without allocating: <c>switch (__KeyIndex(key))</c> for exact keys, then
