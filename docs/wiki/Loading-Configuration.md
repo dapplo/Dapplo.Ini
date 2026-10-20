@@ -152,7 +152,7 @@ using var config = IniConfigRegistry.ForFile("legacy.ini")
 
 ## Auto-save on a timer
 
-Call `AutoSaveInterval` to flush dirty sections to disk automatically at a regular interval:
+Call `AutoSaveInterval` to save changes automatically, at most one interval after the first change:
 
 ```csharp
 using var config = IniConfigRegistry.ForFile("app.ini")
@@ -162,9 +162,11 @@ using var config = IniConfigRegistry.ForFile("app.ini")
     .Build();
 ```
 
-The internal timer only writes to disk when `HasPendingChanges()` returns `true`,
-so no unnecessary I/O occurs. When a load, reload or save is running at that moment, the tick
-is skipped and the next one tries again. Exceptions are reported to listeners via `OnError`
+The timer only runs when there is something to save: the first change of a section starts it,
+changes made until it fires are saved together, and when nothing is pending it stays off. An
+application that runs all day in the tray doesn't wake up for it. When a load, reload or save is
+running at that moment, it tries again one interval later; while auto-save is paused
+(`PauseAutoSave`) changes wait for `ResumeAutoSave`. Exceptions are reported to listeners via `OnError`
 instead of crashing the process (see [[Listeners]]). The timer is stopped automatically when
 `config.Dispose()` is called.
 
