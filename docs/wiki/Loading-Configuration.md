@@ -55,7 +55,7 @@ Use `AddAppDataPath` to add that directory as a search path and write target in 
 ```csharp
 using var config = IniConfigRegistry.ForFile("myapp.ini")
     .AddSearchPath(AppContext.BaseDirectory) // e.g. a portable or admin-provided file next to the exe
-    .AddAppDataPath("MyApplication")         // creates the folder if it does not exist
+    .AddAppDataPath("MyApplication")         // the folder is only created when the file is written there
     .RegisterSection<IAppSettings>(new AppSettingsImpl())
     .Build();
 
@@ -67,6 +67,11 @@ The file is still read from the first search path that contains it, and saved ba
 Only when no search path contains it is AppData the write target — wherever `AddAppDataPath`
 is in the search order, so a fresh install never tries to write next to the executable
 (e.g. into `Program Files`). `SetWritablePath` takes precedence over this fallback.
+
+The AppData directory is created when the file is first written or locked there (or watched with
+`MonitorFile`), and never when the file is found in another search path: a portable application with
+its INI file next to the executable leaves no empty folder behind. The same goes for the directory of
+`SetWritablePath`.
 
 ---
 

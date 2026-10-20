@@ -144,8 +144,9 @@ public sealed class IniConfigBuilder
     ///   <item>On Linux it resolves to <c>~/.config/<paramref name="applicationName"/></c>.</item>
     ///   <item>On macOS it resolves to <c>~/Library/Application Support/<paramref name="applicationName"/></c>.</item>
     /// </list>
-    /// The directory is created if it does not yet exist so that a subsequent
-    /// <see cref="IniConfig.Save"/> can write there immediately.
+    /// The directory is created when the file is first written or locked there (or watched with <see cref="MonitorFile"/>),
+    /// and never when the file is found in another search path: a portable application with its INI file next to the
+    /// executable leaves no empty directory behind.
     /// An explicit <see cref="SetWritablePath"/> takes precedence over this fallback, and
     /// <see cref="SetOverrideDirectory"/> takes precedence over both. When this method is called
     /// more than once, the first directory is the write target.
@@ -168,7 +169,7 @@ public sealed class IniConfigBuilder
     /// </summary>
     internal IniConfigBuilder AddAppDataDirectory(string path)
     {
-        Directory.CreateDirectory(path);
+        // Not created here: only when the file is written, locked or watched there (see IniConfig.EnsureFileDirectory)
         _appDataDirectory ??= path;
         return AddSearchPath(path);
     }
@@ -181,8 +182,8 @@ public sealed class IniConfigBuilder
     /// It takes precedence over the <see cref="AddAppDataPath"/> fallback and is ignored while
     /// <see cref="SetOverrideDirectory"/> is active.
     /// <para>
-    /// The containing directory must already exist (or be created by the caller beforehand).
-    /// The file itself will be created on the first <see cref="IniConfig.Save"/> call.
+    /// The file and, when needed, its directory are created on the first <see cref="IniConfig.Save"/> call
+    /// (or at the load, with <see cref="LockFile"/>).
     /// </para>
     /// </summary>
     /// <param name="path">Absolute path to the INI file that should be created on save.</param>

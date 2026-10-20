@@ -340,7 +340,7 @@ public sealed class IniConfigBuilderTests : IDisposable
     // ── AddAppDataPath tests ───────────────────────────────────────────────────
 
     [Fact]
-    public void AddAppDataPath_CreatesDirectory_AndSetsWriteTarget()
+    public void AddAppDataPath_SetsWriteTarget_AndCreatesDirectoryOnSave()
     {
         // Use a unique app name so the directory is isolated.
         var appName = "DappLoTestApp_" + Guid.NewGuid().ToString("N");
@@ -356,8 +356,8 @@ public sealed class IniConfigBuilderTests : IDisposable
                 .RegisterSection<IGeneralSettings>(section)
                 .Build();
 
-            // Directory should have been created
-            Assert.True(Directory.Exists(expectedDir));
+            // Nothing was written yet: the directory isn't created by the builder or the load
+            Assert.False(Directory.Exists(expectedDir));
 
             // LoadedFromPath should point into that directory
             Assert.NotNull(config.LoadedFromPath);
@@ -368,6 +368,11 @@ public sealed class IniConfigBuilderTests : IDisposable
 
             // Defaults should be applied because no file existed
             Assert.Equal("MyApp", section.AppName);
+
+            // The first save creates the directory and the file
+            config.Save();
+            Assert.True(Directory.Exists(expectedDir));
+            Assert.True(File.Exists(Path.Combine(expectedDir, "appsettings.ini")));
         }
         finally
         {

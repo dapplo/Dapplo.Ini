@@ -44,6 +44,7 @@ All new behaviour is opt-in; existing code keeps working.
 - Generator: dictionary properties with `[IniValue(RuntimeOnly = true)]` or `[IgnoreDataMember]` no longer get the `_xHasRawEntries` field, which nothing reads for them and which caused warning CS0414 / CS0169 in every consumer.
 - `OnFileLoaded` and `OnFileNotFound` are raised once per file of a load, not once per section using it.
 - Auto-save no longer wakes up on a fixed interval when nothing changed; the timer starts with the first change.
+- AddAppDataPath no longer creates the AppData directory when the INI file is found elsewhere.
 
 ---
 

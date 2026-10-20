@@ -365,6 +365,7 @@ public sealed class IniConfig : IDisposable
 
                 var versions = CaptureChangeVersions(sections);
                 var iniFile = BuildIniFile(sections);
+                EnsureFileDirectory();
                 WriteToDisk(() => IniFileWriter.WriteFile(LoadedFromPath!, iniFile, Encoding, WriterOptions));
                 MarkSaved(sections, versions);
                 RetainWrittenFile(iniFile);
@@ -449,6 +450,7 @@ public sealed class IniConfig : IDisposable
 
                 var versions = CaptureChangeVersions(sections);
                 var iniFile = BuildIniFile(sections);
+                EnsureFileDirectory();
 
                 if (_watcher != null) _watcher.EnableRaisingEvents = false;
                 try
@@ -682,6 +684,8 @@ public sealed class IniConfig : IDisposable
         {
             if (_lockStream != null) return; // already locked
 
+            // The lock creates the file when it doesn't exist yet
+            EnsureFileDirectory();
             _lockStream = new FileStream(
                 LoadedFromPath!,
                 FileMode.OpenOrCreate,
@@ -710,6 +714,8 @@ public sealed class IniConfig : IDisposable
         if (string.IsNullOrEmpty(LoadedFromPath)) return;
 
         _fileChangedCallback = callback;
+        // FileSystemWatcher needs an existing directory, also when the file will only be created later
+        EnsureFileDirectory();
 
         // Debounce timer starts in the stopped state; OnFileChanged arms it on demand.
         _reloadDebounceTimer = new System.Threading.Timer(_ =>
@@ -1230,6 +1236,17 @@ public sealed class IniConfig : IDisposable
         var path = snapshot.UserFilePath ?? GetWriteTargetForNewFile();
         if (path != null)
             LoadedFromPath = path;
+    }
+
+    /// <summary>
+    /// Creates the directory of <see cref="LoadedFromPath"/> when it doesn't exist yet. Called right before the file is
+    /// written, locked or watched, so a directory (e.g. AppData) is only created when the file really lives there.
+    /// </summary>
+    private void EnsureFileDirectory()
+    {
+        var directory = string.IsNullOrEmpty(LoadedFromPath) ? null : Path.GetDirectoryName(LoadedFromPath);
+        if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+            Directory.CreateDirectory(directory);
     }
 
     /// <summary>

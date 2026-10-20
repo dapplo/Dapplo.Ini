@@ -431,8 +431,11 @@ public sealed class LifecycleRefactorTests : IDisposable
     [Fact]
     public async Task PostLoadSetupFailure_FaultsInitialLoadTask()
     {
+        // A file where the directory should be: the directory can't be created, so the file monitor can't start
+        var blocker = Path.Combine(_tempDir, "not-a-folder");
+        File.WriteAllText(blocker, "");
         var config = IniConfigRegistry.ForFile("setup-fails.ini")
-            .SetWritablePath(Path.Combine(_tempDir, "missing-folder", "setup-fails.ini"))
+            .SetWritablePath(Path.Combine(blocker, "setup-fails.ini"))
             .MonitorFile()
             .RegisterSection<IReloadSettings>(new ReloadSettingsImpl())
             .Create();

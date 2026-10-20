@@ -264,9 +264,10 @@ public sealed class ListenerTests : IDisposable
         var listener = new RecordingListener();
         var section = new GeneralSettingsImpl();
 
-        // Point the writable path at a directory that doesn't exist so that Save() fails.
-        var nonExistentDir = Path.Combine(_tempDir, "nonexistent_dir");
-        var writablePath = Path.Combine(nonExistentDir, "saveerror.ini");
+        // Point the writable path into a "directory" which is a file, so that Save() can't create it and fails.
+        var blocker = Path.Combine(_tempDir, "not_a_dir");
+        File.WriteAllText(blocker, "");
+        var writablePath = Path.Combine(blocker, "saveerror.ini");
 
         var config = IniConfigRegistry.ForFile("saveerror.ini")
             .AddSearchPath(_tempDir)
