@@ -10,6 +10,7 @@ namespace Dapplo.Ini.Internationalization.Tests;
 internal sealed class TestLanguageListener : LanguageConfigListenerBase
 {
     public ConcurrentQueue<string> FilesLoaded { get; } = new();
+    public ConcurrentQueue<string> FilesNotFound { get; } = new();
     public ConcurrentQueue<(string Section, bool Loaded)> SectionsAdded { get; } = new();
     public ConcurrentQueue<(string Operation, Exception Exception)> Errors { get; } = new();
     public ConcurrentQueue<(string Requested, string Resolved)> Resolved { get; } = new();
@@ -17,6 +18,7 @@ internal sealed class TestLanguageListener : LanguageConfigListenerBase
     public ConcurrentQueue<(string Section, string Key, Exception Exception)> FormatFailures { get; } = new();
 
     public override void OnFileLoaded(string filePath) => FilesLoaded.Enqueue(filePath);
+    public override void OnFileNotFound(string fileName) => FilesNotFound.Enqueue(fileName);
     public override void OnSectionAdded(string sectionName, bool loaded) => SectionsAdded.Enqueue((sectionName, loaded));
     public override void OnError(string operation, Exception exception) => Errors.Enqueue((operation, exception));
     public override void OnLanguageResolved(string requested, string resolved) => Resolved.Enqueue((requested, resolved));
