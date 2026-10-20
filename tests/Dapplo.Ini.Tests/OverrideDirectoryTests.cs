@@ -55,6 +55,103 @@ public sealed class OverrideDirectoryTests : IDisposable
         return builder;
     }
 
+    // ── AppData is only created when the file lives there ─────────────────────
+
+    private static async Task WaitUntil(Func<bool> condition, string message)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!condition())
+        {
+            if (DateTime.UtcNow > deadline)
+                Assert.Fail("Timed out waiting until " + message);
+            await Task.Delay(20);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]   // LockFile + auto-save
+    [InlineData(false)]  // MonitorFile + auto-save (lock and monitor are mutually exclusive)
+    public void FileFoundInEarlierSearchPath_AppDataIsNeverCreated(bool lockFile)
+    {
+        Write(_startupDir, FileName, "[General]\nAppName = Portable\n");
+        var builder = Builder(null).AutoSaveInterval(TimeSpan.FromMilliseconds(50));
+        builder = lockFile ? builder.LockFile() : builder.MonitorFile();
+        var section = new GeneralSettingsImpl();
+        var config = builder.RegisterSection<IGeneralSettings>(section).Build();
+
+        Assert.Equal("Portable", section.AppName);
+        section.AppName = "Changed";
+        config.Save();
+        config.Dispose();
+
+        Assert.False(Directory.Exists(_appDataDir), "a portable application must not leave an AppData directory behind");
+        Assert.Contains("AppName = Changed", File.ReadAllText(Path.Combine(_startupDir, FileName)));
+    }
+
+    [Fact]
+    public void NoFileAnywhere_AppDataIsCreatedBySave()
+    {
+        var section = new GeneralSettingsImpl();
+        using var config = Builder(null).RegisterSection<IGeneralSettings>(section).Build();
+
+        Assert.False(Directory.Exists(_appDataDir));
+        Assert.Equal(Path.Combine(_appDataDir, FileName), config.LoadedFromPath);
+
+        config.Save();
+        Assert.True(Directory.Exists(_appDataDir));
+        Assert.True(File.Exists(Path.Combine(_appDataDir, FileName)));
+    }
+
+    [Fact]
+    public async Task NoFileAnywhere_AppDataIsCreatedBySaveAsync()
+    {
+        var section = new GeneralSettingsImpl();
+        using var config = Builder(null).RegisterSection<IGeneralSettings>(section).Build();
+
+        await config.SaveAsync();
+        Assert.True(File.Exists(Path.Combine(_appDataDir, FileName)));
+    }
+
+    [Fact]
+    public void NoFileAnywhere_LockFile_CreatesTheDirectoryAndTheLockedFileAtLoad()
+    {
+        var path = Path.Combine(_appDataDir, FileName);
+        using var config = Builder(null).LockFile().RegisterSection<IGeneralSettings>(new GeneralSettingsImpl()).Build();
+
+        Assert.True(Directory.Exists(_appDataDir));
+        Assert.True(File.Exists(path));
+        Assert.Equal(0, new FileInfo(path).Length);
+        // Locked: another writer is refused
+        Assert.Throws<IOException>(() => File.WriteAllText(path, "[General]\nAppName = Other\n"));
+    }
+
+    [Fact]
+    public async Task NoFileAnywhere_MonitorFile_WatchesTheNewDirectory()
+    {
+        var path = Path.Combine(_appDataDir, FileName);
+        var section = new GeneralSettingsImpl();
+        using var config = Builder(null).MonitorFile(debounceMs: 50).RegisterSection<IGeneralSettings>(section).Build();
+
+        Assert.True(Directory.Exists(_appDataDir));
+        File.WriteAllText(path, "[General]\nAppName = External\n");
+        await WaitUntil(() => section.AppName == "External", "the external write is noticed");
+    }
+
+    [Fact]
+    public void SetWritablePath_MissingNestedDirectory_IsCreatedBySave()
+    {
+        var writable = Path.Combine(_root, "a", "b", "c", "writable.ini");
+        using var config = Builder(null)
+            .SetWritablePath(writable)
+            .RegisterSection<IGeneralSettings>(new GeneralSettingsImpl())
+            .Build();
+
+        Assert.False(Directory.Exists(Path.GetDirectoryName(writable)));
+        config.Save();
+        Assert.True(File.Exists(writable));
+        Assert.False(Directory.Exists(_appDataDir));
+    }
+
     // ── Main file ─────────────────────────────────────────────────────────────
 
     [Fact]
