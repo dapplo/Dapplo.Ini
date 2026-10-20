@@ -1124,7 +1124,6 @@ public sealed class LanguageConfig : IDisposable
             Entries = entries;
             Chain = config.GetLoadChain(language);
             Targets = new TranslationLoader.Target[entries.Count];
-            GroupOf = new int[entries.Count];
             for (var i = 0; i < entries.Count; i++)
             {
                 var entry = entries[i];
@@ -1136,7 +1135,6 @@ public sealed class LanguageConfig : IDisposable
                     Groups.Add((entry.Section.ModuleName, entry.Directories, new List<TranslationLoader.Target>()));
                 }
                 Groups[group].Targets.Add(Targets[i]);
-                GroupOf[i] = group;
             }
             Files = new IReadOnlyList<string>[Groups.Count, Chain.Count];
             for (var g = 0; g < Groups.Count; g++)
@@ -1147,7 +1145,6 @@ public sealed class LanguageConfig : IDisposable
         public IReadOnlyList<SectionEntry> Entries { get; }
         public IReadOnlyList<string> Chain { get; }
         public TranslationLoader.Target[] Targets { get; }
-        public int[] GroupOf { get; }
         public List<(string? Module, IReadOnlyList<string> Directories, List<TranslationLoader.Target> Targets)> Groups { get; } = new();
         public IReadOnlyList<string>[,] Files { get; }
     }
@@ -1185,21 +1182,23 @@ public sealed class LanguageConfig : IDisposable
     }
 
     /// <summary>
-    /// Publishes the built translations as the sections' latest (under the gate) and reports the files per
-    /// section in the order they apply: per language of the chain, lowest priority first.
+    /// Publishes the built translations as the sections' latest (under the gate) and reports each file of the load
+    /// once, in the order they apply: per group of the plan (the unit the files are read for), per language of the
+    /// chain, lowest priority first.
     /// </summary>
     private void Publish(BuildPlan plan, Batch batch)
     {
         for (var i = 0; i < plan.Entries.Count; i++)
+            plan.Entries[i].Latest = plan.Targets[i].Result;
+
+        for (var g = 0; g < plan.Groups.Count; g++)
         {
-            var entry = plan.Entries[i];
-            entry.Latest = plan.Targets[i].Result;
             for (var c = 0; c < plan.Chain.Count; c++)
             {
-                var files = plan.Files[plan.GroupOf[i], c];
+                var files = plan.Files[g, c];
                 if (files.Count == 0)
                 {
-                    var fileName = GetFileName(entry.Section.ModuleName, plan.Chain[c]);
+                    var fileName = GetFileName(plan.Groups[g].Module, plan.Chain[c]);
                     batch.Notify(l => l.OnFileNotFound(fileName));
                     continue;
                 }
