@@ -95,7 +95,7 @@ when loading fails, then re-throw.
 | `LockFile()` | Holds the file open read-exclusively for the process lifetime |
 | `MonitorFile([callback])` | Installs a `FileSystemWatcher`; optional callback controls reload decision |
 | `WithEncoding(encoding)` | Sets the file encoding for reading and writing (default: UTF-8) |
-| `AutoSaveInterval(interval)` | Starts an internal timer that saves when `HasPendingChanges()` is `true` |
+| `AutoSaveInterval(interval)` | Saves changes automatically, at most `interval` after the first change; the timer only runs while changes are pending |
 | `SaveOnExit()` | Hooks `AppDomain.CurrentDomain.ProcessExit` to save on process termination |
 | `OnUnknownKey(callback)` | Registers a global `UnknownKeyCallback` invoked for keys that have no matching section property. Used for migration scenarios. See [[Migration]]. |
 | `EnableMetadata(version?, applicationName?)` | Opts in to writing a `[__metadata__]` section as the first section in the file on every save. Exposes `IniConfig.Metadata` to `IAfterLoad` hooks for version-gated migrations. See [[Migration]]. |

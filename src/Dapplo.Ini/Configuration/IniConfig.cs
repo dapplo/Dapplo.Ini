@@ -182,6 +182,19 @@ public sealed class IniConfig : IDisposable
 
     private int _autoSavePauseCount;
     private System.Threading.Timer? _autoSaveTimer;
+    private TimeSpan _autoSaveInterval;
+    // 1 while the one-shot auto-save timer is scheduled
+    private int _autoSaveArmed;
+    // Sections which don't derive from IniSectionBase can't report their changes: auto-save then keeps polling
+    private volatile bool _hasUntrackedSections;
+    private int _autoSaveTicks;
+    private Action? _onSectionChanged;
+
+    /// <summary>The number of times the auto-save timer callback ran, for tests.</summary>
+    internal int AutoSaveTicks => Volatile.Read(ref _autoSaveTicks);
+
+    /// <summary><c>true</c> while the auto-save timer is scheduled, for tests.</summary>
+    internal bool IsAutoSaveArmed => Volatile.Read(ref _autoSaveArmed) != 0;
     private EventHandler? _processExitHandler;
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -774,35 +787,116 @@ public sealed class IniConfig : IDisposable
     {
         var updated = Interlocked.Decrement(ref _autoSavePauseCount);
         if (updated < 0)
+        {
             Interlocked.Increment(ref _autoSavePauseCount);
+            return;
+        }
+        // Changes made while paused didn't arm the timer
+        if (updated == 0 && HasPendingChanges())
+            ArmAutoSave();
     }
 
     // ── Auto-save timer ───────────────────────────────────────────────────────
 
     /// <summary>
-    /// Starts a timer that periodically saves when <see cref="HasPendingChanges"/> returns <c>true</c>
-    /// and auto-save is not paused. When another operation is running, that tick is skipped and the
-    /// next tick tries again.
+    /// Creates the one-shot auto-save timer, disarmed: it's armed by the first change (see <see cref="OnSectionChanged"/>),
+    /// so an idle application never wakes up for it. Changes made before (e.g. by <see cref="IAfterLoad"/> hooks) arm it right away.
     /// </summary>
     internal void StartAutoSave(TimeSpan interval)
     {
-        _autoSaveTimer = new System.Threading.Timer(_ =>
+        _autoSaveInterval = interval;
+        Volatile.Write(ref _autoSaveTimer, new System.Threading.Timer(_ => OnAutoSaveTimer(), null, Timeout.Infinite, Timeout.Infinite));
+        if (_hasUntrackedSections || HasPendingChanges())
+            ArmAutoSave();
+    }
+
+    /// <summary>
+    /// Raised by every owned section after a change, on the thread which made it. Arms the timer for the first change:
+    /// later changes while it's armed are saved by the same run, so a stream of changes is saved at most one interval
+    /// after the first one.
+    /// </summary>
+    private void OnSectionChanged()
+    {
+        // While paused nothing arms: ResumeAutoSave does when changes are pending
+        if (Volatile.Read(ref _autoSavePauseCount) != 0)
+            return;
+        ArmAutoSave();
+    }
+
+    /// <summary>
+    /// Schedules the auto-save timer once, unless it's already scheduled. Safe from any thread, also during Dispose.
+    /// </summary>
+    private void ArmAutoSave()
+    {
+        if (_disposed)
+            return;
+        var timer = Volatile.Read(ref _autoSaveTimer);
+        if (timer == null || Interlocked.CompareExchange(ref _autoSaveArmed, 1, 0) != 0)
+            return;
+        try
         {
-            if (_disposed || Volatile.Read(ref _autoSavePauseCount) != 0 || !HasPendingChanges())
-                return;
-            if (!_gate.Wait(0))
-                return;
-            var owner = ClaimGate();
-            _gateOwner.Value = owner;
-            try
-            {
-                RunInBackground("Save", SaveCore);
-            }
-            finally
-            {
-                ExitGate(owner);
-            }
-        }, null, interval, interval);
+            timer.Change(_autoSaveInterval, Timeout.InfiniteTimeSpan);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposed concurrently: nothing to save anymore
+        }
+    }
+
+    private void OnAutoSaveTimer()
+    {
+        Interlocked.Increment(ref _autoSaveTicks);
+        // Disarm first: a change from now on (also during the save below) arms the timer again
+        Volatile.Write(ref _autoSaveArmed, 0);
+        if (_disposed)
+            return;
+        if (Volatile.Read(ref _autoSavePauseCount) != 0)
+        {
+            // ResumeAutoSave arms again; sections which can't report changes keep polling
+            if (_hasUntrackedSections)
+                ArmAutoSave();
+            return;
+        }
+        if (!HasPendingChanges())
+        {
+            if (_hasUntrackedSections)
+                ArmAutoSave();
+            return;
+        }
+        if (!_gate.Wait(0))
+        {
+            // A load, reload or save is running: try again one interval later instead of losing the change
+            ArmAutoSave();
+            return;
+        }
+        var owner = ClaimGate();
+        _gateOwner.Value = owner;
+        try
+        {
+            RunInBackground("Save", SaveCore);
+        }
+        finally
+        {
+            ExitGate(owner);
+        }
+        // A change during the save already armed the timer; a failed save (still pending) is retried
+        if (_hasUntrackedSections || HasPendingChanges())
+            ArmAutoSave();
+    }
+
+    /// <summary>
+    /// Registers <paramref name="section"/> and connects its change notification to the auto-save. A section it replaces is disconnected.
+    /// </summary>
+    internal void SetSection(Type keyType, IIniSection section)
+    {
+        var handler = _onSectionChanged ??= OnSectionChanged;
+        if (Sections.TryGetValue(keyType, out var previous) && !ReferenceEquals(previous, section) && previous is IniSectionBase previousBase)
+            Interlocked.CompareExchange(ref previousBase.Changed, null, handler);
+        Sections.Set(keyType, section);
+        if (section is IniSectionBase sectionBase)
+            Volatile.Write(ref sectionBase.Changed, handler);
+        else
+            _hasUntrackedSections = true;
     }
 
     // ── Section registration ──────────────────────────────────────────────────
@@ -957,7 +1051,7 @@ public sealed class IniConfig : IDisposable
         ApplySnapshot(sections, _retained!, updateMetadata: false);
         ApplyValueSources(sections);
         ClearDirtyFlags(sections);
-        Sections.Set(keyType, section);
+        SetSection(keyType, section);
         RunAfterLoadHooks(sections);
         NotifySectionAdded(section, loaded: true);
     }
@@ -975,7 +1069,7 @@ public sealed class IniConfig : IDisposable
         await ApplyValueSourcesAsync(sections, cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
         ClearDirtyFlags(sections);
-        Sections.Set(keyType, section);
+        SetSection(keyType, section);
         await RunAfterLoadHooksAsync(sections, cancellationToken).ConfigureAwait(false);
         NotifySectionAdded(section, loaded: true);
     }
@@ -985,7 +1079,7 @@ public sealed class IniConfig : IDisposable
         ThrowIfSectionNameTaken(keyType, section);
         // Until the load populates it, the section returns its [DefaultValue]s rather than default(T).
         ResetSection(section);
-        Sections.Set(keyType, section);
+        SetSection(keyType, section);
         NotifySectionAdded(section, loaded: false);
     }
 
@@ -1744,6 +1838,16 @@ public sealed class IniConfig : IDisposable
 
         _autoSaveTimer?.Dispose();
         _autoSaveTimer = null;
+
+        // Disconnect the sections, they may outlive this config (and would keep it alive)
+        if (_onSectionChanged != null)
+        {
+            foreach (var section in Sections.Values)
+            {
+                if (section is IniSectionBase sectionBase)
+                    Interlocked.CompareExchange(ref sectionBase.Changed, null, _onSectionChanged);
+            }
+        }
 
         if (_processExitHandler != null)
         {

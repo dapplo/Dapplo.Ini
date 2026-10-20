@@ -244,7 +244,18 @@ public abstract class IniSectionBase : IIniSection
     public bool HasChanges => Volatile.Read(ref _changeVersion) != Volatile.Read(ref _savedVersion);
 
     /// <inheritdoc/>
-    public void MarkAsDirty() => Interlocked.Increment(ref _changeVersion);
+    public void MarkAsDirty()
+    {
+        Interlocked.Increment(ref _changeVersion);
+        // After the increment, so the owner sees the change when it reacts (e.g. arms the auto-save timer)
+        Volatile.Read(ref Changed)?.Invoke();
+    }
+
+    /// <summary>
+    /// Raised by <see cref="MarkAsDirty"/> after every change, on the thread which made it. Set by the <see cref="IniConfig"/>
+    /// which owns the section, to start its auto-save timer on the first change. Must be cheap and must not throw.
+    /// </summary>
+    internal Action? Changed;
 
     /// <inheritdoc/>
     public bool IsConstant(string key)

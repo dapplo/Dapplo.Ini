@@ -314,12 +314,12 @@ public sealed class IniConfigBuilder
     // ── auto-save timer ───────────────────────────────────────────────────────
 
     /// <summary>
-    /// Starts an internal timer that periodically checks for unsaved changes and, when present,
-    /// calls <see cref="IniConfig.Save"/> automatically.
+    /// Saves unsaved changes automatically, at most <paramref name="interval"/> after the first change.
+    /// The timer is started by a change and stops when everything is saved, so an idle application never wakes up for it.
     /// </summary>
     /// <param name="interval">
-    /// How often to check for pending changes.  A value of <see cref="Timeout.InfiniteTimeSpan"/>
-    /// disables the timer.
+    /// The time between the first change and the save; further changes in that time are saved together.
+    /// A value of <see cref="Timeout.InfiniteTimeSpan"/> disables the timer.
     /// </param>
     public IniConfigBuilder AutoSaveInterval(TimeSpan interval)
     {
@@ -903,7 +903,7 @@ public sealed class IniConfigBuilder
         foreach (var kvp in _sections)
         {
             config.ResetSection(kvp.Value);
-            config.Sections.Set(kvp.Key, kvp.Value);
+            config.SetSection(kvp.Key, kvp.Value);
         }
 
         return config;
