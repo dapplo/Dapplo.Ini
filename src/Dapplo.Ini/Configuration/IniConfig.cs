@@ -29,8 +29,7 @@ public sealed class IniConfig : IDisposable
     internal readonly List<string> SearchPaths = new();
     internal readonly List<string> DefaultFilePaths = new();
     internal readonly List<string> ConstantFilePaths = new();
-    internal readonly List<IValueSource> ValueSources = new();
-    internal readonly List<IValueSourceAsync> ValueSourcesAsync = new();
+    internal readonly List<ValueSourceRegistration> ValueSourceRegistrations = new();
     internal readonly SectionStore Sections = new();
     internal readonly List<IIniConfigListener> Listeners = new();
 
@@ -573,8 +572,7 @@ public sealed class IniConfig : IDisposable
                 var snapshot = ReadLayers(resolveUserFile: false);
                 sections = Sections.Values;
                 before = CaptureForChangeNotification(sections);
-                ApplySnapshot(sections, snapshot, updateMetadata: true);
-                ApplyValueSources(sections);
+                ApplySnapshot(sections, snapshot, updateMetadata: true, FetchSourceValues(sections));
                 CaptureMutableValues(sections);
                 ClearDirtyFlags(sections);
                 Retain(snapshot);
@@ -624,8 +622,8 @@ public sealed class IniConfig : IDisposable
                 var snapshot = await ReadLayersAsync(resolveUserFile: false, cancellationToken).ConfigureAwait(false);
                 sections = Sections.Values;
                 before = CaptureForChangeNotification(sections);
-                ApplySnapshot(sections, snapshot, updateMetadata: true);
-                await ApplyValueSourcesAsync(sections, cancellationToken).ConfigureAwait(false);
+                var sources = await FetchSourceValuesAsync(sections, cancellationToken).ConfigureAwait(false);
+                ApplySnapshot(sections, snapshot, updateMetadata: true, sources);
                 CaptureMutableValues(sections);
                 ClearDirtyFlags(sections);
                 Retain(snapshot);
@@ -1062,8 +1060,7 @@ public sealed class IniConfig : IDisposable
         }
 
         var sections = PrepareLateRegistration(keyType, section);
-        ApplySnapshot(sections, _retained!, updateMetadata: false);
-        ApplyValueSources(sections);
+        ApplySnapshot(sections, _retained!, updateMetadata: false, FetchSourceValues(sections));
         CaptureMutableValues(sections);
         ClearDirtyFlags(sections);
         SetSection(keyType, section);
@@ -1080,8 +1077,8 @@ public sealed class IniConfig : IDisposable
         }
 
         var sections = PrepareLateRegistration(keyType, section);
-        ApplySnapshot(sections, _retained!, updateMetadata: false);
-        await ApplyValueSourcesAsync(sections, cancellationToken).ConfigureAwait(false);
+        var sources = await FetchSourceValuesAsync(sections, cancellationToken).ConfigureAwait(false);
+        ApplySnapshot(sections, _retained!, updateMetadata: false, sources);
         cancellationToken.ThrowIfCancellationRequested();
         CaptureMutableValues(sections);
         ClearDirtyFlags(sections);
@@ -1161,8 +1158,7 @@ public sealed class IniConfig : IDisposable
                 var snapshot = ReadLayers(resolveUserFile: true);
                 UpdateLoadedFromPath(snapshot);
                 var sections = Sections.Values;
-                ApplySnapshot(sections, snapshot, updateMetadata: true);
-                ApplyValueSources(sections);
+                ApplySnapshot(sections, snapshot, updateMetadata: true, FetchSourceValues(sections));
                 CaptureMutableValues(sections);
                 ClearDirtyFlags(sections);
                 ConvertUnchangedValuesIfRequested(sections, snapshot);
@@ -1216,8 +1212,8 @@ public sealed class IniConfig : IDisposable
                 var snapshot = await ReadLayersAsync(resolveUserFile: true, cancellationToken).ConfigureAwait(false);
                 UpdateLoadedFromPath(snapshot);
                 var sections = Sections.Values;
-                ApplySnapshot(sections, snapshot, updateMetadata: true);
-                await ApplyValueSourcesAsync(sections, cancellationToken).ConfigureAwait(false);
+                var sources = await FetchSourceValuesAsync(sections, cancellationToken).ConfigureAwait(false);
+                ApplySnapshot(sections, snapshot, updateMetadata: true, sources);
                 CaptureMutableValues(sections);
                 ClearDirtyFlags(sections);
                 ConvertUnchangedValuesIfRequested(sections, snapshot);
@@ -1328,6 +1324,7 @@ public sealed class IniConfig : IDisposable
                 EnableSaveOnExit();
             if (ConfiguredAutoSaveInterval.HasValue && _autoSaveTimer == null)
                 StartAutoSave(ConfiguredAutoSaveInterval.Value);
+            SubscribeToValueSources();
         }
         catch
         {
@@ -1437,13 +1434,14 @@ public sealed class IniConfig : IDisposable
     /// Resets <paramref name="sections"/> to their compiled defaults and applies the defaults files,
     /// the user file and the constants files from <paramref name="snapshot"/>, without any file I/O.
     /// </summary>
-    private void ApplySnapshot(IReadOnlyList<IIniSection> sections, LayerSnapshot snapshot, bool updateMetadata)
+    private void ApplySnapshot(IReadOnlyList<IIniSection> sections, LayerSnapshot snapshot, bool updateMetadata, SourceValues sources)
     {
         foreach (var section in sections)
             ResetSection(section);
 
         foreach (var defaults in snapshot.Defaults)
             ApplyIniFile(defaults, sections, isDefault: true);
+        ApplyDefaultSourceValues(sources.Default);
 
         if (snapshot.User != null)
         {
@@ -1454,6 +1452,8 @@ public sealed class IniConfig : IDisposable
 
         foreach (var constants in snapshot.Constants)
             ApplyIniFile(constants, sections, isConstant: true);
+        ApplyConstantSourceValues(sources.Constant);
+        ApplyOverrideSourceValues(sources.Override);
     }
 
     internal void ResetSection(IIniSection section)
@@ -1566,65 +1566,349 @@ public sealed class IniConfig : IDisposable
 
     // ── Value sources ─────────────────────────────────────────────────────────
 
-    internal void ApplyValueSources() => ApplyValueSources(Sections.Values);
-
-    private void ApplyValueSources(IReadOnlyList<IIniSection> sections)
+    /// <summary>A registered value source and the layer it is applied in.</summary>
+    internal sealed class ValueSourceRegistration
     {
-        foreach (var source in ValueSources)
+        public ValueSourceRegistration(IValueSource source, ValueSourceLayer layer)
         {
-            foreach (var section in sections)
+            Sync = source;
+            Layer = layer;
+        }
+
+        public ValueSourceRegistration(IValueSourceAsync source, ValueSourceLayer layer)
+        {
+            Async = source;
+            Layer = layer;
+        }
+
+        public IValueSource? Sync { get; }
+        public IValueSourceAsync? Async { get; }
+        public object Source => (object?)Sync ?? Async!;
+        public ValueSourceLayer Layer { get; }
+    }
+
+    /// <summary>One value supplied by a value source.</summary>
+    private readonly struct SourceValue
+    {
+        public SourceValue(IIniSection section, string key, string? value, ValueOrigin origin)
+        {
+            Section = section;
+            Key = key;
+            Value = value;
+            Origin = origin;
+        }
+
+        public IIniSection Section { get; }
+        public string Key { get; }
+        public string? Value { get; }
+        public ValueOrigin Origin { get; }
+    }
+
+    /// <summary>The values of all value sources, per layer, in the order they are applied.</summary>
+    private sealed class SourceValues
+    {
+        public static readonly SourceValues None = new();
+        public readonly List<SourceValue> Default = new();
+        public readonly List<SourceValue> Constant = new();
+        public readonly List<SourceValue> Override = new();
+
+        public List<SourceValue> Of(ValueSourceLayer layer) => layer switch
+        {
+            ValueSourceLayer.Default => Default,
+            ValueSourceLayer.Constant => Constant,
+            _ => Override
+        };
+    }
+
+    private static readonly ValueSourceLayer[] Layers = { ValueSourceLayer.Default, ValueSourceLayer.Constant, ValueSourceLayer.Override };
+
+    /// <summary>Asks the synchronous value sources for every key of <paramref name="sections"/>.</summary>
+    private SourceValues FetchSourceValues(IReadOnlyList<IIniSection> sections)
+    {
+        if (ValueSourceRegistrations.Count == 0)
+            return SourceValues.None;
+        var values = new SourceValues();
+        foreach (var layer in Layers)
+        {
+            foreach (var registration in ValueSourceRegistrations)
             {
-                foreach (var key in section.GetKeys())
+                if (registration.Layer != layer || registration.Sync == null)
+                    continue;
+                var origin = new ValueOrigin(ValueOriginKind.ValueSource, null, registration.Sync, layer);
+                foreach (var section in sections)
                 {
-                    if (!source.TryGetValue(section.SectionName, key, out var value))
-                        continue;
-                    // Constants (admin-forced values) win over value sources.
-                    if (section.IsConstant(key))
+                    foreach (var key in section.GetKeys())
                     {
-                        NotifyExtendedListeners(l => l.OnValueSourceIgnored(section.SectionName, key, value));
-                        continue;
+                        if (registration.Sync.TryGetValue(section.SectionName, key, out var value))
+                            values.Of(layer).Add(new SourceValue(section, key, value, origin));
                     }
-                    ApplySourceValue(section, key, value, source);
                 }
             }
         }
+        return values;
     }
 
-    private static void ApplySourceValue(IIniSection section, string key, string? value, object source)
+    /// <summary>Asks all value sources for every key of <paramref name="sections"/>: per layer the synchronous ones first.</summary>
+    private async Task<SourceValues> FetchSourceValuesAsync(IReadOnlyList<IIniSection> sections, CancellationToken cancellationToken)
     {
-        if (section is IniSectionBase sectionBase)
-            sectionBase.ApplyLayerValue(key, value, new ValueOrigin(ValueOriginKind.ValueSource, null, source));
+        if (ValueSourceRegistrations.Count == 0)
+            return SourceValues.None;
+        var values = new SourceValues();
+        foreach (var layer in Layers)
+        {
+            foreach (var registration in ValueSourceRegistrations)
+            {
+                if (registration.Layer != layer || registration.Sync == null)
+                    continue;
+                var origin = new ValueOrigin(ValueOriginKind.ValueSource, null, registration.Sync, layer);
+                foreach (var section in sections)
+                {
+                    foreach (var key in section.GetKeys())
+                    {
+                        if (registration.Sync.TryGetValue(section.SectionName, key, out var value))
+                            values.Of(layer).Add(new SourceValue(section, key, value, origin));
+                    }
+                }
+            }
+            foreach (var registration in ValueSourceRegistrations)
+            {
+                if (registration.Layer != layer || registration.Async == null)
+                    continue;
+                var origin = new ValueOrigin(ValueOriginKind.ValueSource, null, registration.Async, layer);
+                foreach (var section in sections)
+                {
+                    foreach (var key in section.GetKeys())
+                    {
+                        var (found, value) = await registration.Async.TryGetValueAsync(section.SectionName, key, cancellationToken).ConfigureAwait(false);
+                        if (found)
+                            values.Of(layer).Add(new SourceValue(section, key, value, origin));
+                    }
+                }
+            }
+        }
+        return values;
+    }
+
+    /// <summary><see cref="ValueSourceLayer.Default"/>: below the user file, inherited, respecting IgnoreDefaults.</summary>
+    private void ApplyDefaultSourceValues(List<SourceValue> values)
+    {
+        foreach (var item in values)
+        {
+            var sectionBase = item.Section as IniSectionBase;
+            if (sectionBase != null && (sectionBase.SectionIgnoresDefaults || sectionBase.IsIgnoreDefaultsKey(item.Key)))
+                continue;
+            ApplySourceValue(item);
+        }
+    }
+
+    /// <summary>
+    /// <see cref="ValueSourceLayer.Constant"/>: wins over the constants files and protects the key like them,
+    /// respecting IgnoreConstants. Replacing a constants-file value is reported to the listeners.
+    /// </summary>
+    private void ApplyConstantSourceValues(List<SourceValue> values)
+    {
+        foreach (var item in values)
+        {
+            var section = item.Section;
+            var sectionBase = section as IniSectionBase;
+            if (sectionBase != null && (sectionBase.SectionIgnoresConstants || sectionBase.IsIgnoreConstantsKey(item.Key)))
+                continue;
+            if (sectionBase != null && section.IsConstant(item.Key) && sectionBase.GetValueOrigin(item.Key).Kind == ValueOriginKind.ConstantsFile)
+            {
+                var replaced = section.GetRawValue(item.Key);
+                NotifyExtendedListeners(l => l.OnValueSourceIgnored(section.SectionName, item.Key, replaced));
+            }
+            ApplySourceValue(item);
+            sectionBase?.MarkKeyAsConstant(item.Key);
+        }
+    }
+
+    /// <summary><see cref="ValueSourceLayer.Override"/>: over the user file, skipped for constant keys.</summary>
+    private void ApplyOverrideSourceValues(List<SourceValue> values)
+    {
+        foreach (var item in values)
+        {
+            var section = item.Section;
+            if (section.IsConstant(item.Key))
+            {
+                // Constants (admin-forced values) win over value sources.
+                NotifyExtendedListeners(l => l.OnValueSourceIgnored(section.SectionName, item.Key, item.Value));
+                continue;
+            }
+            ApplySourceValue(item);
+        }
+    }
+
+    private static void ApplySourceValue(SourceValue item)
+    {
+        if (item.Section is IniSectionBase sectionBase)
+            sectionBase.ApplyLayerValue(item.Key, item.Value, item.Origin);
         else
-            section.SetRawValue(key, value);
+            item.Section.SetRawValue(item.Key, item.Value);
     }
 
-    internal Task ApplyValueSourcesAsync(CancellationToken cancellationToken = default)
-        => ApplyValueSourcesAsync(Sections.Values, cancellationToken);
+    // ── Reload on value-source changes ────────────────────────────────────────
 
-    private async Task ApplyValueSourcesAsync(IReadOnlyList<IIniSection> sections, CancellationToken cancellationToken)
+    /// <summary>Debounce of <see cref="IValueSource.ValueChanged"/> events, set via <see cref="IniConfigBuilder.ValueSourceChangeDebounce"/>.</summary>
+    internal TimeSpan ValueSourceDebounce = TimeSpan.FromMilliseconds(500);
+
+    private readonly object _sourceChangeSync = new();
+    private HashSet<string>? _changedSections;
+    private bool _allSectionsChanged;
+    private System.Threading.Timer? _sourceChangeTimer;
+    private EventHandler<ValueChangedEventArgs>? _sourceChangedHandler;
+
+    /// <summary>The number of reloads that value-source changes started, for tests.</summary>
+    internal int SourceChangeReloads;
+
+    /// <summary>Subscribes to <c>ValueChanged</c> of every registered source. Called once, after the first load.</summary>
+    private void SubscribeToValueSources()
     {
-        // Apply synchronous sources first
-        ApplyValueSources(sections);
-
-        foreach (var source in ValueSourcesAsync)
+        if (ValueSourceRegistrations.Count == 0 || _sourceChangedHandler != null)
+            return;
+        _sourceChangeTimer = new System.Threading.Timer(_ => OnSourceChangeTimer(), null, Timeout.Infinite, Timeout.Infinite);
+        _sourceChangedHandler = OnValueSourceChanged;
+        foreach (var registration in ValueSourceRegistrations)
         {
-            foreach (var section in sections)
+            if (registration.Sync != null)
+                registration.Sync.ValueChanged += _sourceChangedHandler;
+            else
+                registration.Async!.ValueChanged += _sourceChangedHandler;
+        }
+    }
+
+    private void UnsubscribeFromValueSources()
+    {
+        var handler = _sourceChangedHandler;
+        if (handler == null)
+            return;
+        _sourceChangedHandler = null;
+        foreach (var registration in ValueSourceRegistrations)
+        {
+            try
             {
-                foreach (var key in section.GetKeys())
-                {
-                    var (found, value) = await source.TryGetValueAsync(
-                        section.SectionName, key, cancellationToken).ConfigureAwait(false);
-                    if (!found)
-                        continue;
-                    if (section.IsConstant(key))
-                    {
-                        NotifyExtendedListeners(l => l.OnValueSourceIgnored(section.SectionName, key, value));
-                        continue;
-                    }
-                    ApplySourceValue(section, key, value, source);
-                }
+                if (registration.Sync != null)
+                    registration.Sync.ValueChanged -= handler;
+                else
+                    registration.Async!.ValueChanged -= handler;
+            }
+            catch
+            {
+                // A failing source must not stop the dispose.
             }
         }
+        var timer = _sourceChangeTimer;
+        _sourceChangeTimer = null;
+        timer?.Change(Timeout.Infinite, Timeout.Infinite);
+        timer?.Dispose();
+    }
+
+    /// <summary>Records which sections changed and (re)starts the debounce timer. Any thread, cheap, never throws.</summary>
+    private void OnValueSourceChanged(object? sender, ValueChangedEventArgs e)
+    {
+        if (_disposed)
+            return;
+        lock (_sourceChangeSync)
+        {
+            if (string.IsNullOrEmpty(e?.SectionName))
+                _allSectionsChanged = true;
+            else
+                (_changedSections ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase)).Add(e!.SectionName!);
+        }
+        try
+        {
+            _sourceChangeTimer?.Change(ValueSourceDebounce, Timeout.InfiniteTimeSpan);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposed concurrently
+        }
+    }
+
+    private void OnSourceChangeTimer()
+    {
+        if (_disposed)
+            return;
+        _ = ReloadChangedSectionsInBackgroundAsync();
+    }
+
+    private async Task ReloadChangedSectionsInBackgroundAsync()
+    {
+        try
+        {
+            await ReloadChangedSectionsAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            if (ex.Data.Contains(ReportedKey)) return;
+            try { NotifyError("Reload", ex); }
+            catch { /* a failing listener must not crash the process */ }
+        }
+    }
+
+    /// <summary>
+    /// Reloads the sections named by <c>ValueChanged</c> events (all sections for a wildcard event) through the normal
+    /// reload path: files and value sources are read again, <see cref="IAfterLoad"/> hooks, <c>PropertyChanged</c>,
+    /// <see cref="Reloaded"/> and <see cref="IIniConfigListener.OnReloaded"/> run. Values the application set since
+    /// the load and did not save yet are kept. Waits for a running load, reload or save.
+    /// </summary>
+    internal async Task ReloadChangedSectionsAsync(CancellationToken cancellationToken = default)
+    {
+        bool all;
+        HashSet<string>? names;
+        lock (_sourceChangeSync)
+        {
+            all = _allSectionsChanged;
+            names = _changedSections;
+            _allSectionsChanged = false;
+            _changedSections = null;
+        }
+        if (!all && names == null)
+            return;
+
+        IReadOnlyList<IIniSection> affected;
+        object?[]?[] before;
+        var owner = await EnterGateAsync(cancellationToken).ConfigureAwait(false);
+        _gateOwner.Value = owner;
+        try
+        {
+            if (_disposed)
+                return;
+            affected = all ? Sections.Values : Sections.Values.Where(s => names!.Contains(s.SectionName)).ToArray();
+            if (affected.Count == 0)
+                return;
+            Interlocked.Increment(ref SourceChangeReloads);
+            try
+            {
+                var snapshot = await ReadLayersAsync(resolveUserFile: false, cancellationToken).ConfigureAwait(false);
+                var sources = await FetchSourceValuesAsync(affected, cancellationToken).ConfigureAwait(false);
+                before = CaptureForChangeNotification(affected);
+                var unsaved = affected.Select(s => (s as IniSectionBase)?.GetApplicationValues()).ToArray();
+                ApplySnapshot(affected, snapshot, updateMetadata: all, sources);
+                ClearDirtyFlags(affected);
+                for (var i = 0; i < affected.Count; i++)
+                {
+                    if (unsaved[i] is { Count: > 0 } values && affected[i] is IniSectionBase sectionBase)
+                        sectionBase.RestoreApplicationValues(values);
+                }
+                CaptureMutableValues(affected);
+                Retain(snapshot);
+                await RunAfterLoadHooksAsync(affected, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                NotifyError("Reload", ex);
+                throw;
+            }
+        }
+        finally
+        {
+            ExitGate(owner);
+        }
+
+        RaiseChangeNotifications(affected, before);
+        Reloaded?.Invoke(this, EventArgs.Empty);
+        NotifyListeners(l => l.OnReloaded(LoadedFromPath ?? FileName));
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -1929,7 +2213,7 @@ public sealed class IniConfig : IDisposable
     {
         var origin = new ValueOrigin(
             isConstant ? ValueOriginKind.ConstantsFile : isDefault ? ValueOriginKind.DefaultsFile : ValueOriginKind.UserFile,
-            iniFile.FilePath, null);
+            iniFile.FilePath, null, null);
         foreach (var section in sections)
         {
             var iniSection = iniFile.GetSection(section.SectionName);
@@ -2060,6 +2344,8 @@ public sealed class IniConfig : IDisposable
 
         _autoSaveTimer?.Dispose();
         _autoSaveTimer = null;
+
+        UnsubscribeFromValueSources();
 
         // Disconnect the sections, they may outlive this config (and would keep it alive)
         if (_onSectionChanged != null)

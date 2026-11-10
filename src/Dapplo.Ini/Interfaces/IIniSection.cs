@@ -88,6 +88,14 @@ public interface IIniSection
     void ResetKey(string key);
 
     /// <summary>
+    /// Returns where the current value of <paramref name="key"/> came from: the compiled default, a defaults file,
+    /// the user file (or the application), a constants file or a value source, with the file path or the source
+    /// and its layer.
+    /// </summary>
+    /// <param name="key">The key of a property, or of an entry <c>Property.subkey</c> of a sub-key dictionary.</param>
+    Configuration.ValueOrigin GetValueOrigin(string key);
+
+    /// <summary>
     /// Gets a value indicating whether this section has unsaved changes since the last
     /// <see cref="IniConfig.Save"/> or <see cref="IniConfig.Reload"/>.
     /// </summary>
