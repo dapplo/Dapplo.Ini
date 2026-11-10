@@ -49,6 +49,22 @@ in a new application version or a removed constant never reached a user who had 
 - `IIniSection.GetValueOrigin(key)` returns a `ValueOrigin` (`Kind`, `FilePath`, `Source`, `SourceName`, `Layer`);
   `INamedValueSource` gives a source a name.
 
+### Added: Dapplo.Ini.WindowsPolicies (new package)
+- `AddWindowsPolicies(vendor, product, options)`: reads `SOFTWARE\Policies\<Vendor>\<Product>\<Section>\<Key>`
+  (mandatory, `Constant` layer) and `...\Recommended\...` (recommended, `Default` layer) of HKCU and HKLM (HKLM wins),
+  64-bit view by default. `WindowsPolicySource` per hive and kind; values mapped by the property type (DWORD → bool /
+  integers, SZ / EXPAND_SZ unexpanded → string, enum by name, lists from a sub key 1..n or MULTI_SZ, dictionaries from
+  a sub key). Invalid values are reported via `OnValueConversionFailed` and skipped.
+- Change notification with `RegNotifyChangeKeyValue` on the policy root and its parent, debounced, reloads the
+  configuration; stopped when the `IniConfig` is disposed.
+- `AdmxGenerator`: ADMX + ADML (per language, with a localize callback) for gpedit / GPMC / Intune, categories per
+  section and a recommended tree; attributes `[NotAdministrable]`, `[Secret]`, `[PolicyDisplayName]`,
+  `[PolicyCategory]`, `[PolicyExpandable]`. dotnet tool `dapplo-ini-admx` (package Dapplo.Ini.WindowsPolicies.Tool).
+- `PolicyRegFile`: `.reg` export of section values, mandatory or recommended.
+- Core: `ISectionValueSource` (a source that gets the section, e.g. for the property type) and
+  `InvalidSourceValueException` (reported and skipped, the load continues). A value source can supply a dictionary
+  stored as sub keys through its property key (inline `key=value,...`).
+
 ### Fixed
 - Constants are never written to the user file. A value the user file holds for a constant key stays in the file
   untouched, so it comes back when the administrator removes the constant.

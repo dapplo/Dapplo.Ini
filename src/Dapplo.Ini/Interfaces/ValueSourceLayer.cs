@@ -47,3 +47,34 @@ public interface INamedValueSource
     /// <summary>A readable name, e.g. <c>Windows policy (HKLM, mandatory)</c>.</summary>
     string Name { get; }
 }
+
+/// <summary>
+/// Optionally implemented by an <see cref="IValueSource"/> that needs to know the section it supplies a value for,
+/// e.g. to map an external value by the property type (<see cref="IIniSection.GetPropertyType"/>). When implemented,
+/// the configuration calls this method instead of <see cref="IValueSource.TryGetValue"/>.
+/// </summary>
+public interface ISectionValueSource
+{
+    /// <summary>Attempts to retrieve the raw (INI string) value for <paramref name="key"/> of <paramref name="section"/>.</summary>
+    /// <exception cref="InvalidSourceValueException">
+    /// The source holds a value that can't be used (wrong type, invalid value): it is reported via
+    /// <see cref="IIniConfigListener.OnValueConversionFailed"/> and the key is skipped; the load continues.
+    /// </exception>
+    bool TryGetValue(IIniSection section, string key, out string? value);
+}
+
+/// <summary>
+/// Thrown by a value source for a value it holds but can't supply (wrong type, invalid value). The configuration
+/// reports it via <see cref="IIniConfigListener.OnValueConversionFailed"/>, skips the key and continues the load.
+/// </summary>
+public sealed class InvalidSourceValueException : Exception
+{
+    /// <summary>Creates the exception.</summary>
+    /// <param name="message">What is wrong with the value.</param>
+    /// <param name="rawValue">The value as the source holds it, as text, if there is one.</param>
+    public InvalidSourceValueException(string message, string? rawValue = null) : base(message)
+        => RawValue = rawValue;
+
+    /// <summary>The value as the source holds it, as text; <c>null</c> when it has no text form.</summary>
+    public string? RawValue { get; }
+}

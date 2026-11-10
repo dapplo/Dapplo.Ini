@@ -94,6 +94,22 @@ didn't choose a value. `IsUserValue(key)`, `ResetKey(key)`, `WriteInheritedValue
 `SaveAllValues()` and the migration of files written by Dapplo.Ini 1.x are described on the wiki page
 [User Values](../../wiki/User-Values).
 
+### Windows policies
+
+The package **Dapplo.Ini.WindowsPolicies** makes every setting administrable through Group Policy or Intune:
+
+```csharp
+builder.AddWindowsPolicies("Dapplo", "Greenshot");
+// HKLM|HKCU\SOFTWARE\Policies\Dapplo\Greenshot\<Section>\<Key>               mandatory   (Constant layer)
+// HKLM|HKCU\SOFTWARE\Policies\Dapplo\Greenshot\Recommended\<Section>\<Key>   recommended (Default layer)
+
+AdmxGenerator.Generate(config, new AdmxOptions("Dapplo", "Greenshot")).WriteTo("policies"); // ADMX + ADML
+```
+
+Values are mapped by the property type, changes are picked up while the application runs, and the dotnet tool
+`dapplo-ini-admx` generates the administrative template in a build. See the wiki page
+[Windows Policies](../../wiki/Windows-Policies).
+
 ---
 
 ## Documentation
@@ -104,6 +120,7 @@ Full documentation is available in the [project wiki](../../wiki):
 - [Getting Started](../../wiki/Getting-Started) — installation and first steps
 - [Defining Sections](../../wiki/Defining-Sections) — `[IniSection]` and `[IniValue]` reference
 - [Generic Access](../../wiki/Generic-Access) — enumerate sections/keys and inspect property types at runtime
+- [Windows Policies](../../wiki/Windows-Policies) — Group Policy / Intune, ADMX/ADML generator, `.reg` export
 
 ## License
 

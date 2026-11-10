@@ -314,7 +314,7 @@ public abstract partial class IniSectionBase
         lock (_sync)
         {
             _keyStates.TryGetValue(key, out var state);
-            if (_constantKeys.Contains(key))
+            if (_constantKeys.Contains(key) || (propertyKey != null && _constantKeys.Contains(propertyKey)))
             {
                 // A constant is never written; the user's own value below it stays, so it comes back when the
                 // administrator removes the constant.
@@ -347,6 +347,23 @@ public abstract partial class IniSectionBase
                 return SaveKind.Value;
             return SaveKind.Inherited;
         }
+    }
+
+    /// <summary>
+    /// The user values hidden below a constant or a value source that are not among <paramref name="writtenKeys"/>:
+    /// e.g. entries of a dictionary that a value source replaced as a whole. They are written too, so they come
+    /// back when the source stops supplying the key.
+    /// </summary>
+    internal List<KeyValuePair<string, string?>> GetHiddenUserValues(ICollection<string> writtenKeys)
+    {
+        lock (_sync)
+            return _keyStates
+                .Where(kvp => kvp.Value.IsUser && !writtenKeys.Contains(kvp.Key)
+                              && (kvp.Value.Origin.IsAboveUser || _constantKeys.Contains(kvp.Key)
+                                  || (GetPropertyKey(kvp.Key) is { } p && _constantKeys.Contains(p))))
+                .Where(kvp => GetDeclaredPropertyKey(kvp.Key) != null)
+                .Select(kvp => new KeyValuePair<string, string?>(kvp.Key, kvp.Value.UserRaw))
+                .ToList();
     }
 
     /// <summary>

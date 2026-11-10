@@ -149,6 +149,8 @@ public abstract partial class IniSectionBase : IIniSection
     /// </summary>
     protected void ThrowIfConstantPrefix(string keyPrefix)
     {
+        // A value source can supply (and lock) the whole dictionary under its property key
+        ThrowIfConstant(keyPrefix);
         string[] constantKeys;
         lock (_sync)
             constantKeys = _constantKeys.ToArray();

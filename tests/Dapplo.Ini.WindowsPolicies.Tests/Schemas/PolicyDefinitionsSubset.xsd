@@ -1,0 +1,326 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A subset of the Group Policy ADMX/ADML schema (PolicyDefinitionFiles.xsd / BaseTypes.xsd of the Windows SDK),
+  covering the elements and attributes the generator writes, with the same names, order and types.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:pd="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions"
+           targetNamespace="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions"
+           elementFormDefault="qualified" attributeFormDefault="unqualified">
+
+  <xs:simpleType name="itemName">
+    <xs:restriction base="xs:token">
+      <xs:pattern value="[A-Za-z_][A-Za-z0-9_]*"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="itemReference">
+    <xs:restriction base="xs:token">
+      <xs:pattern value="([A-Za-z_][A-Za-z0-9_.]*:)?[A-Za-z_][A-Za-z0-9_]*"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="stringReference">
+    <xs:restriction base="xs:token">
+      <xs:pattern value="\$\(string\.[A-Za-z_][A-Za-z0-9_]*\)"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="presentationReference">
+    <xs:restriction base="xs:token">
+      <xs:pattern value="\$\(presentation\.[A-Za-z_][A-Za-z0-9_]*\)"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="versionString">
+    <xs:restriction base="xs:token">
+      <xs:pattern value="[0-9]{1,4}\.[0-9]{1,5}"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="registryKey">
+    <xs:restriction base="xs:string">
+      <xs:minLength value="1"/>
+      <xs:maxLength value="255"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="registryValueName">
+    <xs:restriction base="xs:string">
+      <xs:maxLength value="255"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="policyClass">
+    <xs:restriction base="xs:token">
+      <xs:enumeration value="User"/>
+      <xs:enumeration value="Machine"/>
+      <xs:enumeration value="Both"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- ADMX -->
+  <xs:element name="policyDefinitions">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="policyNamespaces">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="target">
+                <xs:complexType>
+                  <xs:attribute name="prefix" type="pd:itemName" use="required"/>
+                  <xs:attribute name="namespace" type="xs:token" use="required"/>
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="using" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="prefix" type="pd:itemName" use="required"/>
+                  <xs:attribute name="namespace" type="xs:token" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="resources">
+          <xs:complexType>
+            <xs:attribute name="minRequiredRevision" type="pd:versionString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="supportedOn" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="definitions">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="definition" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:attribute name="name" type="pd:itemName" use="required"/>
+                        <xs:attribute name="displayName" type="pd:stringReference" use="required"/>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="categories" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="category" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="parentCategory" minOccurs="0">
+                      <xs:complexType>
+                        <xs:attribute name="ref" type="pd:itemReference" use="required"/>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                  <xs:attribute name="name" type="pd:itemName" use="required"/>
+                  <xs:attribute name="displayName" type="pd:stringReference" use="required"/>
+                  <xs:attribute name="explainText" type="pd:stringReference" use="optional"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="policies" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="policy" minOccurs="0" maxOccurs="unbounded" type="pd:policy"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="revision" type="pd:versionString" use="required"/>
+      <xs:attribute name="schemaVersion" type="pd:versionString" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:complexType name="value">
+    <xs:choice>
+      <xs:element name="decimal">
+        <xs:complexType>
+          <xs:attribute name="value" type="xs:unsignedInt" use="required"/>
+        </xs:complexType>
+      </xs:element>
+      <xs:element name="string" type="xs:string"/>
+      <xs:element name="delete">
+        <xs:complexType/>
+      </xs:element>
+    </xs:choice>
+  </xs:complexType>
+
+  <xs:complexType name="policy">
+    <xs:sequence>
+      <xs:element name="parentCategory">
+        <xs:complexType>
+          <xs:attribute name="ref" type="pd:itemReference" use="required"/>
+        </xs:complexType>
+      </xs:element>
+      <xs:element name="supportedOn">
+        <xs:complexType>
+          <xs:attribute name="ref" type="pd:itemReference" use="required"/>
+        </xs:complexType>
+      </xs:element>
+      <xs:element name="enabledValue" type="pd:value" minOccurs="0"/>
+      <xs:element name="disabledValue" type="pd:value" minOccurs="0"/>
+      <xs:element name="elements" minOccurs="0">
+        <xs:complexType>
+          <xs:choice maxOccurs="unbounded">
+            <xs:element name="decimal">
+              <xs:complexType>
+                <xs:attribute name="id" type="pd:itemName" use="required"/>
+                <xs:attribute name="valueName" type="pd:registryValueName" use="required"/>
+                <xs:attribute name="required" type="xs:boolean"/>
+                <xs:attribute name="minValue" type="xs:unsignedInt"/>
+                <xs:attribute name="maxValue" type="xs:unsignedInt"/>
+              </xs:complexType>
+            </xs:element>
+            <xs:element name="longDecimal">
+              <xs:complexType>
+                <xs:attribute name="id" type="pd:itemName" use="required"/>
+                <xs:attribute name="valueName" type="pd:registryValueName" use="required"/>
+                <xs:attribute name="required" type="xs:boolean"/>
+                <xs:attribute name="minValue" type="xs:unsignedLong"/>
+                <xs:attribute name="maxValue" type="xs:unsignedLong"/>
+              </xs:complexType>
+            </xs:element>
+            <xs:element name="text">
+              <xs:complexType>
+                <xs:attribute name="id" type="pd:itemName" use="required"/>
+                <xs:attribute name="valueName" type="pd:registryValueName" use="required"/>
+                <xs:attribute name="required" type="xs:boolean"/>
+                <xs:attribute name="expandable" type="xs:boolean"/>
+                <xs:attribute name="maxLength" type="xs:unsignedInt"/>
+              </xs:complexType>
+            </xs:element>
+            <xs:element name="enum">
+              <xs:complexType>
+                <xs:sequence>
+                  <xs:element name="item" maxOccurs="unbounded">
+                    <xs:complexType>
+                      <xs:sequence>
+                        <xs:element name="value" type="pd:value"/>
+                      </xs:sequence>
+                      <xs:attribute name="displayName" type="pd:stringReference" use="required"/>
+                    </xs:complexType>
+                  </xs:element>
+                </xs:sequence>
+                <xs:attribute name="id" type="pd:itemName" use="required"/>
+                <xs:attribute name="valueName" type="pd:registryValueName" use="required"/>
+                <xs:attribute name="required" type="xs:boolean"/>
+              </xs:complexType>
+            </xs:element>
+            <xs:element name="list">
+              <xs:complexType>
+                <xs:attribute name="id" type="pd:itemName" use="required"/>
+                <xs:attribute name="key" type="pd:registryKey"/>
+                <xs:attribute name="valuePrefix" type="xs:string"/>
+                <xs:attribute name="explicitValue" type="xs:boolean"/>
+                <xs:attribute name="additive" type="xs:boolean"/>
+                <xs:attribute name="expandable" type="xs:boolean"/>
+              </xs:complexType>
+            </xs:element>
+          </xs:choice>
+        </xs:complexType>
+      </xs:element>
+    </xs:sequence>
+    <xs:attribute name="name" type="pd:itemName" use="required"/>
+    <xs:attribute name="class" type="pd:policyClass" use="required"/>
+    <xs:attribute name="displayName" type="pd:stringReference" use="required"/>
+    <xs:attribute name="explainText" type="pd:stringReference"/>
+    <xs:attribute name="presentation" type="pd:presentationReference"/>
+    <xs:attribute name="key" type="pd:registryKey" use="required"/>
+    <xs:attribute name="valueName" type="pd:registryValueName"/>
+  </xs:complexType>
+
+  <!-- ADML -->
+  <xs:element name="policyDefinitionResources">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="displayName" type="xs:string"/>
+        <xs:element name="description" type="xs:string"/>
+        <xs:element name="resources">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="stringTable" minOccurs="0">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="string" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:simpleContent>
+                          <xs:extension base="xs:string">
+                            <xs:attribute name="id" type="pd:itemName" use="required"/>
+                          </xs:extension>
+                        </xs:simpleContent>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="presentationTable" minOccurs="0">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="presentation" minOccurs="0" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:choice minOccurs="0" maxOccurs="unbounded">
+                          <xs:element name="decimalTextBox">
+                            <xs:complexType>
+                              <xs:simpleContent>
+                                <xs:extension base="xs:string">
+                                  <xs:attribute name="refId" type="pd:itemName" use="required"/>
+                                  <xs:attribute name="defaultValue" type="xs:unsignedInt"/>
+                                  <xs:attribute name="spinStep" type="xs:unsignedInt"/>
+                                </xs:extension>
+                              </xs:simpleContent>
+                            </xs:complexType>
+                          </xs:element>
+                          <xs:element name="longDecimalTextBox">
+                            <xs:complexType>
+                              <xs:simpleContent>
+                                <xs:extension base="xs:string">
+                                  <xs:attribute name="refId" type="pd:itemName" use="required"/>
+                                  <xs:attribute name="defaultValue" type="xs:unsignedLong"/>
+                                </xs:extension>
+                              </xs:simpleContent>
+                            </xs:complexType>
+                          </xs:element>
+                          <xs:element name="textBox">
+                            <xs:complexType>
+                              <xs:sequence>
+                                <xs:element name="label" type="xs:string"/>
+                                <xs:element name="defaultValue" type="xs:string" minOccurs="0"/>
+                              </xs:sequence>
+                              <xs:attribute name="refId" type="pd:itemName" use="required"/>
+                            </xs:complexType>
+                          </xs:element>
+                          <xs:element name="dropdownList">
+                            <xs:complexType>
+                              <xs:simpleContent>
+                                <xs:extension base="xs:string">
+                                  <xs:attribute name="refId" type="pd:itemName" use="required"/>
+                                  <xs:attribute name="noSort" type="xs:boolean"/>
+                                  <xs:attribute name="defaultItem" type="xs:unsignedInt"/>
+                                </xs:extension>
+                              </xs:simpleContent>
+                            </xs:complexType>
+                          </xs:element>
+                          <xs:element name="listBox">
+                            <xs:complexType>
+                              <xs:simpleContent>
+                                <xs:extension base="xs:string">
+                                  <xs:attribute name="refId" type="pd:itemName" use="required"/>
+                                </xs:extension>
+                              </xs:simpleContent>
+                            </xs:complexType>
+                          </xs:element>
+                        </xs:choice>
+                        <xs:attribute name="id" type="pd:itemName" use="required"/>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="revision" type="pd:versionString" use="required"/>
+      <xs:attribute name="schemaVersion" type="pd:versionString" use="required"/>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

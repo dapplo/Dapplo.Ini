@@ -153,6 +153,22 @@ ValueChanged?.Invoke(this, new ValueChangedEventArgs(sectionName: "App", key: "F
 
 ---
 
+## Typed sources and invalid values
+
+A source that needs the property type (e.g. to map a registry DWORD to a bool or an enum) implements
+`ISectionValueSource` next to `IValueSource`; the configuration then calls
+`TryGetValue(IIniSection section, string key, out string? value)` and the source can use
+`section.GetPropertyType(key)`.
+
+A value the source holds but can't use (wrong type, invalid value) is reported by throwing
+`InvalidSourceValueException(message, rawValue)`: the configuration reports it via
+`IIniConfigListener.OnValueConversionFailed` and skips the key; the load continues.
+
+A dictionary stored as sub keys (`Values.x = 1`) can be supplied through its property key in the inline format
+`x=1,y=2`. [[Windows-Policies]] is built this way.
+
+---
+
 ## Value resolution order
 
 `Override` sources override defaults and user file values, but **not** constants;
@@ -167,3 +183,4 @@ See [[Loading-Life-Cycle]] for the full order.
 - [[Loading-Configuration]] — `AddValueSource` and other builder methods
 - [[Reloading]] — reacting to value source changes at runtime
 - [[Async-Support]] — `IValueSourceAsync` in detail
+- [[Windows-Policies]] — Group Policy / Intune policies as value sources

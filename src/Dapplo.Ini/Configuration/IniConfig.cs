@@ -1639,7 +1639,7 @@ public sealed class IniConfig : IDisposable
                 {
                     foreach (var key in section.GetKeys())
                     {
-                        if (registration.Sync.TryGetValue(section.SectionName, key, out var value))
+                        if (TryGetSourceValue(registration.Sync, section, key, out var value))
                             values.Of(layer).Add(new SourceValue(section, key, value, origin));
                     }
                 }
@@ -1665,7 +1665,7 @@ public sealed class IniConfig : IDisposable
                 {
                     foreach (var key in section.GetKeys())
                     {
-                        if (registration.Sync.TryGetValue(section.SectionName, key, out var value))
+                        if (TryGetSourceValue(registration.Sync, section, key, out var value))
                             values.Of(layer).Add(new SourceValue(section, key, value, origin));
                     }
                 }
@@ -1679,7 +1679,17 @@ public sealed class IniConfig : IDisposable
                 {
                     foreach (var key in section.GetKeys())
                     {
-                        var (found, value) = await registration.Async.TryGetValueAsync(section.SectionName, key, cancellationToken).ConfigureAwait(false);
+                        bool found;
+                        string? value;
+                        try
+                        {
+                            (found, value) = await registration.Async.TryGetValueAsync(section.SectionName, key, cancellationToken).ConfigureAwait(false);
+                        }
+                        catch (InvalidSourceValueException ex)
+                        {
+                            ReportInvalidSourceValue(section, key, ex);
+                            continue;
+                        }
                         if (found)
                             values.Of(layer).Add(new SourceValue(section, key, value, origin));
                     }
@@ -1688,6 +1698,30 @@ public sealed class IniConfig : IDisposable
         }
         return values;
     }
+
+    /// <summary>
+    /// Asks <paramref name="source"/> for a value, with the section when it is an <see cref="ISectionValueSource"/>.
+    /// An <see cref="InvalidSourceValueException"/> is reported via <see cref="IIniConfigListener.OnValueConversionFailed"/>
+    /// and the key is skipped.
+    /// </summary>
+    private bool TryGetSourceValue(IValueSource source, IIniSection section, string key, out string? value)
+    {
+        try
+        {
+            return source is ISectionValueSource sectionSource
+                ? sectionSource.TryGetValue(section, key, out value)
+                : source.TryGetValue(section.SectionName, key, out value);
+        }
+        catch (InvalidSourceValueException ex)
+        {
+            ReportInvalidSourceValue(section, key, ex);
+            value = null;
+            return false;
+        }
+    }
+
+    private void ReportInvalidSourceValue(IIniSection section, string key, InvalidSourceValueException exception)
+        => NotifyListeners(l => l.OnValueConversionFailed(section.SectionName, key, exception.RawValue, exception));
 
     /// <summary><see cref="ValueSourceLayer.Default"/>: below the user file, inherited, respecting IgnoreDefaults.</summary>
     private void ApplyDefaultSourceValues(List<SourceValue> values)
@@ -2066,6 +2100,16 @@ public sealed class IniConfig : IDisposable
             {
                 WriterOptionsOverride = sectionBase.GetPropertyWriterOptions(rawKvp.Key),
                 IsCommentedOut = saveKind == IniSectionBase.SaveKind.Inherited
+            });
+        }
+
+        // User values hidden by a layer above that replaced the whole property (a dictionary from a value source)
+        var written = new HashSet<string>(iniSection.Entries.Select(e => e.Key), StringComparer.OrdinalIgnoreCase);
+        foreach (var hidden in sectionBase.GetHiddenUserValues(written))
+        {
+            iniSection.SetEntry(new Parsing.IniEntry(hidden.Key, hidden.Value, Array.Empty<string>())
+            {
+                WriterOptionsOverride = sectionBase.GetPropertyWriterOptions(hidden.Key)
             });
         }
         return iniSection;
