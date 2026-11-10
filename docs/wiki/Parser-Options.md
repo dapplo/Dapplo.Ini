@@ -381,7 +381,16 @@ var iniFile = IniFileParser.ParseFile("/path/to/file.ini", Encoding.UTF8, opts);
 // From disk (async)
 var iniFile = await IniFileParser.ParseFileAsync("/path/to/file.ini",
     Encoding.UTF8, opts, cancellationToken);
+
+// From any TextReader (e.g. an embedded resource); the reader is not disposed
+using var reader = new StreamReader(Assembly.GetExecutingAssembly().GetManifestResourceStream("MyProduct.defaults.ini")!);
+var iniFile = IniFileParser.Parse(reader, opts);
 ```
+
+Files and readers are parsed through one small pooled buffer: a file that fits into it (up to 16 KB, most
+configuration files) is parsed as a whole, a larger one line by line while it is read. No string or buffer of the
+whole content is created, so large files do not end up on the large object heap. Only the section names, keys,
+values and comments of the result are allocated.
 
 ---
 

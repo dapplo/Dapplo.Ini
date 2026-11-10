@@ -42,10 +42,6 @@ public static class IniFileParser
     {
         options ??= IniParserOptions.Default;
 
-        var sectionComparer = options.CaseSensitiveSections ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
-        var keyComparer     = options.CaseSensitiveKeys     ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
-
-        var iniFile = new IniFile(sectionComparer, keyComparer);
         // A byte order mark left in the string (e.g. from Encoding.GetString) is not whitespace.
         var span = content;
         if (!span.IsEmpty && span[0] == '\uFEFF')
@@ -54,36 +50,221 @@ public static class IniFileParser
         // Pre-pass (no allocations beyond a pooled array): the number of entries per section header, so every
         // section's dictionary and list are created with the right size instead of growing (re-allocating) while parsing.
         var sizes = CountEntriesPerSection(span, options.AssignmentDelimiters, out var headerCount);
-        var headerOrdinal = 0;
         try
         {
-
-        IniSection? currentSection = null;
-        var pendingComments = new List<string>();
-        // Raw blank/comment/unparseable lines, only recorded with PreserveTrivia.
-        var pendingTrivia = options.PreserveTrivia ? new List<string>() : null;
-        IReadOnlyList<string>? TakeTrivia()
+            var parser = new LineParser(options, sizes, headerCount, byteOrderMarkHandled: true);
+            while (!span.IsEmpty)
+                parser.ProcessLine(ReadLine(ref span));
+            return parser.Complete();
+        }
+        finally
         {
-            if (pendingTrivia == null) return null;
-            var trivia = pendingTrivia.ToArray();
-            pendingTrivia.Clear();
+            System.Buffers.ArrayPool<int>.Shared.Return(sizes);
+        }
+    }
+
+    /// <summary>
+    /// Parses the INI content of <paramref name="reader"/>. Content of more than a few KB is parsed line by line
+    /// while it is read, so it is never held as a whole: only one small pooled buffer is used, however large it is.
+    /// </summary>
+    /// <param name="reader">The content; read to the end but not disposed.</param>
+    /// <param name="options">Parser options; when <c>null</c>, <see cref="IniParserOptions.Default"/> is used.</param>
+    public static IniFile Parse(TextReader reader, IniParserOptions? options = null)
+        => Parse(reader, options, PooledLineReader.DefaultBufferSize);
+
+    // With a small buffer size even short content is streamed (used by the tests).
+    internal static IniFile Parse(TextReader reader, IniParserOptions? options, int bufferSize)
+    {
+        if (reader is null) throw new ArgumentNullException(nameof(reader));
+        using var lines = new PooledLineReader(reader, bufferSize, leaveOpen: true);
+        return Parse(lines, options);
+    }
+
+    private static IniFile Parse(PooledLineReader lines, IniParserOptions? options)
+    {
+        // Content that fits into the buffer (most configuration files) is parsed as a whole, with the pre-pass
+        // that sizes the sections; only larger content is parsed while it is read.
+        if (lines.TryFillToEnd())
+            return Parse(lines.Buffered, options);
+        return ParseStreaming(lines, options);
+    }
+
+    private static IniFile ParseStreaming(PooledLineReader lines, IniParserOptions? options)
+    {
+        var parser = new LineParser(options ?? IniParserOptions.Default, null, 0, byteOrderMarkHandled: false);
+        while (true)
+        {
+            while (lines.TryReadLine(out var line))
+                parser.ProcessLine(line);
+            if (lines.IsCompleted)
+                return parser.Complete();
+            lines.Fill();
+        }
+    }
+
+    /// <summary>
+    /// Parses an INI file from the file system using the specified <paramref name="encoding"/>
+    /// (defaults to UTF-8 when <c>null</c>).
+    /// The file is opened with <see cref="FileAccess.Read"/> and <see cref="FileShare.ReadWrite"/>
+    /// so that it is never held open or locked for writing after parsing.
+    /// </summary>
+    /// <remarks>
+    /// The file is decoded into one small pooled buffer: a file that fits is parsed from it as a whole, a larger
+    /// file is parsed line by line while it is read. Neither a string nor a buffer for the whole content is
+    /// allocated, so a large file never lands on the large object heap.
+    /// </remarks>
+    /// <param name="filePath">Path to the INI file to parse.</param>
+    /// <param name="encoding">Character encoding; defaults to UTF-8.</param>
+    /// <param name="options">
+    /// Parser options; when <c>null</c>, <see cref="IniParserOptions.Default"/> is used.
+    /// </param>
+    public static IniFile ParseFile(string filePath, Encoding? encoding = null, IniParserOptions? options = null)
+    {
+        using var reader = PooledLineReader.OpenFile(filePath, encoding);
+        var iniFile = Parse(reader, options);
+        iniFile.FilePath = filePath;
+        return iniFile;
+    }
+
+    /// <summary>
+    /// Asynchronously parses an INI file from the file system using the specified
+    /// <paramref name="encoding"/> (defaults to UTF-8 when <c>null</c>).
+    /// The file is opened with <see cref="FileAccess.Read"/> and <see cref="FileShare.ReadWrite"/>
+    /// so that it is never held open or locked for writing after parsing.
+    /// </summary>
+    /// <remarks>
+    /// The file is streamed like <see cref="ParseFile"/>: every block is parsed as soon as it is read.
+    /// </remarks>
+    /// <param name="filePath">Path to the INI file to parse.</param>
+    /// <param name="encoding">Character encoding; defaults to UTF-8.</param>
+    /// <param name="options">
+    /// Parser options; when <c>null</c>, <see cref="IniParserOptions.Default"/> is used.
+    /// </param>
+    /// <param name="cancellationToken">Token to cancel the async operation.</param>
+    public static async Task<IniFile> ParseFileAsync(string filePath, Encoding? encoding = null, IniParserOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        using var reader = PooledLineReader.OpenFile(filePath, encoding, asynchronous: true);
+        IniFile iniFile;
+        if (await reader.TryFillToEndAsync(cancellationToken).ConfigureAwait(false))
+        {
+            iniFile = Parse(reader.Buffered, options);
+        }
+        else
+        {
+            var parser = new LineParser(options ?? IniParserOptions.Default, null, 0, byteOrderMarkHandled: false);
+            while (!ProcessBufferedLines(reader, parser))
+                await reader.FillAsync(cancellationToken).ConfigureAwait(false);
+            iniFile = parser.Complete();
+        }
+        iniFile.FilePath = filePath;
+        return iniFile;
+    }
+
+    // Parses the complete lines in the reader's buffer (spans can't live across an await); true at the end.
+    private static bool ProcessBufferedLines(PooledLineReader reader, LineParser parser)
+    {
+        while (reader.TryReadLine(out var line))
+            parser.ProcessLine(line);
+        return reader.IsCompleted;
+    }
+
+    /// <summary>
+    /// The parser itself: gets the content one line at a time (from a span or a streaming reader), so lines
+    /// never have to be in memory together. A line continuation is collected until the value is complete.
+    /// </summary>
+    private sealed class LineParser
+    {
+        private readonly IniParserOptions _options;
+        private readonly IniFile _iniFile;
+        private readonly StringComparer _keyComparer;
+        private readonly int[]? _sizes;
+        private readonly int _headerCount;
+        private int _headerOrdinal;
+        private bool _firstLine;
+
+        private IniSection? _currentSection;
+        private readonly List<string> _pendingComments = new();
+        // Raw blank/comment/unparseable lines, only recorded with PreserveTrivia.
+        private readonly List<string>? _pendingTrivia;
+
+        // Streaming (no pre-pass to size the sections): the entries of the section being parsed are collected here,
+        // in buffers reused for every section, and handed to the section once it is complete, so its dictionary and
+        // list are sized once instead of growing.
+        private readonly bool _collectSections;
+        private IniSection? _openSection;
+        private readonly List<IniEntry>? _openEntries;
+        private readonly Dictionary<string, IniEntry>? _openKeys;
+
+        // A value continued on the next line(s): the key, the value as written on the first line and the joined value.
+        private string? _continuationKey;
+        private string? _continuationFirst;
+        private StringBuilder? _continuation;
+
+        public LineParser(IniParserOptions options, int[]? sizes, int headerCount, bool byteOrderMarkHandled)
+        {
+            _firstLine = !byteOrderMarkHandled;
+            _options = options;
+            var sectionComparer = options.CaseSensitiveSections ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
+            _keyComparer = options.CaseSensitiveKeys ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
+            _iniFile = new IniFile(sectionComparer, _keyComparer);
+            _pendingTrivia = options.PreserveTrivia ? new List<string>() : null;
+            _sizes = sizes;
+            _headerCount = headerCount;
+            _collectSections = sizes == null;
+            if (_collectSections)
+            {
+                _openEntries = new List<IniEntry>();
+                _openKeys = new Dictionary<string, IniEntry>(_keyComparer);
+            }
+        }
+
+        private void OpenSection(IniSection section)
+        {
+            CloseSection();
+            if (_collectSections)
+                _openSection = section;
+        }
+
+        private void CloseSection()
+        {
+            if (_openSection == null)
+                return;
+            _openSection.InitializeEntries(_openEntries!);
+            _openEntries!.Clear();
+            _openKeys!.Clear();
+            _openSection = null;
+        }
+
+        private IReadOnlyList<string>? TakeTrivia()
+        {
+            if (_pendingTrivia == null) return null;
+            var trivia = _pendingTrivia.ToArray();
+            _pendingTrivia.Clear();
             return trivia;
         }
 
-        while (!span.IsEmpty)
+        public void ProcessLine(ReadOnlySpan<char> lineSpan)
         {
-            // Read one line
-            var lineSpan = ReadLine(ref span);
+            if (_firstLine)
+            {
+                _firstLine = false;
+                // A byte order mark left in the content is not whitespace.
+                if (!lineSpan.IsEmpty && lineSpan[0] == '\uFEFF')
+                    lineSpan = lineSpan.Slice(1);
+            }
 
             // Trim whitespace for classification
             var trimmed = lineSpan.Trim();
 
+            if (_continuationKey != null && ContinueValue(trimmed))
+                return;
+
             if (trimmed.IsEmpty)
             {
                 // Blank line: reset pending comments (don't carry over to next key)
-                pendingComments.Clear();
-                pendingTrivia?.Add(string.Empty);
-                continue;
+                _pendingComments.Clear();
+                _pendingTrivia?.Add(string.Empty);
+                return;
             }
 
             var first = trimmed[0];
@@ -94,107 +275,186 @@ public static class IniFileParser
                 var commentContent = trimmed.Slice(1);
                 if (!commentContent.IsEmpty && commentContent[0] == ' ')
                     commentContent = commentContent.Slice(1);
-                pendingComments.Add(commentContent.ToString());
-                pendingTrivia?.Add(lineSpan.TrimEnd().ToString());
-                continue;
+                _pendingComments.Add(commentContent.ToString());
+                _pendingTrivia?.Add(lineSpan.TrimEnd().ToString());
+                return;
             }
 
             if (first == '[')
             {
-                // Section header [SectionName]
-                var closeBracket = trimmed.IndexOf(']');
-                if (closeBracket > 0)
-                {
-                    var sectionName = trimmed.Slice(1, closeBracket - 1).Trim().ToString();
-                    IReadOnlyList<string> comments = pendingComments.Count > 0
-                        ? pendingComments.ToArray()
-                        : (IReadOnlyList<string>)Array.Empty<string>();
-                    // A repeated header continues the existing section instead of replacing it,
-                    // so that earlier keys are not lost and duplicate-key handling still applies.
-                    var existingSection = iniFile.GetSection(sectionName);
-                    if (existingSection != null)
-                    {
-                        // The lines above the repeated header stay pending for the next entry.
-                        currentSection = existingSection;
-                    }
-                    else
-                    {
-                        currentSection = new IniSection(sectionName, comments, keyComparer,
-                            headerOrdinal < headerCount ? sizes[headerOrdinal + 1] : 0)
-                        {
-                            LeadingTrivia = TakeTrivia()
-                        };
-                        iniFile.AddSection(currentSection);
-                    }
-                    headerOrdinal++;
-                }
-                else
-                {
-                    pendingTrivia?.Add(lineSpan.TrimEnd().ToString()); // "[Unclosed": keep the line as it is
-                }
-                pendingComments.Clear();
-                continue;
+                ProcessSectionHeader(lineSpan, trimmed);
+                return;
             }
 
             // Key=value pair (assignment delimiter is configurable, defaults to '=' and ':')
-            var assignmentIndex = FindAssignmentIndex(trimmed, options.AssignmentDelimiters);
+            var assignmentIndex = FindAssignmentIndex(trimmed, _options.AssignmentDelimiters);
             if (assignmentIndex > 0)
             {
                 var key = trimmed.Slice(0, assignmentIndex).TrimEnd().ToString();
                 var rawValue = trimmed.Slice(assignmentIndex + 1).TrimStart();
 
-                // Line continuation: if value ends with '\', join the next line(s) (the only case with an extra string)
-                string? joined = null;
-                if (options.LineContinuation && EndsWithContinuation(rawValue))
+                // Line continuation: if value ends with '\', the next line(s) are joined (the only case with an extra string)
+                if (_options.LineContinuation && EndsWithContinuation(rawValue))
                 {
-                    joined = ApplyLineContinuation(rawValue, ref span);
-                    rawValue = joined.AsSpan();
+                    _continuationKey = key;
+                    _continuationFirst = rawValue.ToString();
+                    return;
                 }
 
                 // Quotes and escape sequences are processed on the span: one string per value
-                var value = CreateValue(rawValue, options, joined);
-
-                // Ensure there is a section (global / no-section entries go into a synthetic "" section)
-                currentSection ??= iniFile.GetOrAddSection(string.Empty);
-
-                // Duplicate key handling
-                if (options.DuplicateKeyHandling != DuplicateKeyHandling.LastWins
-                    && currentSection.ContainsKey(key))
-                {
-                    switch (options.DuplicateKeyHandling)
-                    {
-                        case DuplicateKeyHandling.FirstWins:
-                            // Skip – keep the first value
-                            pendingComments.Clear();
-                            continue;
-                        case DuplicateKeyHandling.ThrowError:
-                            throw new InvalidOperationException(
-                                $"Duplicate key '{key}' found in section '{currentSection.Name}'.");
-                    }
-                }
-
-                IReadOnlyList<string> entryComments = pendingComments.Count > 0
-                    ? pendingComments.ToArray()
-                    : (IReadOnlyList<string>)Array.Empty<string>();
-                var entry = new IniEntry(key, value, entryComments) { LeadingTrivia = TakeTrivia() };
-                currentSection.SetEntry(entry);
-                pendingComments.Clear();
+                AddEntry(key, CreateValue(rawValue, _options, null));
             }
             else
             {
                 // Lines that don't match any pattern are ignored (but kept as trivia when requested)
-                pendingTrivia?.Add(lineSpan.TrimEnd().ToString());
+                _pendingTrivia?.Add(lineSpan.TrimEnd().ToString());
             }
         }
 
-        if (pendingTrivia is { Count: > 0 })
-            iniFile.TrailingTrivia = pendingTrivia.ToArray();
-
-        return iniFile;
-        }
-        finally
+        private void ProcessSectionHeader(ReadOnlySpan<char> lineSpan, ReadOnlySpan<char> trimmed)
         {
-            System.Buffers.ArrayPool<int>.Shared.Return(sizes);
+            // Section header [SectionName]
+            var closeBracket = trimmed.IndexOf(']');
+            if (closeBracket > 0)
+            {
+                var sectionName = trimmed.Slice(1, closeBracket - 1).Trim().ToString();
+                // A repeated header continues the existing section instead of replacing it,
+                // so that earlier keys are not lost and duplicate-key handling still applies.
+                var existingSection = _iniFile.GetSection(sectionName);
+                if (existingSection != null)
+                {
+                    // The lines above the repeated header stay pending for the next entry.
+                    CloseSection();
+                    _currentSection = existingSection;
+                }
+                else
+                {
+                    IReadOnlyList<string> comments = _pendingComments.Count > 0
+                        ? _pendingComments.ToArray()
+                        : Array.Empty<string>();
+                    var capacity = _sizes != null && _headerOrdinal < _headerCount ? _sizes[_headerOrdinal + 1] : 0;
+                    _currentSection = new IniSection(sectionName, comments, _keyComparer, capacity)
+                    {
+                        LeadingTrivia = TakeTrivia()
+                    };
+                    _iniFile.AddSection(_currentSection);
+                    OpenSection(_currentSection);
+                }
+                _headerOrdinal++;
+            }
+            else
+            {
+                _pendingTrivia?.Add(lineSpan.TrimEnd().ToString()); // "[Unclosed": keep the line as it is
+            }
+            _pendingComments.Clear();
+        }
+
+        /// <summary>
+        /// Handles the line after a value that ends with a backslash: its trimmed content replaces the backslash.
+        /// Returns <c>true</c> when the line was used up by the value, <c>false</c> when it must be parsed as usual.
+        /// </summary>
+        private bool ContinueValue(ReadOnlySpan<char> trimmed)
+        {
+            if (_continuation == null)
+            {
+                // Nothing to join (a blank line or a section header): keep the value as written,
+                // e.g. "Dir = C:\Temp\" directly followed by "[Next]".
+                if (trimmed.IsEmpty || trimmed[0] == '[')
+                {
+                    CompleteContinuation();
+                    return false;
+                }
+                var firstPart = _continuationFirst!;
+                _continuation = new StringBuilder(firstPart.Length + 64);
+                _continuation.Append(firstPart, 0, firstPart.Length - 1);   // without the trailing backslash
+            }
+            else if (!trimmed.IsEmpty && trimmed[0] == '[')
+            {
+                // Never swallow a section header: it is parsed as usual.
+                CompleteContinuation();
+                return false;
+            }
+            else if (trimmed.IsEmpty)
+            {
+                // An empty continuation line ends the value (and is used up)
+                CompleteContinuation();
+                return true;
+            }
+
+            if (EndsWithContinuation(trimmed))
+            {
+                // This line also continues — append without trailing backslash
+                Append(_continuation, trimmed.Slice(0, trimmed.Length - 1));
+                return true;
+            }
+            Append(_continuation, trimmed);
+            CompleteContinuation();
+            return true;
+        }
+
+        private void CompleteContinuation()
+        {
+            var key = _continuationKey!;
+            var raw = _continuation != null ? _continuation.ToString() : _continuationFirst!;
+            _continuationKey = null;
+            _continuationFirst = null;
+            _continuation = null;
+            AddEntry(key, CreateValue(raw.AsSpan(), _options, raw));
+        }
+
+        private void AddEntry(string key, string value)
+        {
+            // Ensure there is a section (global / no-section entries go into a synthetic "" section)
+            var section = _currentSection;
+            if (section == null)
+            {
+                section = _currentSection = _iniFile.GetOrAddSection(string.Empty);
+                OpenSection(section);
+            }
+            var collecting = ReferenceEquals(section, _openSection);
+            IniEntry? existing = null;
+            var exists = collecting ? _openKeys!.TryGetValue(key, out existing) : section.ContainsKey(key);
+
+            // Duplicate key handling
+            if (_options.DuplicateKeyHandling != DuplicateKeyHandling.LastWins && exists)
+            {
+                switch (_options.DuplicateKeyHandling)
+                {
+                    case DuplicateKeyHandling.FirstWins:
+                        // Skip – keep the first value
+                        _pendingComments.Clear();
+                        return;
+                    case DuplicateKeyHandling.ThrowError:
+                        throw new InvalidOperationException(
+                            $"Duplicate key '{key}' found in section '{section.Name}'.");
+                }
+            }
+
+            IReadOnlyList<string> entryComments = _pendingComments.Count > 0
+                ? _pendingComments.ToArray()
+                : Array.Empty<string>();
+            var entry = new IniEntry(key, value, entryComments) { LeadingTrivia = TakeTrivia() };
+            if (!collecting)
+                section.SetEntry(entry);
+            else if (existing != null)
+                existing.Value = value;   // what SetEntry does for a repeated key
+            else
+            {
+                _openKeys![key] = entry;
+                _openEntries!.Add(entry);
+            }
+            _pendingComments.Clear();
+        }
+
+        /// <summary>Finishes the content (a value continued at the very end) and returns the parsed file.</summary>
+        public IniFile Complete()
+        {
+            if (_continuationKey != null)
+                CompleteContinuation();
+            CloseSection();
+            if (_pendingTrivia is { Count: > 0 })
+                _iniFile.TrailingTrivia = _pendingTrivia.ToArray();
+            return _iniFile;
         }
     }
 
@@ -235,47 +495,6 @@ public static class IniFileParser
         return sizes;
     }
 
-    /// <summary>
-    /// Parses an INI file from the file system using the specified <paramref name="encoding"/>
-    /// (defaults to UTF-8 when <c>null</c>).
-    /// The file is opened with <see cref="FileAccess.Read"/> and <see cref="FileShare.ReadWrite"/>
-    /// so that it is never held open or locked for writing after parsing.
-    /// </summary>
-    /// <param name="filePath">Path to the INI file to parse.</param>
-    /// <param name="encoding">Character encoding; defaults to UTF-8.</param>
-    /// <param name="options">
-    /// Parser options; when <c>null</c>, <see cref="IniParserOptions.Default"/> is used.
-    /// </param>
-    public static IniFile ParseFile(string filePath, Encoding? encoding = null, IniParserOptions? options = null)
-    {
-        // Read into a pooled buffer and parse from it: no string for the whole content.
-        using var reader = PooledLineReader.OpenFile(filePath, encoding);
-        var iniFile = Parse(reader.ReadToEnd(), options);
-        iniFile.FilePath = filePath;
-        return iniFile;
-    }
-
-    /// <summary>
-    /// Asynchronously parses an INI file from the file system using the specified
-    /// <paramref name="encoding"/> (defaults to UTF-8 when <c>null</c>).
-    /// The file is opened with <see cref="FileAccess.Read"/> and <see cref="FileShare.ReadWrite"/>
-    /// so that it is never held open or locked for writing after parsing.
-    /// </summary>
-    /// <param name="filePath">Path to the INI file to parse.</param>
-    /// <param name="encoding">Character encoding; defaults to UTF-8.</param>
-    /// <param name="options">
-    /// Parser options; when <c>null</c>, <see cref="IniParserOptions.Default"/> is used.
-    /// </param>
-    /// <param name="cancellationToken">Token to cancel the async operation.</param>
-    public static async Task<IniFile> ParseFileAsync(string filePath, Encoding? encoding = null, IniParserOptions? options = null, CancellationToken cancellationToken = default)
-    {
-        using var reader = PooledLineReader.OpenFile(filePath, encoding, asynchronous: true);
-        await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
-        var iniFile = Parse(reader.ReadToEnd(), options);
-        iniFile.FilePath = filePath;
-        return iniFile;
-    }
-
     // ── helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>Reads one line from <paramref name="remaining"/> and advances the span past the newline.</summary>
@@ -298,53 +517,6 @@ public static class IniFileParser
             remaining = remaining.Slice(1);
 
         return result;
-    }
-
-    /// <summary>
-    /// Handles line continuation: if <paramref name="value"/> ends with a backslash,
-    /// the backslash is replaced by the trimmed content of the next line(s) from
-    /// <paramref name="remaining"/>.
-    /// </summary>
-    private static string ApplyLineContinuation(scoped ReadOnlySpan<char> value, ref ReadOnlySpan<char> remaining)
-    {
-
-        // Nothing to join (end of file, blank line or a section header): keep the value as written,
-        // e.g. "Dir = C:\Temp\" directly followed by "[Next]".
-        var lookAhead = remaining;
-        var following = lookAhead.IsEmpty ? ReadOnlySpan<char>.Empty : ReadLine(ref lookAhead).Trim();
-        if (following.IsEmpty || following[0] == '[')
-            return value.ToString();
-
-        // Strip the trailing backslash from the initial segment.
-        var sb = new StringBuilder(value.Length + 64);
-        Append(sb, value.Slice(0, value.Length - 1));
-        while (!remaining.IsEmpty)
-        {
-            // Never swallow a section header: stop before it without consuming it.
-            var peek = remaining;
-            var peekedLine = ReadLine(ref peek).Trim();
-            if (!peekedLine.IsEmpty && peekedLine[0] == '[')
-                break;
-
-            var nextLine = ReadLine(ref remaining).Trim();
-            if (nextLine.IsEmpty)
-            {
-                // Empty continuation line: stop
-                break;
-            }
-
-            if (EndsWithContinuation(nextLine))
-            {
-                // This line also continues — append without trailing backslash
-                Append(sb, nextLine.Slice(0, nextLine.Length - 1));
-            }
-            else
-            {
-                Append(sb, nextLine);
-                break;
-            }
-        }
-        return sb.ToString();
     }
 
     /// <summary>
@@ -502,6 +674,11 @@ public static class IniFileParser
     {
         if (string.IsNullOrEmpty(delimiters))
             delimiters = "=:";
+
+        // A delimiter at the start of the line is no assignment (an empty key), and its later occurrences are
+        // not considered either: the rare case keeps the original per-delimiter search.
+        if (delimiters.IndexOf(line[0]) < 0)
+            return line.IndexOfAny(delimiters.AsSpan());
 
         var result = -1;
         foreach (var delimiter in delimiters)

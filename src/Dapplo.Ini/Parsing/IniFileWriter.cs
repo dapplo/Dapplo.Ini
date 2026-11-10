@@ -20,20 +20,18 @@ public static class IniFileWriter
     /// </remarks>
     public static void WriteFile(string filePath, IniFile iniFile, Encoding? encoding = null, IniWriterOptions? options = null)
     {
-        if (MustWriteInPlace(filePath, out var tempPath, out var tempStream))
+        encoding ??= Encoding.UTF8;
+        if (MustWriteInPlace(filePath, asynchronous: false, out var tempPath, out var tempStream))
         {
-            using var inPlace = new StreamWriter(filePath, append: false, encoding ?? Encoding.UTF8);
-            Write(inPlace, iniFile, options);
+            using var inPlace = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.Read, UnbufferedFileStream);
+            WriteToStream(inPlace, iniFile, encoding, options);
             return;
         }
         try
         {
             using (var stream = tempStream!)
             {
-                using (var writer = new StreamWriter(stream, encoding ?? Encoding.UTF8, 4096, leaveOpen: true))
-                {
-                    Write(writer, iniFile, options);
-                }
+                WriteToStream(stream, iniFile, encoding, options);
                 stream.Flush(flushToDisk: true);
             }
             ReplaceFile(tempPath!, filePath);
@@ -50,19 +48,20 @@ public static class IniFileWriter
     /// <remarks>Uses the same write-to-temp-then-replace strategy as <see cref="WriteFile"/>.</remarks>
     public static async Task WriteFileAsync(string filePath, IniFile iniFile, Encoding? encoding = null, IniWriterOptions? options = null, CancellationToken cancellationToken = default)
     {
-        var content = WriteToString(iniFile, options);
-        var bytes = (encoding ?? Encoding.UTF8).GetPreamble().Concat((encoding ?? Encoding.UTF8).GetBytes(content)).ToArray();
-        if (MustWriteInPlace(filePath, out var tempPath, out var tempStream))
+        // Streamed: the content is encoded and written in blocks while it is produced, so neither a string nor a
+        // byte array of the whole file is created.
+        encoding ??= Encoding.UTF8;
+        if (MustWriteInPlace(filePath, asynchronous: true, out var tempPath, out var tempStream))
         {
-            using var inPlace = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.Read, 4096, FileOptions.Asynchronous);
-            await inPlace.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
+            using var inPlace = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.Read, UnbufferedFileStream, FileOptions.Asynchronous);
+            await WriteToStreamAsync(inPlace, iniFile, encoding, options, cancellationToken).ConfigureAwait(false);
             return;
         }
         try
         {
             using (var stream = tempStream!)
             {
-                await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
+                await WriteToStreamAsync(stream, iniFile, encoding, options, cancellationToken).ConfigureAwait(false);
                 stream.Flush(flushToDisk: true);
             }
             ReplaceFile(tempPath!, filePath);
@@ -80,7 +79,7 @@ public static class IniFileWriter
     /// would turn the link into a plain file) or when no temp file can be created next to it (for example
     /// when only the file itself, not its folder, is writable).
     /// </summary>
-    private static bool MustWriteInPlace(string filePath, out string? tempPath, out FileStream? tempStream)
+    private static bool MustWriteInPlace(string filePath, bool asynchronous, out string? tempPath, out FileStream? tempStream)
     {
         tempPath = null;
         tempStream = null;
@@ -97,7 +96,8 @@ public static class IniFileWriter
         var candidate = CreateTempPath(filePath);
         try
         {
-            tempStream = new FileStream(candidate, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous);
+            tempStream = new FileStream(candidate, FileMode.CreateNew, FileAccess.Write, FileShare.None, UnbufferedFileStream,
+                asynchronous ? FileOptions.Asynchronous : FileOptions.None);
         }
         catch (Exception ex) when ((ex is UnauthorizedAccessException || ex is IOException) && ex is not DirectoryNotFoundException && File.Exists(filePath))
         {
@@ -105,6 +105,39 @@ public static class IniFileWriter
         }
         tempPath = candidate;
         return false;
+    }
+
+    // The PooledStreamWriter writes whole blocks: a FileStream buffer would only copy them once more.
+    private const int UnbufferedFileStream = 1;
+
+    private static void WriteToStream(Stream stream, IniFile iniFile, Encoding encoding, IniWriterOptions? options)
+    {
+        using var writer = new PooledStreamWriter(stream, encoding, synchronousFlush: true);
+        Write(writer, iniFile, options);
+        writer.Complete();
+    }
+
+    private static async Task WriteToStreamAsync(Stream stream, IniFile iniFile, Encoding encoding, IniWriterOptions? options, CancellationToken cancellationToken)
+    {
+        using var writer = new PooledStreamWriter(stream, encoding, synchronousFlush: false);
+        var writerOptions = ResolveOptions(iniFile, options);
+        var firstSection = true;
+        foreach (var section in iniFile.Sections)
+        {
+            var sectionOptions = WriteSectionStart(writer, section, writerOptions, firstSection);
+            firstSection = false;
+            foreach (var entry in section.Entries)
+            {
+                WriteEntry(writer, entry, sectionOptions);
+                if (writer.IsBlockFull)
+                    await writer.FlushBlockAsync(cancellationToken).ConfigureAwait(false);
+            }
+            if (writer.IsBlockFull)
+                await writer.FlushBlockAsync(cancellationToken).ConfigureAwait(false);
+        }
+        if (iniFile.TrailingTrivia != null)
+            WriteTrivia(writer, iniFile.TrailingTrivia);
+        await writer.CompleteAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static string CreateTempPath(string filePath)
@@ -190,60 +223,76 @@ public static class IniFileWriter
     /// <summary>Writes <paramref name="iniFile"/> to <paramref name="writer"/>.</summary>
     public static void Write(TextWriter writer, IniFile iniFile, IniWriterOptions? options = null)
     {
-        var writerOptions = (options ?? IniWriterOptions.Default).Clone();
-        // Explicitly passed options win; without options the file's own separator is used.
-        if (options == null)
-            writerOptions.AssignmentSeparator = iniFile.AssignmentSeparator;
-
-        bool firstSection = true;
+        var writerOptions = ResolveOptions(iniFile, options);
+        var firstSection = true;
         foreach (var section in iniFile.Sections)
         {
-            var sectionOptions = writerOptions.Apply(section.WriterOptionsOverride);
-
-            if (section.LeadingTrivia != null)
-            {
-                // Recorded layout: exactly the blank lines and comments that were above the header.
-                WriteTrivia(writer, section.LeadingTrivia);
-            }
-            else
-            {
-                if (!firstSection)
-                    writer.WriteLine();
-
-                // Section comments
-                if (sectionOptions.WriteComments)
-                    WriteComments(writer, section.Comments);
-            }
+            var sectionOptions = WriteSectionStart(writer, section, writerOptions, firstSection);
             firstSection = false;
-
-            // Only write header for named sections
-            if (!string.IsNullOrEmpty(section.Name))
-            {
-                writer.Write('[');
-                writer.Write(section.Name);
-                writer.WriteLine(']');
-            }
-
-            // Entries
             foreach (var entry in section.Entries)
-            {
-                var entryOptions = sectionOptions.Apply(entry.WriterOptionsOverride);
-
-                if (entry.LeadingTrivia != null)
-                    WriteTrivia(writer, entry.LeadingTrivia);
-                else if (entryOptions.WriteComments)
-                    WriteComments(writer, entry.Comments);
-
-                if (entry.IsCommentedOut)
-                    writer.Write("; ");
-                writer.Write(entry.Key);
-                writer.Write(entryOptions.AssignmentSeparator);
-                writer.WriteLine(FormatValue(entry.Value, entryOptions));
-            }
+                WriteEntry(writer, entry, sectionOptions);
         }
 
         if (iniFile.TrailingTrivia != null)
             WriteTrivia(writer, iniFile.TrailingTrivia);
+    }
+
+    private static IniWriterOptions ResolveOptions(IniFile iniFile, IniWriterOptions? options)
+    {
+        // Explicitly passed options win; without options the file's own separator is used.
+        if (options != null)
+            return options;
+        if (iniFile.AssignmentSeparator == IniWriterOptions.Default.AssignmentSeparator)
+            return IniWriterOptions.Default;
+        var writerOptions = IniWriterOptions.Default.Clone();
+        writerOptions.AssignmentSeparator = iniFile.AssignmentSeparator;
+        return writerOptions;
+    }
+
+    /// <summary>Writes the lines above the header and the header itself; returns the options for the entries.</summary>
+    private static IniWriterOptions WriteSectionStart(TextWriter writer, IniSection section, IniWriterOptions writerOptions, bool firstSection)
+    {
+        var sectionOptions = writerOptions.Apply(section.WriterOptionsOverride);
+
+        if (section.LeadingTrivia != null)
+        {
+            // Recorded layout: exactly the blank lines and comments that were above the header.
+            WriteTrivia(writer, section.LeadingTrivia);
+        }
+        else
+        {
+            if (!firstSection)
+                writer.WriteLine();
+
+            // Section comments
+            if (sectionOptions.WriteComments)
+                WriteComments(writer, section.Comments);
+        }
+
+        // Only write header for named sections
+        if (!string.IsNullOrEmpty(section.Name))
+        {
+            writer.Write('[');
+            writer.Write(section.Name);
+            writer.WriteLine(']');
+        }
+        return sectionOptions;
+    }
+
+    private static void WriteEntry(TextWriter writer, IniEntry entry, IniWriterOptions sectionOptions)
+    {
+        var entryOptions = sectionOptions.Apply(entry.WriterOptionsOverride);
+
+        if (entry.LeadingTrivia != null)
+            WriteTrivia(writer, entry.LeadingTrivia);
+        else if (entryOptions.WriteComments)
+            WriteComments(writer, entry.Comments);
+
+        if (entry.IsCommentedOut)
+            writer.Write("; ");
+        writer.Write(entry.Key);
+        writer.Write(entryOptions.AssignmentSeparator);
+        writer.WriteLine(FormatValue(entry.Value, entryOptions));
     }
 
     private static void WriteTrivia(TextWriter writer, IReadOnlyList<string> lines)
@@ -257,11 +306,38 @@ public static class IniFileWriter
     {
         foreach (var comment in comments)
         {
-            foreach (var line in comment.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None))
+            // Every line of a multi-line comment becomes a comment line ("\r\n", "\n" and "\r" end a line).
+            var start = 0;
+            while (true)
             {
+                var lineBreak = comment.IndexOfAny(LineBreakChars, start);
+                var end = lineBreak < 0 ? comment.Length : lineBreak;
                 writer.Write("; ");
-                writer.WriteLine(line);
+                WritePart(writer, comment, start, end - start);
+                writer.WriteLine();
+                if (lineBreak < 0)
+                    break;
+                start = lineBreak + 1;
+                if (comment[lineBreak] == '\r' && start < comment.Length && comment[start] == '\n')
+                    start++;
             }
+        }
+    }
+
+    private static readonly char[] LineBreakChars = { '\r', '\n' };
+
+    // Writes a part of a string without creating a substring (on .NET; .NET Framework writers have no span overload).
+    private static void WritePart(TextWriter writer, string text, int start, int length)
+    {
+        if (start == 0 && length == text.Length)
+            writer.Write(text);
+        else if (length > 0)
+        {
+#if NET
+            writer.Write(text.AsSpan(start, length));
+#else
+            writer.Write(text.Substring(start, length));
+#endif
         }
     }
 
@@ -271,7 +347,7 @@ public static class IniFileWriter
         // A raw line break would end the value and could inject keys or sections into the file,
         // so values containing one are always written with escape sequences.
         // Enable escape sequences on the parser to read them back as line breaks.
-        if (options.EscapeSequences || result.IndexOf('\n') >= 0 || result.IndexOf('\r') >= 0)
+        if (options.EscapeSequences || result.IndexOfAny(LineBreakChars) >= 0)
             result = EncodeEscapeSequences(result);
         return ApplyQuoting(result, options, escapeSequencesEncoded: options.EscapeSequences);
     }
@@ -328,7 +404,7 @@ public static class IniFileWriter
 
     private static string EscapeUnescapedQuote(string value, char quoteChar)
     {
-        if (string.IsNullOrEmpty(value))
+        if (string.IsNullOrEmpty(value) || value.IndexOf(quoteChar) < 0)
             return value;
 
         var sb = new StringBuilder(value.Length + 8);
@@ -354,10 +430,11 @@ public static class IniFileWriter
         if (string.IsNullOrEmpty(value))
             return false;
 
-        if (value != value.Trim())
+        // Leading or trailing whitespace (what Trim() would remove) would be lost
+        if (char.IsWhiteSpace(value[0]) || char.IsWhiteSpace(value[value.Length - 1]))
             return true;
 
-        if (value.StartsWith(";") || value.StartsWith("#"))
+        if (value[0] == ';' || value[0] == '#')
             return true;
 
         // A value that already looks quoted would lose its quotes when read with QuotedValues.
@@ -367,14 +444,17 @@ public static class IniFileWriter
         foreach (var c in assignmentSeparator)
         {
             if (char.IsWhiteSpace(c)) continue;
-            if (value.Contains(c)) return true;
+            if (value.IndexOf(c) >= 0) return true;
         }
         return false;
     }
 
+    // The chars EncodeEscapeSequences replaces.
+    private static readonly char[] EscapedChars = { '\\', '\n', '\r', '\t', '\0', '\a', '\b' };
+
     private static string EncodeEscapeSequences(string value)
     {
-        if (string.IsNullOrEmpty(value))
+        if (string.IsNullOrEmpty(value) || value.IndexOfAny(EscapedChars) < 0)
             return value;
 
         var sb = new StringBuilder(value.Length + 8);

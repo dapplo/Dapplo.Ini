@@ -350,6 +350,25 @@ public abstract partial class IniSectionBase
     }
 
     /// <summary>
+    /// A quick check, without allocations, for <see cref="GetHiddenUserValues"/>: <c>false</c> when no user value
+    /// is hidden by a layer above the user file or by a constant, so the saving code can skip building the key set.
+    /// </summary>
+    internal bool MayHaveHiddenUserValues()
+    {
+        lock (_sync)
+        {
+            if (_constantKeys.Count > 0)
+                return true;
+            foreach (var kvp in _keyStates)
+            {
+                if (kvp.Value.IsUser && kvp.Value.Origin.IsAboveUser)
+                    return true;
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
     /// The user values hidden below a constant or a value source that are not among <paramref name="writtenKeys"/>:
     /// e.g. entries of a dictionary that a value source replaced as a whole. They are written too, so they come
     /// back when the source stops supplying the key.
