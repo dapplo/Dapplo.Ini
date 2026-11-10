@@ -8,7 +8,7 @@ namespace Dapplo.Ini.Parsing;
 /// </summary>
 public sealed class IniSection
 {
-    private readonly Dictionary<string, IniEntry> _entries;
+    private Dictionary<string, IniEntry> _entries;
 
     /// <summary>The section name (without brackets).</summary>
     public string Name { get; }
@@ -31,7 +31,7 @@ public sealed class IniSection
     /// <summary>The entries in declaration order (preserves file order).</summary>
     public IReadOnlyList<IniEntry> Entries => _entriesOrdered;
 
-    private readonly List<IniEntry> _entriesOrdered;
+    private List<IniEntry> _entriesOrdered;
 
     /// <summary>
     /// Initialises a new section.
@@ -96,4 +96,19 @@ public sealed class IniSection
 
     /// <summary>Returns <c>true</c> when a key with this name exists.</summary>
     public bool ContainsKey(string key) => _entries.ContainsKey(key);
+
+    /// <summary>
+    /// Fills an empty section with <paramref name="entries"/> (unique keys, in file order), sizing the lookup and
+    /// the list once: the streaming parser collects a section's entries first, as it can't count them in advance.
+    /// </summary>
+    internal void InitializeEntries(List<IniEntry> entries)
+    {
+        if (_entriesOrdered.Count > 0)
+            throw new InvalidOperationException("The section already has entries.");
+        var lookup = new Dictionary<string, IniEntry>(entries.Count, _entries.Comparer);
+        foreach (var entry in entries)
+            lookup[entry.Key] = entry;
+        _entries = lookup;
+        _entriesOrdered = new List<IniEntry>(entries);
+    }
 }

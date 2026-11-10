@@ -22,6 +22,17 @@ public static class ValueConverterRegistry
     // Serialises Register with the bookkeeping of composed converters.
     private static readonly object _registrationLock = new();
 
+    // List and array converters with a non-default delimiter (IniValue ListDelimiter), composed once instead of
+    // with reflection on every conversion. Dropped, like the composed converters, whenever a converter is registered.
+    private static readonly ConcurrentDictionary<(Type Type, char Delimiter), IValueConverter> _delimited = new();
+
+    // Incremented by Register: lets the per-type caches of the converter helpers notice that a lookup may now
+    // return a different converter.
+    private static int _version;
+
+    /// <summary>Changes whenever a converter is registered; used to invalidate cached lookups.</summary>
+    internal static int Version => Volatile.Read(ref _version);
+
     // Generic type definitions used for collection/dictionary detection
     private static readonly HashSet<Type> _listLikeGenericDefinitions = new()
     {
@@ -78,6 +89,8 @@ public static class ValueConverterRegistry
                 if (_composed.TryRemove(composedType, out _))
                     _converters.TryRemove(composedType, out _);
             }
+            _delimited.Clear();
+            Interlocked.Increment(ref _version);
         }
     }
 
@@ -168,6 +181,43 @@ public static class ValueConverterRegistry
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The converter for <paramref name="type"/> with <paramref name="listDelimiter"/> between the elements of a
+    /// list or array type; for other types the same as <see cref="GetConverter(Type)"/>. Composed converters are
+    /// cached, so the reflection to create them runs once per type and delimiter.
+    /// </summary>
+#if NET
+    [RequiresDynamicCode("Creates list/array converters with runtime type arguments.")]
+    [RequiresUnreferencedCode("Creates list/array converters using runtime type metadata.")]
+#endif
+    internal static IValueConverter? GetConverter(Type type, char listDelimiter)
+    {
+        Type? elementType = null;
+        var isArray = type.IsArray;
+        if (isArray)
+            elementType = type.GetElementType();
+        else if (type.IsGenericType && _listLikeGenericDefinitions.Contains(type.GetGenericTypeDefinition()))
+            elementType = type.GetGenericArguments()[0];
+        if (elementType == null)
+            return GetConverter(type);
+
+        var cacheKey = (type, listDelimiter);
+        if (_delimited.TryGetValue(cacheKey, out var cached))
+            return cached;
+
+        var elementConverter = GetConverter(elementType);
+        if (elementConverter == null) return null;
+        var converterType = (isArray ? typeof(ArrayConverter<>) : typeof(ListConverter<>)).MakeGenericType(elementType);
+        var converter = (IValueConverter)Activator.CreateInstance(converterType, elementConverter, listDelimiter)!;
+        lock (_registrationLock)
+        {
+            // A Register in the meantime may have replaced the element converter: only cache a current one.
+            if (ReferenceEquals(GetConverter(elementType), elementConverter))
+                converter = _delimited.GetOrAdd(cacheKey, converter);
+        }
+        return converter;
     }
 
     private static IValueConverter AddComposed(Type type, IValueConverter converter)

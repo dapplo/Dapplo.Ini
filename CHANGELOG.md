@@ -65,6 +65,24 @@ in a new application version or a removed constant never reached a user who had 
   `InvalidSourceValueException` (reported and skipped, the load continues). A value source can supply a dictionary
   stored as sub keys through its property key (inline `key=value,...`).
 
+### Changed: performance
+Measured with the new `benchmarks/Dapplo.Ini.Benchmarks` project (BenchmarkDotNet, .NET 10):
+
+- Saving streams the file: content is encoded and written in pooled blocks of 8 K chars instead of building it as a
+  string first. `SaveAsync` / `IniFileWriter.WriteFileAsync` no longer create a string, a byte array and a LINQ copy
+  of the whole file. Writing a 1 MB file allocates 137 KB instead of 3.3 MB, with no large object heap (gen 2)
+  allocations; a typical `Save()` allocates 7 KB instead of 37 KB.
+- `IniFileParser.ParseFile` / `ParseFileAsync` use one small pooled buffer (up to 16 KB): a file that fits is parsed
+  as a whole, a larger file line by line while it is read, so a large file is never buffered as a whole. The end of
+  a file is known from its length, saving one (async) read.
+- New `IniFileParser.Parse(TextReader, IniParserOptions?)`, which streams the same way and leaves the reader open.
+- List and array properties with a `ListDelimiter` no longer create their converter with reflection on every
+  conversion; converters are cached per type (and invalidated by `ValueConverterRegistry.Register`), and
+  list/array elements of value types are converted without boxing.
+- Smaller savings: comments are written without `string.Split`, value quoting checks no longer use culture-sensitive
+  `StartsWith`, the assignment delimiter is found with one vectorized search, and listener notifications in loops no
+  longer allocate closures when nobody listens. A typical `Reload()` allocates 11 KB instead of 16 KB.
+
 ### Fixed
 - Constants are never written to the user file. A value the user file holds for a constant key stays in the file
   untouched, so it comes back when the administrator removes the constant.

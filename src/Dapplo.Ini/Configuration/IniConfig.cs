@@ -1750,7 +1750,7 @@ public sealed class IniConfig : IDisposable
             if (sectionBase != null && section.IsConstant(item.Key) && sectionBase.GetValueOrigin(item.Key).Kind == ValueOriginKind.ConstantsFile)
             {
                 var replaced = section.GetRawValue(item.Key);
-                NotifyExtendedListeners(l => l.OnValueSourceIgnored(section.SectionName, item.Key, replaced));
+                NotifyValueSourceIgnored(section.SectionName, item.Key, replaced);
             }
             ApplySourceValue(item);
             sectionBase?.MarkKeyAsConstant(item.Key);
@@ -1766,11 +1766,25 @@ public sealed class IniConfig : IDisposable
             if (section.IsConstant(item.Key))
             {
                 // Constants (admin-forced values) win over value sources.
-                NotifyExtendedListeners(l => l.OnValueSourceIgnored(section.SectionName, item.Key, item.Value));
+                NotifyValueSourceIgnored(section.SectionName, item.Key, item.Value);
                 continue;
             }
             ApplySourceValue(item);
         }
+    }
+
+    // A lambda in the loops above would capture the loop variables: the compiler then allocates their closure on
+    // every iteration, also when nobody listens. Here it is only created for an actual notification.
+    private void NotifyValueSourceIgnored(string sectionName, string key, string? value)
+    {
+        if (Listeners.Count > 0)
+            NotifyExtendedListeners(l => l.OnValueSourceIgnored(sectionName, key, value));
+    }
+
+    private void NotifyUnknownKey(string sectionName, string key, string? value)
+    {
+        if (Listeners.Count > 0)
+            NotifyListeners(l => l.OnUnknownKey(sectionName, key, value));
     }
 
     private static void ApplySourceValue(SourceValue item)
@@ -2072,7 +2086,7 @@ public sealed class IniConfig : IDisposable
         {
             WriterOptionsOverride = sectionBase.GetSectionWriterOptions()
         };
-        var describedSubKeyDictionaries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        HashSet<string>? describedSubKeyDictionaries = null;
 
         foreach (var rawKvp in sectionBase.GetAllRawValues())
         {
@@ -2089,7 +2103,7 @@ public sealed class IniConfig : IDisposable
                 {
                     var prefixKey = rawKvp.Key.Substring(0, keySeparatorIndex);
                     propDesc = sectionBase.GetPropertyDescription(prefixKey);
-                    if (propDesc != null && !describedSubKeyDictionaries.Add(prefixKey))
+                    if (propDesc != null && !(describedSubKeyDictionaries ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase)).Add(prefixKey))
                         propDesc = null;
                 }
             }
@@ -2104,6 +2118,8 @@ public sealed class IniConfig : IDisposable
         }
 
         // User values hidden by a layer above that replaced the whole property (a dictionary from a value source)
+        if (!sectionBase.MayHaveHiddenUserValues())
+            return iniSection;
         var written = new HashSet<string>(iniSection.Entries.Select(e => e.Key), StringComparer.OrdinalIgnoreCase);
         foreach (var hidden in sectionBase.GetHiddenUserValues(written))
         {
@@ -2302,7 +2318,7 @@ public sealed class IniConfig : IDisposable
                         if (section is IUnknownKey unknownKeyHandler)
                             unknownKeyHandler.OnUnknownKey(entry.Key, entry.Value);
                         UnknownKeyHandler?.Invoke(section.SectionName, entry.Key, entry.Value);
-                        NotifyListeners(l => l.OnUnknownKey(section.SectionName, entry.Key, entry.Value));
+                        NotifyUnknownKey(section.SectionName, entry.Key, entry.Value);
                     }
                 }
             }

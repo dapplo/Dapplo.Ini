@@ -11,4 +11,7 @@
     <Project Path="tests/Dapplo.Ini.Generator.Tests/Dapplo.Ini.Generator.Tests.csproj" />
     <Project Path="tests/Dapplo.Ini.WindowsPolicies.Tests/Dapplo.Ini.WindowsPolicies.Tests.csproj" />
   </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/Dapplo.Ini.Benchmarks/Dapplo.Ini.Benchmarks.csproj" />
+  </Folder>
 </Solution>

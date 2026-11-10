@@ -31,6 +31,10 @@ Saving is **atomic**: the content is written to a temporary file next to the INI
 few times when a virus scanner or editor briefly holds the file).  A crash or a full disk
 during the save never leaves a truncated or empty INI file behind.
 
+The content is streamed into the file: it is encoded and written in blocks of 8 K characters while it is
+produced, with pooled buffers, so a save neither creates the whole file as a string nor as a byte array.
+`SaveAsync` writes the blocks asynchronously.
+
 The file is written in place instead when it is a symbolic link (replacing it would turn the
 link into a plain file) or when no temporary file can be created in its folder (for example
 when only the file itself is writable).

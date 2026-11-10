@@ -3,6 +3,14 @@
 
 using System.Buffers;
 using System.Text;
+#if NET
+// Filling mostly completes from data that is already buffered: a ValueTask then allocates nothing.
+using FillTask = System.Threading.Tasks.ValueTask;
+using ValueTaskOfBool = System.Threading.Tasks.ValueTask<bool>;
+#else
+using FillTask = System.Threading.Tasks.Task;
+using ValueTaskOfBool = System.Threading.Tasks.Task<bool>;
+#endif
 
 namespace Dapplo.Ini.Parsing;
 
@@ -29,9 +37,12 @@ namespace Dapplo.Ini.Parsing;
 /// </remarks>
 internal sealed class PooledLineReader : IDisposable
 {
-    private const int DefaultBufferSize = 4096;
+    internal const int DefaultBufferSize = 4096;
+    // Reading a file: larger blocks mean fewer (async) reads, and the buffers stay far below the large object heap.
+    private const int MaxFileBufferSize = 16384;
 
     private readonly TextReader? _reader;
+    private readonly bool _leaveOpen;
     // Reading a stream directly: bytes are decoded into the char buffer here, so no StreamReader (with its own
     // byte and char buffers) is needed. Both buffers are pooled.
     private readonly Stream? _stream;
@@ -41,6 +52,8 @@ internal sealed class PooledLineReader : IDisposable
     private int _byteStart;
     private int _byteEnd;
     private bool _streamEnded;
+    // The length of a file at opening: once that much is read the end is known, without another read returning 0.
+    private long _remainingBytes = -1;
     private bool _decoderFlushed;
     private char[] _buffer;
     private int _start;       // first unread char
@@ -48,9 +61,10 @@ internal sealed class PooledLineReader : IDisposable
     private bool _endOfInput; // the reader returned 0
     private bool _skipLineFeed; // the last line ended with '\r' at the end of the buffer
 
-    public PooledLineReader(TextReader reader, int bufferSize = DefaultBufferSize)
+    public PooledLineReader(TextReader reader, int bufferSize = DefaultBufferSize, bool leaveOpen = false)
     {
         _reader = reader ?? throw new ArgumentNullException(nameof(reader));
+        _leaveOpen = leaveOpen;
         _buffer = ArrayPool<char>.Shared.Rent(bufferSize);
     }
 
@@ -72,7 +86,18 @@ internal sealed class PooledLineReader : IDisposable
         // bufferSize 1: no FileStream buffer, the reader has its own (pooled) byte buffer.
         var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, bufferSize: 1,
             asynchronous ? FileOptions.Asynchronous | FileOptions.SequentialScan : FileOptions.SequentialScan);
-        return new PooledLineReader(stream, encoding);
+        try
+        {
+            // Small files: one block that holds everything (a single read); larger ones: blocks of MaxFileBufferSize.
+            var length = stream.Length;
+            var bufferSize = length < DefaultBufferSize ? DefaultBufferSize : (int)Math.Min(length + 1, MaxFileBufferSize);
+            return new PooledLineReader(stream, encoding, bufferSize) { _remainingBytes = length };
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
     }
 
     /// <summary><c>true</c> when all lines have been returned.</summary>
@@ -152,7 +177,7 @@ internal sealed class PooledLineReader : IDisposable
     }
 
     /// <summary>Asynchronously reads more data.</summary>
-    public async Task FillAsync(CancellationToken cancellationToken = default)
+    public async FillTask FillAsync(CancellationToken cancellationToken = default)
     {
         if (!PrepareFill()) return;
         if (_reader != null)
@@ -225,6 +250,13 @@ internal sealed class PooledLineReader : IDisposable
 
         _byteStart = 0;
         _byteEnd = count;
+        if (_remainingBytes >= 0)
+        {
+            // The whole file (as it was when opened) is read: no further read needed to see the end.
+            _remainingBytes -= count;
+            if (_remainingBytes <= 0)
+                _streamEnded = true;
+        }
         if (_decoder == null)
             DetectByteOrderMark();
     }
@@ -253,6 +285,28 @@ internal sealed class PooledLineReader : IDisposable
     }
 
     /// <summary>
+    /// Reads as much as fits into the current buffer, without growing it. Returns <c>true</c> when that reached the
+    /// end of the input: <see cref="Buffered"/> then holds all of the (remaining) content.
+    /// </summary>
+    public bool TryFillToEnd()
+    {
+        while (!_endOfInput && _end < _buffer.Length - 1)
+            Fill();
+        return _endOfInput;
+    }
+
+    /// <summary>Asynchronous variant of <see cref="TryFillToEnd"/>.</summary>
+    public async ValueTaskOfBool TryFillToEndAsync(CancellationToken cancellationToken = default)
+    {
+        while (!_endOfInput && _end < _buffer.Length - 1)
+            await FillAsync(cancellationToken).ConfigureAwait(false);
+        return _endOfInput;
+    }
+
+    /// <summary>The buffered content that was not returned as a line yet; valid until the reader is used again.</summary>
+    public ReadOnlySpan<char> Buffered => new(_buffer, _start, _end - _start);
+
+    /// <summary>
     /// Reads everything that is left and returns it as one span (valid until the reader is used or disposed), for
     /// parsers that need the whole content. Uses the pooled buffer instead of a string.
     /// </summary>
@@ -264,7 +318,7 @@ internal sealed class PooledLineReader : IDisposable
     }
 
     /// <summary>Asynchronously reads everything that is left; then call <see cref="ReadToEnd"/> to get it.</summary>
-    public async Task ReadToEndAsync(CancellationToken cancellationToken = default)
+    public async FillTask ReadToEndAsync(CancellationToken cancellationToken = default)
     {
         while (!_endOfInput)
             await FillAsync(cancellationToken).ConfigureAwait(false);
@@ -304,7 +358,8 @@ internal sealed class PooledLineReader : IDisposable
 
     public void Dispose()
     {
-        _reader?.Dispose();
+        if (!_leaveOpen)
+            _reader?.Dispose();
         _stream?.Dispose();
         if (_bytes != null)
         {

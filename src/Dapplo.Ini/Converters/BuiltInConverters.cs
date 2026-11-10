@@ -159,7 +159,7 @@ internal static class DelimitedValues
     /// </param>
     public static List<string> SplitRaw(string raw, char separator, char? innerSeparator = null)
     {
-        var parts = new List<string>();
+        var parts = new List<string>(CountSeparators(raw, separator) + 1);
         var start = 0;
         var inQuotes = false;
         var contentSeen = false; // non-whitespace seen in the current part
@@ -177,7 +177,7 @@ internal static class DelimitedValues
             }
             if (c == separator)
             {
-                parts.Add(raw.Substring(start, i - start).Trim());
+                parts.Add(SubstringTrimmed(raw, start, i));
                 start = i + 1;
                 contentSeen = false;
                 continue;
@@ -189,8 +189,30 @@ internal static class DelimitedValues
             else if (!char.IsWhiteSpace(c))
                 contentSeen = true;
         }
-        parts.Add(raw.Substring(start).Trim());
+        parts.Add(SubstringTrimmed(raw, start, raw.Length));
         return parts;
+    }
+
+    // raw.Substring(start, end - start).Trim() with one string instead of two.
+    private static string SubstringTrimmed(string raw, int start, int end)
+    {
+        while (start < end && char.IsWhiteSpace(raw[start])) start++;
+        while (end > start && char.IsWhiteSpace(raw[end - 1])) end--;
+        if (start == end) return string.Empty;
+        return start == 0 && end == raw.Length ? raw : raw.Substring(start, end - start);
+    }
+
+    // An upper bound of the parts (separators inside quotes are counted too), to size the list once.
+    private static int CountSeparators(string raw, char separator)
+    {
+        var count = 0;
+        var index = raw.IndexOf(separator);
+        while (index >= 0)
+        {
+            count++;
+            index = raw.IndexOf(separator, index + 1);
+        }
+        return count;
     }
 
     /// <summary>Finds the first <paramref name="separator"/> outside quotes, or -1.</summary>
@@ -418,16 +440,17 @@ public sealed class UriConverter : ValueConverterBase<Uri>
 public sealed class ListConverter<T> : ValueConverterBase<List<T>>
 {
     private readonly IValueConverter _elementConverter;
+    // The element converter's typed interface when it has one: converts without boxing value types.
+    private readonly IValueConverter<T>? _typedElementConverter;
     private readonly char _separator;
-    private readonly string _separatorStr;
 
     /// <param name="elementConverter">Converter for the individual list elements.</param>
     /// <param name="separator">Delimiter used between elements. Defaults to <c>,</c>.</param>
     public ListConverter(IValueConverter elementConverter, char separator = ',')
     {
         _elementConverter = elementConverter ?? throw new ArgumentNullException(nameof(elementConverter));
+        _typedElementConverter = elementConverter as IValueConverter<T>;
         _separator = separator;
-        _separatorStr = separator.ToString();
     }
 
     /// <inheritdoc/>
@@ -442,7 +465,14 @@ public sealed class ListConverter<T> : ValueConverterBase<List<T>>
         var result = new List<T>(parts.Count);
         foreach (var part in parts)
         {
-            var item = _elementConverter.ConvertFromString(DelimitedValues.Unquote(part));
+            var element = DelimitedValues.Unquote(part);
+            if (_typedElementConverter != null)
+            {
+                // No boxing of value-type elements
+                result.Add(_typedElementConverter.ConvertFromString(element, default)!);
+                continue;
+            }
+            var item = _elementConverter.ConvertFromString(element);
             result.Add(item is T typed ? typed : default!);
         }
         return result;
@@ -452,11 +482,30 @@ public sealed class ListConverter<T> : ValueConverterBase<List<T>>
     public override string? ConvertToString(List<T>? value)
     {
         if (value == null) return null;
-        var count = value.Count;
-        var parts = new string[count];
-        for (int i = 0; i < count; i++)
-            parts[i] = DelimitedValues.Quote(_elementConverter.ConvertToString(value[i]) ?? string.Empty, _separator);
-        return string.Join(_separatorStr, parts);
+        return Join(value);
+    }
+
+    /// <summary>Joins the elements of <paramref name="values"/> (a list or an array) without copying them first.</summary>
+    internal string Join(IReadOnlyList<T> values)
+    {
+        var count = values.Count;
+        if (count == 0) return string.Empty;
+        if (count == 1) return ElementToString(values[0]);
+        var sb = new StringBuilder(count * 8);
+        for (var i = 0; i < count; i++)
+        {
+            if (i > 0) sb.Append(_separator);
+            sb.Append(ElementToString(values[i]));
+        }
+        return sb.ToString();
+    }
+
+    private string ElementToString(T value)
+    {
+        var text = _typedElementConverter != null
+            ? _typedElementConverter.ConvertToString(value)
+            : _elementConverter.ConvertToString(value);
+        return DelimitedValues.Quote(text ?? string.Empty, _separator);
     }
 
     /// <inheritdoc/>
@@ -494,7 +543,7 @@ public sealed class ArrayConverter<T> : IValueConverter
     /// <inheritdoc/>
     public string? ConvertToString(object? value)
     {
-        if (value is T[] arr) return _listConverter.ConvertToString(new List<T>(arr));
+        if (value is T[] arr) return _listConverter.Join(arr);
         if (value is IEnumerable<T> enumerable) return _listConverter.ConvertToString(new List<T>(enumerable));
         return null;
     }

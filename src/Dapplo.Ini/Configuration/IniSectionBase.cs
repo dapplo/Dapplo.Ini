@@ -465,7 +465,7 @@ public abstract partial class IniSectionBase : IIniSection
 #endif
     protected T? ConvertFromRaw<T>(string? raw, T? defaultValue = default)
     {
-        var converter = ValueConverterRegistry.GetConverter(typeof(T));
+        var converter = ConverterCache<T>.Get();
         if (converter == null) return defaultValue;
         try
         {
@@ -495,7 +495,7 @@ public abstract partial class IniSectionBase : IIniSection
 #endif
     protected T? ConvertFromRaw<T>(string? raw, char listDelimiter, T? defaultValue = default)
     {
-        var converter = GetConverter(typeof(T), listDelimiter);
+        var converter = ValueConverterRegistry.GetConverter(typeof(T), listDelimiter);
         if (converter == null) return defaultValue;
         try
         {
@@ -518,7 +518,9 @@ public abstract partial class IniSectionBase : IIniSection
 #endif
     protected static string? ConvertToRaw<T>(T? value)
     {
-        var converter = ValueConverterRegistry.GetConverter(typeof(T));
+        var converter = ConverterCache<T>.Get();
+        if (converter is IValueConverter<T> typedConverter)
+            return typedConverter.ConvertToString(value);   // no boxing of value types
         return converter?.ConvertToString(value);
     }
 
@@ -537,43 +539,48 @@ public abstract partial class IniSectionBase : IIniSection
 #endif
     protected static string? ConvertToRaw<T>(T? value, char listDelimiter)
     {
-        var converter = GetConverter(typeof(T), listDelimiter);
+        var converter = ValueConverterRegistry.GetConverter(typeof(T), listDelimiter);
+        if (converter is IValueConverter<T> typedConverter)
+            return typedConverter.ConvertToString(value);
         return converter?.ConvertToString(value);
     }
 
 #if NET
-    [RequiresDynamicCode("Creates list/array converters with runtime type arguments.")]
-    [RequiresUnreferencedCode("Creates list/array converters using runtime type metadata.")]
+    [RequiresDynamicCode("Enum, list, and array types may require dynamic converter creation. Register typed converters for full AOT compatibility.")]
+    [RequiresUnreferencedCode("Enum, list, and array types may require unreferenced-code access via runtime converter creation. Register typed converters for full trim compatibility.")]
 #endif
-    private static IValueConverter? GetConverter(Type type, char listDelimiter)
+    private static class ConverterCache<T>
     {
-        if (type.IsArray)
+        // The converter for T with the registry version it was looked up at; replaced as one object, so a reader
+        // never sees a converter with the wrong version.
+        private sealed class Entry
         {
-            var elementType = type.GetElementType()!;
-            var elementConverter = ValueConverterRegistry.GetConverter(elementType);
-            if (elementConverter == null) return null;
-            var arrayConverterType = typeof(ArrayConverter<>).MakeGenericType(elementType);
-            return (IValueConverter)Activator.CreateInstance(arrayConverterType, elementConverter, listDelimiter)!;
-        }
-
-        if (type.IsGenericType)
-        {
-            var genericDef = type.GetGenericTypeDefinition();
-            if (genericDef == typeof(List<>) ||
-                genericDef == typeof(IList<>) ||
-                genericDef == typeof(ICollection<>) ||
-                genericDef == typeof(IEnumerable<>) ||
-                genericDef == typeof(IReadOnlyList<>) ||
-                genericDef == typeof(IReadOnlyCollection<>))
+            public Entry(int version, IValueConverter? converter)
             {
-                var elementType = type.GetGenericArguments()[0];
-                var elementConverter = ValueConverterRegistry.GetConverter(elementType);
-                if (elementConverter == null) return null;
-                var listConverterType = typeof(ListConverter<>).MakeGenericType(elementType);
-                return (IValueConverter)Activator.CreateInstance(listConverterType, elementConverter, listDelimiter)!;
+                Version = version;
+                Converter = converter;
             }
+
+            public readonly int Version;
+            public readonly IValueConverter? Converter;
         }
 
-        return ValueConverterRegistry.GetConverter(type);
+        private static Entry? _entry;
+
+        /// <summary>
+        /// <see cref="ValueConverterRegistry.GetConverter(Type)"/> for <typeparamref name="T"/>, cached per type in a
+        /// static field (no dictionary lookup per conversion) until a converter is registered.
+        /// </summary>
+        public static IValueConverter? Get()
+        {
+            var entry = Volatile.Read(ref _entry);
+            // Read the version before the lookup: a registration in between makes the next call look up again.
+            var version = ValueConverterRegistry.Version;
+            if (entry != null && entry.Version == version)
+                return entry.Converter;
+            var converter = ValueConverterRegistry.GetConverter(typeof(T));
+            Volatile.Write(ref _entry, new Entry(version, converter));
+            return converter;
+        }
     }
 }
