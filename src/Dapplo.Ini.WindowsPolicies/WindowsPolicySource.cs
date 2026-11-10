@@ -35,7 +35,7 @@ public sealed class WindowsPolicySource : IValueSource, ISectionValueSource, INa
     /// <summary>Creates a source for the policies of <paramref name="hive"/> below <paramref name="rootPath"/>.</summary>
     /// <param name="hive"><see cref="RegistryHive.LocalMachine"/> or <see cref="RegistryHive.CurrentUser"/>.</param>
     /// <param name="kind">Mandatory or recommended policies.</param>
-    /// <param name="rootPath">The policy root below the hive, e.g. <c>SOFTWARE\Policies\Dapplo\Greenshot</c>.</param>
+    /// <param name="rootPath">The policy root below the hive, e.g. <c>SOFTWARE\Policies\MyCompany\MyProduct</c>.</param>
     /// <param name="view">The registry view; default the 64-bit view.</param>
     /// <param name="watchForChanges">Watch the keys while someone listens to <see cref="ValueChanged"/>.</param>
     /// <param name="changeDebounce">How long to wait for further changes before reporting them; default 250 ms.</param>

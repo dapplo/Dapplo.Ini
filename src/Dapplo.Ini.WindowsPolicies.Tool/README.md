@@ -6,7 +6,7 @@ central store, gpedit, GPMC and Intune ("Import ADMX").
 
 ```shell
 dotnet tool install -g Dapplo.Ini.WindowsPolicies.Tool
-dapplo-ini-admx --assembly bin/Release/net10.0-windows/MyApp.dll --vendor Dapplo --product MyApp \
+dapplo-ini-admx --assembly bin/Release/net10.0-windows/MyApp.dll --vendor MyCompany --product MyApp \
                 --output policies --supported-on "MyApp 2.0 or later" --language en-US --language de-DE
 ```
 

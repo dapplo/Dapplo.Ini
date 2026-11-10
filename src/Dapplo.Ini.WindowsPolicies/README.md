@@ -4,7 +4,7 @@ Makes every setting of a [Dapplo.Ini](https://www.nuget.org/packages/Dapplo.Ini)
 Windows policies: Group Policy (gpedit.msc, GPMC), Intune or a `.reg` file.
 
 ```csharp
-builder.AddWindowsPolicies("Dapplo", "Greenshot");
+builder.AddWindowsPolicies("MyCompany", "MyProduct");
 ```
 
 | Kind | Registry key | Effect |
