@@ -76,13 +76,13 @@ jobs:
         dotnet-version: '10.0.x'
 
     # Trusted publishing (https://learn.microsoft.com/nuget/nuget-org/trusted-publishing): needs a trusted publishing
-    # policy on nuget.org for this repository, workflow file (build.yml) and environment (NuGet), and the repository
-    # variable NUGET_USER with the nuget.org user name (profile name, not the e-mail address) that owns the policy.
+    # policy on nuget.org, owned by the nuget.org user below, for this repository, workflow file (build.yml) and
+    # environment (NuGet).
     - name: NuGet login (OIDC)
       id: nuget-login
       uses: NuGet/login@v1
       with:
-        user: ${{ vars.NUGET_USER }}
+        user: Lakritzator
 
     - name: Push to NuGet
       shell: pwsh
