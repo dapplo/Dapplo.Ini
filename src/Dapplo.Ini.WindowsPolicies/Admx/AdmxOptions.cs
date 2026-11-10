@@ -48,7 +48,7 @@ public sealed class AdmxOptions
     /// </summary>
     public Func<string, string, string, string?>? Localize { get; set; }
 
-    /// <summary>The "Supported on" text, e.g. <c>Greenshot 2.0 or later</c>; default the product name.</summary>
+    /// <summary>The "Supported on" text, e.g. <c>MyProduct 2.0 or later</c>; default the product name.</summary>
     public string? SupportedOn { get; set; }
 
     /// <summary>Also write the recommended policies (a second category tree, users can change them). Default <c>true</c>.</summary>

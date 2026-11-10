@@ -13,7 +13,7 @@ using Microsoft.Win32;
 namespace Dapplo.Ini.WindowsPolicies.Tool;
 
 /// <summary>
-/// <c>dapplo-ini-admx --assembly MyApp.dll --vendor Dapplo --product Greenshot --output policies</c>
+/// <c>dapplo-ini-admx --assembly MyApp.dll --vendor MyCompany --product MyProduct --output policies</c>
 /// </summary>
 internal static class Program
 {

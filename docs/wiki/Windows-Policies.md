@@ -15,10 +15,10 @@ sources find no policies without a registry). Nothing of this is in the core pac
 ## Reading policies
 
 ```csharp
-var config = IniConfigRegistry.ForFile("greenshot.ini")
+var config = IniConfigRegistry.ForFile("myproduct.ini")
     .AddSearchPath(appData)
     .RegisterSection<ICoreSettings>(new CoreSettingsImpl())
-    .AddWindowsPolicies("Dapplo", "Greenshot")
+    .AddWindowsPolicies("MyCompany", "MyProduct")
     .Build();
 ```
 
@@ -47,7 +47,7 @@ section.GetValueOrigin("OutputFileFormat").ToString();
 ### Options
 
 ```csharp
-builder.AddWindowsPolicies("Dapplo", "Greenshot", new WindowsPolicyOptions
+builder.AddWindowsPolicies("MyCompany", "MyProduct", new WindowsPolicyOptions
 {
     IncludeCurrentUser = true,              // HKCU policies (default true)
     IncludeLocalMachine = true,             // HKLM policies (default true)
@@ -111,16 +111,16 @@ gives the key back to the user (or default). Disposing the `IniConfig` stops the
 ## Administrative template (ADMX / ADML)
 
 ```csharp
-var template = AdmxGenerator.Generate(config, new AdmxOptions("Dapplo", "Greenshot")
+var template = AdmxGenerator.Generate(config, new AdmxOptions("MyCompany", "MyProduct")
 {
-    SupportedOn = "Greenshot 2.0 or later",
+    SupportedOn = "MyProduct 2.0 or later",
     Revision = "1.0",                          // raise with every change
     Languages = { "de-DE" },                   // en-US is in the list by default
     Localize = (language, id, text) => Translate(language, id, text),   // null keeps the English text
-    // Prefix = "greenshot", Namespace = "Dapplo.Policies.Greenshot", IncludeRecommended = true,
+    // Prefix = "myproduct", Namespace = "MyCompany.Policies.MyProduct", IncludeRecommended = true,
     // Include = info => …, CategorySelector = info => …
 });
-template.WriteTo(@"artifacts\policies");   // greenshot.admx, en-US\greenshot.adml, de-DE\greenshot.adml
+template.WriteTo(@"artifacts\policies");   // myproduct.admx, en-US\myproduct.adml, de-DE\myproduct.adml
 ```
 
 | Property type | ADMX |
@@ -146,8 +146,8 @@ template.WriteTo(@"artifacts\policies");   // greenshot.admx, en-US\greenshot.ad
 
 ```
 dotnet tool install -g Dapplo.Ini.WindowsPolicies.Tool
-dapplo-ini-admx --assembly bin\Release\net10.0-windows\Greenshot.dll --vendor Dapplo --product Greenshot ^
-                --output artifacts\policies --supported-on "Greenshot 2.0 or later" --language en-US --language de-DE
+dapplo-ini-admx --assembly bin\Release\net10.0-windows\MyProduct.dll --vendor MyCompany --product MyProduct ^
+                --output artifacts\policies --supported-on "MyProduct 2.0 or later" --language en-US --language de-DE
 ```
 
 The tool loads the assembly (with its dependencies) and creates every generated section with its defaults. Point it
@@ -158,7 +158,7 @@ In a build, an `Exec` target after the build does the same:
 
 ```xml
 <Target Name="GeneratePolicyTemplates" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
-  <Exec Command="dapplo-ini-admx --assembly &quot;$(TargetPath)&quot; --vendor Dapplo --product Greenshot --output &quot;$(OutDir)policies&quot;" />
+  <Exec Command="dapplo-ini-admx --assembly &quot;$(TargetPath)&quot; --vendor MyCompany --product MyProduct --output &quot;$(OutDir)policies&quot;" />
 </Target>
 ```
 
@@ -168,10 +168,10 @@ In a build, an `Exec` target after the build does the same:
 
 ```csharp
 // The current values of all sections as mandatory HKLM policies
-PolicyRegFile.Write("greenshot-policies.reg", config.GetSections(), "Dapplo", "Greenshot");
+PolicyRegFile.Write("myproduct-policies.reg", config.GetSections(), "MyCompany", "MyProduct");
 
 // Only what the user changed, as recommended HKCU policies
-PolicyRegFile.Write("recommended.reg", config.GetSections(), "Dapplo", "Greenshot", new PolicyRegFileOptions
+PolicyRegFile.Write("recommended.reg", config.GetSections(), "MyCompany", "MyProduct", new PolicyRegFileOptions
 {
     Kind = PolicyKind.Recommended,
     Hive = RegistryHive.CurrentUser,

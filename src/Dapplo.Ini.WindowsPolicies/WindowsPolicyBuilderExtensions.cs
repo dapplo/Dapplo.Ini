@@ -24,8 +24,8 @@ public static class WindowsPolicyBuilderExtensions
     /// Computer policies win over user policies, as in Group Policy.
     /// </remarks>
     /// <param name="builder">The builder.</param>
-    /// <param name="vendor">The vendor (company) name, e.g. <c>Dapplo</c>.</param>
-    /// <param name="product">The product name, e.g. <c>Greenshot</c>.</param>
+    /// <param name="vendor">The vendor (company) name, e.g. <c>MyCompany</c>.</param>
+    /// <param name="product">The product name, e.g. <c>MyProduct</c>.</param>
     /// <param name="options">Which hives and kinds, the registry view, a root path override and the watching.</param>
     public static IniConfigBuilder AddWindowsPolicies(this IniConfigBuilder builder, string vendor, string product,
         WindowsPolicyOptions? options = null)

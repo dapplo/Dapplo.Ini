@@ -99,11 +99,11 @@ didn't choose a value. `IsUserValue(key)`, `ResetKey(key)`, `WriteInheritedValue
 The package **Dapplo.Ini.WindowsPolicies** makes every setting administrable through Group Policy or Intune:
 
 ```csharp
-builder.AddWindowsPolicies("Dapplo", "Greenshot");
-// HKLM|HKCU\SOFTWARE\Policies\Dapplo\Greenshot\<Section>\<Key>               mandatory   (Constant layer)
-// HKLM|HKCU\SOFTWARE\Policies\Dapplo\Greenshot\Recommended\<Section>\<Key>   recommended (Default layer)
+builder.AddWindowsPolicies("MyCompany", "MyProduct");
+// HKLM|HKCU\SOFTWARE\Policies\MyCompany\MyProduct\<Section>\<Key>               mandatory   (Constant layer)
+// HKLM|HKCU\SOFTWARE\Policies\MyCompany\MyProduct\Recommended\<Section>\<Key>   recommended (Default layer)
 
-AdmxGenerator.Generate(config, new AdmxOptions("Dapplo", "Greenshot")).WriteTo("policies"); // ADMX + ADML
+AdmxGenerator.Generate(config, new AdmxOptions("MyCompany", "MyProduct")).WriteTo("policies"); // ADMX + ADML
 ```
 
 Values are mapped by the property type, changes are picked up while the application runs, and the dotnet tool
