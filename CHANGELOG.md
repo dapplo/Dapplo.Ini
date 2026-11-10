@@ -7,7 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [2.0] - Unreleased
+
+### ⚠ Breaking: the user file keeps only user values
+
+A save now writes only **user values**: values read from the user file, or set by the application after the load
+(property setter, `SetRawValue`, in-place collection change + `MarkAsDirty()`, migrations in `OnAfterLoad`).
+Values from compiled defaults, defaults files, constants files and value sources are inherited and are no longer
+written. Dapplo.Ini 1.x wrote every value on the first save, so a changed defaults file, a changed `[DefaultValue]`
+in a new application version or a removed constant never reached a user who had saved once.
+
+- Inherited keys are written as commented-out lines with their description (`; Key = value`), so the file stays
+  readable and editable by hand; a commented-out line is never read back. `WriteInheritedValuesAsComments(false)`
+  (builder) / `IniWriterOptions.WriteInheritedValuesAsComments` leaves them out.
+- Opt-out: `IniConfigBuilder.SaveAllValues()` writes every value, as before (except constants, see below).
+- Existing files hold every key, so after the update all their values are user values and nothing changes for those
+  users until the application migrates them: `IniConfigBuilder.ConvertUnchangedValuesToInherited()` (once, via the new
+  `[__metadata__]` flag `UserValuesOnly`, needs `EnableMetadata()`), the overload with a condition, or
+  `IniConfig.ConvertUnchangedUserValuesToInherited()` turn user values that equal the defaults-file / compiled value
+  into inherited values.
+- Rebuild projects that use the generator: generated sections implement new members of `IniSectionBase`.
+
+### Added
+- `IIniSection.IsUserValue(key)` and `IIniSection.ResetKey(key)` (back to the defaults-file / compiled value, raises
+  `PropertyChanged`, marks dirty). `ResetToDefaults()` clears all user values and marks the section dirty.
+- `IniEntry.IsCommentedOut` (written as `; Key = value`), `IniFile.FilePath` (set by `IniFileParser.ParseFile`).
+- `IniMetadata.UserValuesOnly`.
+
+### Fixed
+- Constants are never written to the user file. A value the user file holds for a constant key stays in the file
+  untouched, so it comes back when the administrator removes the constant.
+- Values of external value sources are not written to the user file; the user's own value below them stays.
+
+---
 
 Internationalization improvements for Greenshot's move from XML language files to `Dapplo.Ini.Internationalization`.
 All new behaviour is opt-in; existing code keeps working.

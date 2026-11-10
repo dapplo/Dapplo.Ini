@@ -234,6 +234,8 @@ public static class IniFileWriter
                 else if (entryOptions.WriteComments)
                     WriteComments(writer, entry.Comments);
 
+                if (entry.IsCommentedOut)
+                    writer.Write("; ");
                 writer.Write(entry.Key);
                 writer.Write(entryOptions.AssignmentSeparator);
                 writer.WriteLine(FormatValue(entry.Value, entryOptions));

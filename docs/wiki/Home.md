@@ -5,6 +5,7 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
 - ✅ Define configuration sections as **annotated interfaces**
 - ✅ Concrete classes are **auto-generated** — no boilerplate
 - ✅ **Layered** loading: defaults → user file → admin constants → external sources
+- ✅ **User file keeps only user values** — inherited values are written as commented-out lines, so a changed default or defaults file reaches every user ([[User-Values]])
 - ✅ **In-place reload** with singleton guarantee (safe for DI)
 - ✅ **File locking** to prevent external modification
 - ✅ **File-change monitoring** with optional consumer hook
@@ -82,6 +83,7 @@ config.Save();
 | [[Loading-Configuration]] | `IniConfigBuilder` fluent API, AppData, write target |
 | [[Reloading]] | `Reload()`, `ReloadAsync()`, singleton guarantee, `Reloaded` event |
 | [[Saving]] | `Save()`, `SaveAsync()`, `IBeforeSave`, `IAfterSave` |
+| [[User-Values]] | Only user values are saved, `IsUserValue`, `ResetKey`, migrating 1.x files |
 | [[File-Locking]] | Holding the file open exclusively |
 | [[File-Change-Monitoring]] | `FileSystemWatcher`, `ReloadDecision`, postponed reload |
 | [[External-Value-Sources]] | `IValueSource` and `IValueSourceAsync` — environment variables, registry, REST APIs |

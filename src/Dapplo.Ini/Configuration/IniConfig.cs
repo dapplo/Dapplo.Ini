@@ -83,6 +83,12 @@ public sealed class IniConfig : IDisposable
     /// <summary>Set via <see cref="IniConfigBuilder.PreserveUnknownSections"/> (implied by late registration).</summary>
     internal bool PreserveUnknownSections;
 
+    /// <summary>Set via <see cref="IniConfigBuilder.SaveAllValues"/>: a save writes every value, not only the user values.</summary>
+    internal bool SaveAllValuesOnSave;
+
+    /// <summary>Set via <see cref="IniConfigBuilder.ConvertUnchangedValuesToInherited(Func{IniMetadata?, bool})"/>.</summary>
+    internal Func<IniMetadata?, bool>? ConvertUnchangedValuesWhen;
+
     // The file data kept after a load / reload: all layers with AllowLateRegistration, only the user
     // file with PreserveUnknownSections, nothing otherwise. Replaced (never modified) under the gate.
     private LayerSnapshot? _retained;
@@ -569,6 +575,7 @@ public sealed class IniConfig : IDisposable
                 before = CaptureForChangeNotification(sections);
                 ApplySnapshot(sections, snapshot, updateMetadata: true);
                 ApplyValueSources(sections);
+                CaptureMutableValues(sections);
                 ClearDirtyFlags(sections);
                 Retain(snapshot);
                 RunAfterLoadHooks(sections);
@@ -619,6 +626,7 @@ public sealed class IniConfig : IDisposable
                 before = CaptureForChangeNotification(sections);
                 ApplySnapshot(sections, snapshot, updateMetadata: true);
                 await ApplyValueSourcesAsync(sections, cancellationToken).ConfigureAwait(false);
+                CaptureMutableValues(sections);
                 ClearDirtyFlags(sections);
                 Retain(snapshot);
                 await RunAfterLoadHooksAsync(sections, cancellationToken).ConfigureAwait(false);
@@ -1056,6 +1064,7 @@ public sealed class IniConfig : IDisposable
         var sections = PrepareLateRegistration(keyType, section);
         ApplySnapshot(sections, _retained!, updateMetadata: false);
         ApplyValueSources(sections);
+        CaptureMutableValues(sections);
         ClearDirtyFlags(sections);
         SetSection(keyType, section);
         RunAfterLoadHooks(sections);
@@ -1074,6 +1083,7 @@ public sealed class IniConfig : IDisposable
         ApplySnapshot(sections, _retained!, updateMetadata: false);
         await ApplyValueSourcesAsync(sections, cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
+        CaptureMutableValues(sections);
         ClearDirtyFlags(sections);
         SetSection(keyType, section);
         await RunAfterLoadHooksAsync(sections, cancellationToken).ConfigureAwait(false);
@@ -1153,7 +1163,9 @@ public sealed class IniConfig : IDisposable
                 var sections = Sections.Values;
                 ApplySnapshot(sections, snapshot, updateMetadata: true);
                 ApplyValueSources(sections);
+                CaptureMutableValues(sections);
                 ClearDirtyFlags(sections);
+                ConvertUnchangedValuesIfRequested(sections, snapshot);
                 Retain(snapshot);
                 _loadState = StateLoaded;
                 NotifyFileResult(snapshot);
@@ -1206,7 +1218,9 @@ public sealed class IniConfig : IDisposable
                 var sections = Sections.Values;
                 ApplySnapshot(sections, snapshot, updateMetadata: true);
                 await ApplyValueSourcesAsync(sections, cancellationToken).ConfigureAwait(false);
+                CaptureMutableValues(sections);
                 ClearDirtyFlags(sections);
+                ConvertUnchangedValuesIfRequested(sections, snapshot);
                 Retain(snapshot);
                 _loadState = StateLoaded;
                 NotifyFileResult(snapshot);
@@ -1452,8 +1466,66 @@ public sealed class IniConfig : IDisposable
             sectionBase.GlobalEmptyWhenNull = GlobalEmptyWhenNull;
             sectionBase.ClearConstants();
             sectionBase.ClearRawValues();
+            sectionBase.ClearValueTracking();
+            sectionBase.IsResetByConfig = true;
+            try
+            {
+                section.ResetToDefaults();
+            }
+            finally
+            {
+                sectionBase.IsResetByConfig = false;
+            }
+            return;
         }
         section.ResetToDefaults();
+    }
+
+    private static void CaptureMutableValues(IReadOnlyList<IIniSection> sections)
+    {
+        foreach (var section in sections)
+            (section as IniSectionBase)?.CaptureMutableValues();
+    }
+
+    /// <summary>
+    /// Runs the migration of <see cref="IniConfigBuilder.ConvertUnchangedValuesToInherited(Func{IniMetadata?, bool})"/>
+    /// when the application asked for it and its condition holds for the file that was read.
+    /// </summary>
+    private void ConvertUnchangedValuesIfRequested(IReadOnlyList<IIniSection> sections, LayerSnapshot snapshot)
+    {
+        if (ConvertUnchangedValuesWhen == null || snapshot.User == null || !ConvertUnchangedValuesWhen(Metadata))
+            return;
+        ConvertUnchangedUserValuesToInherited(sections);
+    }
+
+    /// <summary>
+    /// Turns every user value that equals the value it would inherit — the value of the defaults files, or else the
+    /// compiled default — into an inherited value, in all registered sections. The current values do not change;
+    /// the keys are just no longer written to the user file, so a later change of the default reaches them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Use this once, to migrate a user file that was written with every value (by Dapplo.Ini 1.x or with
+    /// <see cref="IniConfigBuilder.SaveAllValues"/>): such a file holds every key, so the library can't tell which
+    /// values the user chose. A user who chose the default on purpose loses that choice. Do not call it on every load:
+    /// a user value that equals the default is meant to stay a user value.
+    /// <see cref="IniConfigBuilder.ConvertUnchangedValuesToInherited()"/> runs this during the load, before the
+    /// <see cref="IAfterLoad"/> hooks, only for files that need it.
+    /// </para>
+    /// <para>Sections with converted keys are marked dirty, so the next save cleans up the file.</para>
+    /// </remarks>
+    /// <returns>The number of keys that were converted.</returns>
+    public int ConvertUnchangedUserValuesToInherited() => ConvertUnchangedUserValuesToInherited(Sections.Values);
+
+    private static int ConvertUnchangedUserValuesToInherited(IReadOnlyList<IIniSection> sections)
+    {
+        var converted = 0;
+        foreach (var section in sections)
+        {
+            if (section is IniSectionBase sectionBase)
+                converted += sectionBase.ConvertUnchangedUserValuesToInherited();
+        }
+        return converted;
     }
 
     private static IniMetadata? ReadMetadata(IniFile userFile)
@@ -1468,6 +1540,7 @@ public sealed class IniConfig : IDisposable
             ApplicationName = metaIniSection.GetValue("CreatedBy"),
             SavedOn         = metaIniSection.GetValue("SavedOn"),
             CommitHash      = metaIniSection.GetValue("CommitHash"),
+            UserValuesOnly  = string.Equals(metaIniSection.GetValue(UserValuesOnlyKey), "True", StringComparison.OrdinalIgnoreCase),
         };
     }
 
@@ -1511,10 +1584,18 @@ public sealed class IniConfig : IDisposable
                         NotifyExtendedListeners(l => l.OnValueSourceIgnored(section.SectionName, key, value));
                         continue;
                     }
-                    section.SetRawValue(key, value);
+                    ApplySourceValue(section, key, value, source);
                 }
             }
         }
+    }
+
+    private static void ApplySourceValue(IIniSection section, string key, string? value, object source)
+    {
+        if (section is IniSectionBase sectionBase)
+            sectionBase.ApplyLayerValue(key, value, new ValueOrigin(ValueOriginKind.ValueSource, null, source));
+        else
+            section.SetRawValue(key, value);
     }
 
     internal Task ApplyValueSourcesAsync(CancellationToken cancellationToken = default)
@@ -1540,7 +1621,7 @@ public sealed class IniConfig : IDisposable
                         NotifyExtendedListeners(l => l.OnValueSourceIgnored(section.SectionName, key, value));
                         continue;
                     }
-                    section.SetRawValue(key, value);
+                    ApplySourceValue(section, key, value, source);
                 }
             }
         }
@@ -1604,6 +1685,9 @@ public sealed class IniConfig : IDisposable
     // The name of the special metadata section prepended to the INI file when opted in.
     internal const string MetadataSectionName = "__metadata__";
 
+    // [__metadata__] key that marks a file holding only user values.
+    private const string UserValuesOnlyKey = "UserValuesOnly";
+
     internal IniFile BuildIniFile() => BuildIniFile(Sections.Values);
 
     private IniFile BuildIniFile(IReadOnlyList<IIniSection> sections)
@@ -1611,7 +1695,7 @@ public sealed class IniConfig : IDisposable
         // With PreserveUnknownSections the retained user file is the starting point, so sections nobody
         // registered, keys a section does not declare, the section order and existing comments survive.
         var baseFile = PreserveUnknownSections ? _retained?.User : null;
-        var iniFile = baseFile?.Clone() ?? new Parsing.IniFile();
+        var iniFile = baseFile != null ? CloneWithoutValueComments(baseFile, sections) : new Parsing.IniFile();
         iniFile.AssignmentSeparator = WriterOptions.AssignmentSeparator;
 
         foreach (var section in sections)
@@ -1640,6 +1724,8 @@ public sealed class IniConfig : IDisposable
             metaSection.SetValue("SavedOn", DateTimeOffset.Now.ToString("yyyy-MM-dd'T'HH:mm:sszzz", System.Globalization.CultureInfo.InvariantCulture));
             if (!string.IsNullOrEmpty(MetadataConfig.CommitHash))
                 metaSection.SetValue("CommitHash", MetadataConfig.CommitHash);
+            if (!SaveAllValuesOnSave)
+                metaSection.SetValue(UserValuesOnlyKey, "True");
             iniFile.PrependSection(metaSection);
         }
 
@@ -1652,9 +1738,14 @@ public sealed class IniConfig : IDisposable
         return iniFile;
     }
 
-    /// <summary>Builds the file representation of one registered section from its current values.</summary>
-    private static Parsing.IniSection BuildSection(IniSectionBase sectionBase, StringComparer keyComparer)
+    /// <summary>
+    /// Builds the file representation of one registered section from its current values: user values as values,
+    /// inherited values as commented-out lines (or not at all), constants not at all.
+    /// </summary>
+    private Parsing.IniSection BuildSection(IniSectionBase sectionBase, StringComparer keyComparer)
     {
+        var changedInPlace = sectionBase.GetKeysChangedInPlace();
+        var writeInherited = WriterOptions.WriteInheritedValuesAsComments;
         var sectionDesc = sectionBase.GetSectionDescription();
         var sectionComments = sectionDesc != null
             ? (IReadOnlyList<string>)new[] { sectionDesc }
@@ -1667,6 +1758,11 @@ public sealed class IniConfig : IDisposable
 
         foreach (var rawKvp in sectionBase.GetAllRawValues())
         {
+            var saveKind = sectionBase.GetSaveKind(rawKvp.Key, rawKvp.Value, changedInPlace?.Contains(rawKvp.Key) == true,
+                SaveAllValuesOnSave, out var value);
+            if (saveKind == IniSectionBase.SaveKind.Skip || (saveKind == IniSectionBase.SaveKind.Inherited && !writeInherited))
+                continue;
+
             var propDesc = sectionBase.GetPropertyDescription(rawKvp.Key);
             if (propDesc == null)
             {
@@ -1682,9 +1778,10 @@ public sealed class IniConfig : IDisposable
             var propComments = propDesc != null
                 ? (IReadOnlyList<string>)new[] { propDesc }
                 : Array.Empty<string>();
-            iniSection.SetEntry(new Parsing.IniEntry(rawKvp.Key, rawKvp.Value, propComments)
+            iniSection.SetEntry(new Parsing.IniEntry(rawKvp.Key, value, propComments)
             {
-                WriterOptionsOverride = sectionBase.GetPropertyWriterOptions(rawKvp.Key)
+                WriterOptionsOverride = sectionBase.GetPropertyWriterOptions(rawKvp.Key),
+                IsCommentedOut = saveKind == IniSectionBase.SaveKind.Inherited
             });
         }
         return iniSection;
@@ -1713,6 +1810,7 @@ public sealed class IniConfig : IDisposable
                 merged.SetEntry(new Parsing.IniEntry(entry.Key, update.Value, entry.Comments.Count > 0 ? entry.Comments : update.Comments)
                 {
                     WriterOptionsOverride = update.WriterOptionsOverride,
+                    IsCommentedOut = update.IsCommentedOut,
                     LeadingTrivia = entry.LeadingTrivia
                 });
             }
@@ -1726,11 +1824,112 @@ public sealed class IniConfig : IDisposable
         return merged;
     }
 
+    /// <summary>
+    /// Copies the retained user file without the commented-out value lines (<c>; Key = value</c>) that an earlier
+    /// save wrote for inherited values of the registered sections, together with the description above each.
+    /// They are written again where they apply, so they would otherwise pile up on every save.
+    /// </summary>
+    private Parsing.IniFile CloneWithoutValueComments(Parsing.IniFile source, IReadOnlyList<IIniSection> sections)
+    {
+        var clone = source.Clone();
+        IniSectionBase? previous = null;
+        foreach (var section in clone.Sections.ToArray())
+        {
+            var owner = sections.FirstOrDefault(s => clone.GetSection(s.SectionName) == section) as IniSectionBase;
+            // Lines above a header belong to the end of the section before it.
+            var cleaned = new Parsing.IniSection(section.Name, StripValueComments(section.Comments, previous, false)!, clone.KeyComparer)
+            {
+                WriterOptionsOverride = section.WriterOptionsOverride,
+                LeadingTrivia = StripValueComments(section.LeadingTrivia, previous, true)
+            };
+            foreach (var entry in section.Entries)
+            {
+                cleaned.SetEntry(new Parsing.IniEntry(entry.Key, entry.Value, StripValueComments(entry.Comments, owner, false)!)
+                {
+                    WriterOptionsOverride = entry.WriterOptionsOverride,
+                    IsCommentedOut = entry.IsCommentedOut,
+                    LeadingTrivia = StripValueComments(entry.LeadingTrivia, owner, true)
+                });
+            }
+            clone.AddSection(cleaned);
+            previous = owner;
+        }
+        clone.TrailingTrivia = StripValueComments(clone.TrailingTrivia, previous, true);
+        return clone;
+    }
+
+    /// <summary>
+    /// Removes the lines of <paramref name="lines"/> that are a commented-out value of a key of <paramref name="owner"/>,
+    /// and the description written directly above such a line.
+    /// </summary>
+    /// <param name="lines">Comments (without the comment character) or, with <paramref name="isTrivia"/>, raw lines.</param>
+    /// <param name="owner">The registered section the lines belong to; <c>null</c> keeps the lines.</param>
+    /// <param name="isTrivia"><c>true</c> when the lines are raw lines, including the comment character.</param>
+    private IReadOnlyList<string>? StripValueComments(IReadOnlyList<string>? lines, IniSectionBase? owner, bool isTrivia)
+    {
+        if (lines == null || lines.Count == 0 || owner == null)
+            return lines;
+        List<string>? result = null;
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var content = isTrivia ? CommentContent(lines[i]) : lines[i];
+            var propertyKey = content != null ? GetCommentedValueKey(content, owner) : null;
+            if (propertyKey == null)
+            {
+                result?.Add(lines[i]);
+                continue;
+            }
+            result ??= lines.Take(i).ToList();
+            // The description written above the commented-out value
+            var description = owner.GetPropertyDescription(propertyKey);
+            if (description == null)
+                continue;
+            var descriptionLines = description.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None);
+            if (result.Count < descriptionLines.Length)
+                continue;
+            var start = result.Count - descriptionLines.Length;
+            var matches = true;
+            for (var d = 0; d < descriptionLines.Length && matches; d++)
+            {
+                var candidate = isTrivia ? CommentContent(result[start + d]) : result[start + d];
+                matches = string.Equals(candidate?.TrimEnd(), descriptionLines[d].TrimEnd(), StringComparison.Ordinal);
+            }
+            if (matches)
+                result.RemoveRange(start, descriptionLines.Length);
+        }
+        return result ?? lines;
+    }
+
+    /// <summary>The text of a <c>;</c> comment line without the <c>;</c> and one space, or <c>null</c> for another line.</summary>
+    private static string? CommentContent(string line)
+    {
+        var trimmed = line.TrimStart();
+        if (trimmed.Length == 0 || trimmed[0] != ';')
+            return null;
+        return trimmed.Length > 1 && trimmed[1] == ' ' ? trimmed.Substring(2) : trimmed.Substring(1);
+    }
+
+    /// <summary>
+    /// When <paramref name="comment"/> has the form <c>Key = value</c> for a key of <paramref name="owner"/>, returns the
+    /// key of its property; otherwise <c>null</c>.
+    /// </summary>
+    private string? GetCommentedValueKey(string comment, IniSectionBase owner)
+    {
+        var index = comment.IndexOfAny(ParserOptions.AssignmentDelimiters.ToCharArray());
+        if (index <= 0)
+            return null;
+        var key = comment.Substring(0, index).Trim();
+        return key.Length > 0 && key.IndexOf(' ') < 0 ? owner.GetDeclaredPropertyKey(key) : null;
+    }
+
     // Created once instead of per section and load.
     private Action<string, string, string?, Exception>? _conversionFailedCallback;
 
     private void ApplyIniFile(IniFile iniFile, IReadOnlyList<IIniSection> sections, bool isConstant = false, bool isDefault = false)
     {
+        var origin = new ValueOrigin(
+            isConstant ? ValueOriginKind.ConstantsFile : isDefault ? ValueOriginKind.DefaultsFile : ValueOriginKind.UserFile,
+            iniFile.FilePath, null);
         foreach (var section in sections)
         {
             var iniSection = iniFile.GetSection(section.SectionName);
@@ -1753,11 +1952,17 @@ public sealed class IniConfig : IDisposable
             {
                 foreach (var entry in iniSection.Entries)
                 {
+                    // A commented-out entry (an inherited value written for reference) is no value.
+                    if (entry.IsCommentedOut) continue;
+
                     // Check property-level skip flags.
                     if (isDefault && sectionBase?.IsIgnoreDefaultsKey(entry.Key) == true) continue;
                     if (isConstant && sectionBase?.IsIgnoreConstantsKey(entry.Key) == true) continue;
 
-                    section.SetRawValue(entry.Key, entry.Value);
+                    if (sectionBase != null)
+                        sectionBase.ApplyLayerValue(entry.Key, entry.Value, origin);
+                    else
+                        section.SetRawValue(entry.Key, entry.Value);
 
                     // When applying a constants file, protect this key from further changes.
                     if (isConstant && sectionBase != null)

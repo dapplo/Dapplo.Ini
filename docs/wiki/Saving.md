@@ -1,7 +1,7 @@
 # Saving
 
 ```csharp
-// Saves all section values back to the file that was loaded
+// Saves the user values back to the file that was loaded
 // (or the first writable search path when no existing file was found).
 config.Save();
 
@@ -11,6 +11,16 @@ await config.SaveAsync(cancellationToken);
 
 > **Note:** Own `Save()` / `SaveAsync()` calls are automatically detected and never
 > trigger the file-change monitor, so a save does not cause an unwanted reload loop.
+
+---
+
+## What is written
+
+Only **user values** are written: values read from the user file or set by the application after the
+load. Inherited values (compiled defaults, defaults files, value sources) are written as commented-out
+lines (`; Key = value`), constants are never written. See [[User-Values]] for the details, the
+`WriteInheritedValuesAsComments(false)` and `SaveAllValues()` options and the migration of files that
+were written by Dapplo.Ini 1.x.
 
 ---
 
@@ -80,6 +90,8 @@ Convenience methods:
 - `EnableEscapeSequencesOnWrite()`
 - `QuoteValuesOnWrite(...)`
 - `SkipCommentsOnWrite()`
+- `WriteInheritedValuesAsComments(bool)` — inherited keys as `; Key = value` lines (default) or not at all
+- `SaveAllValues()` — write every value, as Dapplo.Ini 1.x did (constants are still never written)
 
 `IniConfig` always writes with its writer options (default separator ` = `). When you use the
 low-level `IniFileWriter` directly without options, it keeps the `AssignmentSeparator` of the

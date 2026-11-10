@@ -250,7 +250,9 @@ public static class IniFileParser
     {
         // Read into a pooled buffer and parse from it: no string for the whole content.
         using var reader = PooledLineReader.OpenFile(filePath, encoding);
-        return Parse(reader.ReadToEnd(), options);
+        var iniFile = Parse(reader.ReadToEnd(), options);
+        iniFile.FilePath = filePath;
+        return iniFile;
     }
 
     /// <summary>
@@ -269,7 +271,9 @@ public static class IniFileParser
     {
         using var reader = PooledLineReader.OpenFile(filePath, encoding, asynchronous: true);
         await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
-        return Parse(reader.ReadToEnd(), options);
+        var iniFile = Parse(reader.ReadToEnd(), options);
+        iniFile.FilePath = filePath;
+        return iniFile;
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

@@ -26,6 +26,13 @@ public sealed class IniEntry
     public IReadOnlyList<string>? LeadingTrivia { get; set; }
 
     /// <summary>
+    /// When <c>true</c> the entry is written as a commented-out line (<c>; Key = value</c>): a value shown for
+    /// reference, e.g. an inherited value that is not stored in the user file. Such a line is a comment when the
+    /// file is read again; removing the <c>; </c> makes it a real value.
+    /// </summary>
+    public bool IsCommentedOut { get; set; }
+
+    /// <summary>
     /// Optional writer overrides for this specific key.
     /// </summary>
     public IniWriterOptionsOverride? WriterOptionsOverride { get; set; }

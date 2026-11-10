@@ -33,12 +33,20 @@ public sealed class IniWriterOptions
     /// </summary>
     public bool WriteComments { get; set; } = true;
 
+    /// <summary>
+    /// When true (the default), keys whose value is inherited (compiled default, defaults file, value source) and
+    /// therefore not stored in the user file are written as commented-out lines, e.g. <c>; Key = value</c>, with
+    /// their description, so the file stays readable and editable by hand.
+    /// </summary>
+    public bool WriteInheritedValuesAsComments { get; set; } = true;
+
     internal IniWriterOptions Clone() => new()
     {
         AssignmentSeparator = AssignmentSeparator,
         QuoteStyle = QuoteStyle,
         EscapeSequences = EscapeSequences,
-        WriteComments = WriteComments
+        WriteComments = WriteComments,
+        WriteInheritedValuesAsComments = WriteInheritedValuesAsComments
     };
 
     internal IniWriterOptions Apply(IniWriterOptionsOverride? optionsOverride)

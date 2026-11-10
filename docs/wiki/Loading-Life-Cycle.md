@@ -104,6 +104,9 @@ custom converters can be registered with `ValueConverterRegistry.Register()`.
 5. Compiled defaults (`[IniValue(DefaultValue = "…")]`) — fallback when nothing else is set
 6. Type default (`default(T)`) — when `DefaultValue` is absent
 
+Only the values of the user file (and values the application sets) are written back on save; the
+other layers stay where they are, so a change there reaches the user. See [[User-Values]].
+
 ---
 
 ## See also

@@ -64,9 +64,28 @@ public interface IIniSection
     void SetRawValue(string key, string? value);
 
     /// <summary>
-    /// Resets all properties to their default values.
+    /// Resets all properties to their compiled default values. No key holds a user value afterwards, so the
+    /// next save removes the values from the user file and the next load applies the defaults files again.
     /// </summary>
     void ResetToDefaults();
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="key"/> holds a <em>user value</em>: a value read from the user
+    /// file or set by the application (property setter, <see cref="SetRawValue"/>) after the load.
+    /// Only user values are written to the user file. Keys whose value comes from the compiled default,
+    /// a defaults file, a constants file or a value source are inherited and not written, so a later change
+    /// of that layer reaches the user.
+    /// </summary>
+    /// <param name="key">The key of a property, or of an entry <c>Property.subkey</c> of a sub-key dictionary.</param>
+    bool IsUserValue(string key);
+
+    /// <summary>
+    /// Turns the value of <paramref name="key"/> back into an inherited value: the property gets the value of
+    /// the defaults file, or else its compiled default, and the key is no longer written to the user file.
+    /// </summary>
+    /// <param name="key">The key of a property; for a sub-key dictionary the whole dictionary is reset.</param>
+    /// <exception cref="AccessViolationException">The key is protected by a constants file.</exception>
+    void ResetKey(string key);
 
     /// <summary>
     /// Gets a value indicating whether this section has unsaved changes since the last
