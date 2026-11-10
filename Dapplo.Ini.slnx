@@ -2,10 +2,13 @@
   <Folder Name="/src/">
     <Project Path="src/Dapplo.Ini.Generator/Dapplo.Ini.Generator.csproj" />
     <Project Path="src/Dapplo.Ini/Dapplo.Ini.csproj" />
+    <Project Path="src/Dapplo.Ini.WindowsPolicies/Dapplo.Ini.WindowsPolicies.csproj" />
+    <Project Path="src/Dapplo.Ini.WindowsPolicies.Tool/Dapplo.Ini.WindowsPolicies.Tool.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Dapplo.Ini.Tests/Dapplo.Ini.Tests.csproj" />
     <Project Path="tests/Dapplo.Ini.Internationalization.Tests/Dapplo.Ini.Internationalization.Tests.csproj" />
     <Project Path="tests/Dapplo.Ini.Generator.Tests/Dapplo.Ini.Generator.Tests.csproj" />
+    <Project Path="tests/Dapplo.Ini.WindowsPolicies.Tests/Dapplo.Ini.WindowsPolicies.Tests.csproj" />
   </Folder>
 </Solution>

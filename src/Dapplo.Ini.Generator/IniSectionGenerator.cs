@@ -1051,6 +1051,14 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                         $"{fieldName}[DecodeSubKey(key.Substring({keyName.Length + 1}))] = ConvertFromRaw<{p.DictionaryValueTypeFullName}>(rawValue);",
                         "return;"
                     }));
+                    // The property key itself with the inline format (key=value,...): the whole dictionary at once, as a
+                    // value source supplies it.
+                    exact.Add((keyIndex[p], new[]
+                    {
+                        $"{fieldName} = {BuildConvertFromRawCall(p, "rawValue")} ?? new System.Collections.Generic.Dictionary<string, {p.DictionaryValueTypeFullName}>(System.StringComparer.OrdinalIgnoreCase);",
+                        $"{fieldName}HasRawEntries = true;",
+                        "return;"
+                    }));
                 }
                 else
                 {

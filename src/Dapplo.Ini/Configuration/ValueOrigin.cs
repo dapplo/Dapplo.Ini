@@ -1,10 +1,12 @@
 // Copyright (c) Dapplo. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for details.
 
+using Dapplo.Ini.Interfaces;
+
 namespace Dapplo.Ini.Configuration;
 
-/// <summary>Where the current value of a key came from.</summary>
-internal enum ValueOriginKind
+/// <summary>Where the current value of a key came from, see <see cref="IIniSection.GetValueOrigin"/>.</summary>
+public enum ValueOriginKind
 {
     /// <summary>The compiled default (<c>[DefaultValue]</c> / <c>[IniValue(DefaultValue = …)]</c>) of the property.</summary>
     CompiledDefault,
@@ -14,26 +16,33 @@ internal enum ValueOriginKind
     UserFile,
     /// <summary>A constants file registered with <see cref="IniConfigBuilder.AddConstantsFile"/>.</summary>
     ConstantsFile,
-    /// <summary>An external value source registered with <see cref="IniConfigBuilder.AddValueSource(Interfaces.IValueSource)"/>.</summary>
+    /// <summary>An external value source registered with <see cref="IniConfigBuilder.AddValueSource(IValueSource, ValueSourceLayer)"/>.</summary>
     ValueSource
 }
 
 /// <summary>
-/// Describes where the current value of a key came from.
+/// Describes where the current value of a key came from: returned by <see cref="IIniSection.GetValueOrigin"/>.
 /// </summary>
-internal sealed class ValueOrigin
+public sealed class ValueOrigin : IEquatable<ValueOrigin>
 {
     /// <summary>The value is the compiled default of the property.</summary>
-    public static readonly ValueOrigin CompiledDefault = new(ValueOriginKind.CompiledDefault, null, null);
+    public static readonly ValueOrigin CompiledDefault = new(ValueOriginKind.CompiledDefault, null, null, null);
 
     /// <summary>The value was set by the application after the load (it is written to the user file on save).</summary>
-    public static readonly ValueOrigin Application = new(ValueOriginKind.UserFile, null, null);
+    public static readonly ValueOrigin Application = new(ValueOriginKind.UserFile, null, null, null);
 
-    internal ValueOrigin(ValueOriginKind kind, string? filePath, object? source)
+    internal ValueOrigin(ValueOriginKind kind, string? filePath, object? source, ValueSourceLayer? layer)
     {
         Kind = kind;
         FilePath = filePath;
         Source = source;
+        Layer = layer;
+        SourceName = source switch
+        {
+            null => null,
+            INamedValueSource named => named.Name,
+            _ => source.GetType().Name
+        };
     }
 
     /// <summary>The kind of layer that supplied the value.</summary>
@@ -46,21 +55,52 @@ internal sealed class ValueOrigin
     /// </summary>
     public string? FilePath { get; }
 
-    /// <summary>The value source instance for <see cref="ValueOriginKind.ValueSource"/>, otherwise <c>null</c>.</summary>
+    /// <summary>
+    /// The <see cref="IValueSource"/> or <see cref="IValueSourceAsync"/> instance for <see cref="ValueOriginKind.ValueSource"/>,
+    /// otherwise <c>null</c>.
+    /// </summary>
     public object? Source { get; }
 
     /// <summary>
-    /// <c>true</c> when the value is an inherited value: one the user did not choose, which is therefore not
-    /// written to the user file (compiled default, defaults file).
+    /// The name of the value source: <see cref="INamedValueSource.Name"/> when the source implements it, otherwise
+    /// its type name. <c>null</c> when the value does not come from a value source.
     /// </summary>
-    internal bool IsInherited => Kind is ValueOriginKind.CompiledDefault or ValueOriginKind.DefaultsFile;
+    public string? SourceName { get; }
+
+    /// <summary>The layer the value source was registered for; <c>null</c> when the value does not come from a value source.</summary>
+    public ValueSourceLayer? Layer { get; }
 
     /// <summary>
-    /// <c>true</c> when the value comes from a layer above the user file (constants file, value source), which
-    /// hides the user's own value for as long as it supplies one.
+    /// <c>true</c> when the value is an inherited value: one the user did not choose, which is therefore not
+    /// written to the user file (compiled default, defaults file, value source in the <see cref="ValueSourceLayer.Default"/> layer).
     /// </summary>
-    internal bool IsAboveUser => Kind is ValueOriginKind.ConstantsFile or ValueOriginKind.ValueSource;
+    internal bool IsInherited => Kind is ValueOriginKind.CompiledDefault or ValueOriginKind.DefaultsFile
+                                 || (Kind == ValueOriginKind.ValueSource && Layer == ValueSourceLayer.Default);
+
+    /// <summary>
+    /// <c>true</c> when the value comes from a layer above the user file (constants file, value source in the
+    /// <see cref="ValueSourceLayer.Override"/> or <see cref="ValueSourceLayer.Constant"/> layer), which hides the
+    /// user's own value for as long as it supplies one.
+    /// </summary>
+    internal bool IsAboveUser => Kind == ValueOriginKind.ConstantsFile
+                                 || (Kind == ValueOriginKind.ValueSource && Layer != ValueSourceLayer.Default);
 
     /// <inheritdoc/>
-    public override string ToString() => FilePath != null ? $"{Kind} \"{FilePath}\"" : Kind.ToString();
+    public bool Equals(ValueOrigin? other)
+        => other is not null && Kind == other.Kind && Layer == other.Layer && ReferenceEquals(Source, other.Source)
+           && string.Equals(FilePath, other.FilePath, StringComparison.OrdinalIgnoreCase);
+
+    /// <inheritdoc/>
+    public override bool Equals(object? obj) => Equals(obj as ValueOrigin);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => ((int)Kind * 397) ^ (Layer.GetHashCode() * 31) ^ (Source?.GetHashCode() ?? 0);
+
+    /// <summary>For example <c>DefaultsFile "C:\app\defaults.ini"</c> or <c>ValueSource "Windows policy (HKLM, mandatory)" (Constant)</c>.</summary>
+    public override string ToString()
+    {
+        if (Kind == ValueOriginKind.ValueSource)
+            return $"{Kind} \"{SourceName}\" ({Layer})";
+        return FilePath != null ? $"{Kind} \"{FilePath}\"" : Kind.ToString();
+    }
 }

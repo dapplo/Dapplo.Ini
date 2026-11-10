@@ -22,6 +22,8 @@ serialised by one lifecycle gate, so they never interleave.
 │   sections. Later files win over earlier ones.                      │
 │   Sections marked [IniSection(IgnoreDefaults=true)] and properties  │
 │   marked [IniValue(IgnoreDefaults=true)] are skipped.               │
+│   Then value sources of the Default layer, in registration order    │
+│   (same skip flags). Their values are inherited, never saved.       │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────────────┐
@@ -39,13 +41,15 @@ serialised by one lifecycle gate, so they never interleave.
 │   Sections marked [IniSection(IgnoreConstants=true)] and properties │
 │   marked [IniValue(IgnoreConstants=true)] are skipped (and are      │
 │   never write-protected).                                           │
+│   Then value sources of the Constant layer: they win over the       │
+│   constants files and protect the key the same way.                 │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────────────┐
-│ STEP 5 — Apply external value sources (AddValueSource order)        │
+│ STEP 5 — Apply value sources of the Override layer                  │
 │   Each registered IValueSource is queried for every section/key.    │
 │   Sources are applied in registration order; the last one wins.     │
-│   Keys set by a constants file are skipped — constants always win.  │
+│   Constant keys are skipped — constants always win.                 │
 │   During LoadAsync/BuildAsync/ReloadAsync, IValueSourceAsync        │
 │   sources are also queried — after all sync sources.                │
 └──────────────────────────────┬──────────────────────────────────────┘
@@ -97,12 +101,16 @@ custom converters can be registered with `ValueConverterRegistry.Register()`.
 
 ## Value precedence (highest to lowest)
 
-1. Constants files (`AddConstantsFile`) — admin-forced; win over everything, including value sources
-2. External value sources (`AddValueSource`) — applied last, but skipped for constant keys
-3. User INI file (located via `AddSearchPath`) — user-editable
-4. Defaults files (`AddDefaultsFile`) — baseline values
-5. Compiled defaults (`[IniValue(DefaultValue = "…")]`) — fallback when nothing else is set
-6. Type default (`default(T)`) — when `DefaultValue` is absent
+1. Value sources of the `Constant` layer (`AddValueSource(source, ValueSourceLayer.Constant)`) — admin-forced, protected
+2. Constants files (`AddConstantsFile`) — admin-forced, protected; win over the layers below
+3. Value sources of the `Override` layer (`AddValueSource(source)`) — applied last, but skipped for constant keys
+4. User INI file (located via `AddSearchPath`) — user-editable
+5. Value sources of the `Default` layer — a default the user can change
+6. Defaults files (`AddDefaultsFile`) — baseline values
+7. Compiled defaults (`[IniValue(DefaultValue = "…")]`) — fallback when nothing else is set
+8. Type default (`default(T)`) — when `DefaultValue` is absent
+
+`section.GetValueOrigin(key)` tells which of these supplied the current value.
 
 Only the values of the user file (and values the application sets) are written back on save; the
 other layers stay where they are, so a change there reaches the user. See [[User-Values]].

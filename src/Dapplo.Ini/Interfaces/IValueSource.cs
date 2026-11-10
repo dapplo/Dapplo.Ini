@@ -10,11 +10,12 @@ namespace Dapplo.Ini.Interfaces;
 /// environment variables, a web-service endpoint).
 /// </summary>
 /// <remarks>
-/// Implementations are registered with <see cref="Configuration.IniConfigBuilder.AddValueSource"/>
-/// and are consulted at load/reload time.  Sources are applied in registration order and each source
-/// can override the values produced by earlier sources (including defaults and the user INI file).
-/// A source may also raise <see cref="ValueChanged"/> when an external value changes at runtime,
-/// which can trigger an automatic reload of the affected sections.
+/// Implementations are registered with
+/// <see cref="Configuration.IniConfigBuilder.AddValueSource(IValueSource, ValueSourceLayer)"/> and are consulted at
+/// load/reload time, in the <see cref="ValueSourceLayer"/> they were registered for (by default
+/// <see cref="ValueSourceLayer.Override"/>). Inside a layer sources are applied in registration order; a later
+/// source wins. A source may raise <see cref="ValueChanged"/> when an external value changes at runtime: the
+/// configuration then reloads the affected sections (debounced).
 /// </remarks>
 public interface IValueSource
 {

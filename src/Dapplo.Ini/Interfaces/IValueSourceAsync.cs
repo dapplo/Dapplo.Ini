@@ -18,8 +18,8 @@ namespace Dapplo.Ini.Interfaces;
 /// consulted during <see cref="Configuration.IniConfigBuilder.BuildAsync"/> and
 /// <see cref="Configuration.IniConfig.ReloadAsync"/>.
 /// <para>
-/// Sources are applied after defaults, the user INI file, constant files, and synchronous
-/// value sources, in the order they are registered.
+/// Sources are applied in the <see cref="ValueSourceLayer"/> they were registered for (by default
+/// <see cref="ValueSourceLayer.Override"/>), after the synchronous sources of that layer, in registration order.
 /// </para>
 /// <para>
 /// If the source only needs synchronous access (e.g. environment variables, in-memory

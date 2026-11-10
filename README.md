@@ -77,9 +77,15 @@ Every load applies these layers in order; a later layer wins:
 
 1. Compiled defaults (`[DefaultValue]` / `[IniValue(DefaultValue = …)]`)
 2. Defaults files (`AddDefaultsFile`)
-3. The user file
-4. Constants files (`AddConstantsFile`) — protected: `IsConstant(key)` is `true`, setters throw
-5. External value sources (`AddValueSource`) — skipped for constant keys
+3. Value sources in the `Default` layer (`AddValueSource(source, ValueSourceLayer.Default)`) — defaults the user can change
+4. The user file
+5. Constants files (`AddConstantsFile`) — protected: `IsConstant(key)` is `true`, setters throw
+6. Value sources in the `Constant` layer — win over the constants files and are protected the same way
+7. Value sources in the `Override` layer (`AddValueSource(source)`) — skipped for constant keys
+
+Inside a layer, sources apply in registration order (later wins). `section.GetValueOrigin(key)` tells where a
+value came from (kind, file path or source, layer). A `ValueChanged` event of a source reloads the named section
+(debounced, `ValueSourceChangeDebounce`). See the wiki page [External Value Sources](../../wiki/External-Value-Sources).
 
 On save only the **user values** are written: values read from the user file or set by the application.
 Values of the other layers are inherited: they are written as commented-out lines (`; Key = value`),
@@ -87,6 +93,22 @@ constants not at all. A changed defaults file or a new compiled default therefor
 didn't choose a value. `IsUserValue(key)`, `ResetKey(key)`, `WriteInheritedValuesAsComments(false)`,
 `SaveAllValues()` and the migration of files written by Dapplo.Ini 1.x are described on the wiki page
 [User Values](../../wiki/User-Values).
+
+### Windows policies
+
+The package **Dapplo.Ini.WindowsPolicies** makes every setting administrable through Group Policy or Intune:
+
+```csharp
+builder.AddWindowsPolicies("Dapplo", "Greenshot");
+// HKLM|HKCU\SOFTWARE\Policies\Dapplo\Greenshot\<Section>\<Key>               mandatory   (Constant layer)
+// HKLM|HKCU\SOFTWARE\Policies\Dapplo\Greenshot\Recommended\<Section>\<Key>   recommended (Default layer)
+
+AdmxGenerator.Generate(config, new AdmxOptions("Dapplo", "Greenshot")).WriteTo("policies"); // ADMX + ADML
+```
+
+Values are mapped by the property type, changes are picked up while the application runs, and the dotnet tool
+`dapplo-ini-admx` generates the administrative template in a build. See the wiki page
+[Windows Policies](../../wiki/Windows-Policies).
 
 ---
 
@@ -98,6 +120,7 @@ Full documentation is available in the [project wiki](../../wiki):
 - [Getting Started](../../wiki/Getting-Started) — installation and first steps
 - [Defining Sections](../../wiki/Defining-Sections) — `[IniSection]` and `[IniValue]` reference
 - [Generic Access](../../wiki/Generic-Access) — enumerate sections/keys and inspect property types at runtime
+- [Windows Policies](../../wiki/Windows-Policies) — Group Policy / Intune, ADMX/ADML generator, `.reg` export
 
 ## License
 

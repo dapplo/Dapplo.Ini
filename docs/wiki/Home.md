@@ -5,6 +5,7 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
 - ✅ Define configuration sections as **annotated interfaces**
 - ✅ Concrete classes are **auto-generated** — no boilerplate
 - ✅ **Layered** loading: defaults → user file → admin constants → external sources
+- ✅ **Windows policies** — Group Policy / Intune policies (mandatory and recommended) with an ADMX/ADML generator, in the separate package Dapplo.Ini.WindowsPolicies ([[Windows-Policies]])
 - ✅ **User file keeps only user values** — inherited values are written as commented-out lines, so a changed default or defaults file reaches every user ([[User-Values]])
 - ✅ **In-place reload** with singleton guarantee (safe for DI)
 - ✅ **File locking** to prevent external modification
@@ -87,6 +88,7 @@ config.Save();
 | [[File-Locking]] | Holding the file open exclusively |
 | [[File-Change-Monitoring]] | `FileSystemWatcher`, `ReloadDecision`, postponed reload |
 | [[External-Value-Sources]] | `IValueSource` and `IValueSourceAsync` — environment variables, registry, REST APIs |
+| [[Windows-Policies]] | Dapplo.Ini.WindowsPolicies — Group Policy / Intune policies as value sources, ADMX/ADML generator, `.reg` export |
 | [[Validation]] | `IDataValidation<TSelf>` and `INotifyDataErrorInfo` |
 | [[Lifecycle-Hooks]] | `IAfterLoad`, `IBeforeSave`, `IAfterSave` and their async variants |
 | [[Async-Support]] | `BuildAsync`, `ReloadAsync`, `SaveAsync`, `IValueSourceAsync`, `InitialLoadTask`, and async lifecycle hooks |

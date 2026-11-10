@@ -34,6 +34,37 @@ in a new application version or a removed constant never reached a user who had 
 - `IniEntry.IsCommentedOut` (written as `; Key = value`), `IniFile.FilePath` (set by `IniFileParser.ParseFile`).
 - `IniMetadata.UserValuesOnly`.
 
+### Added: value source layers
+- `ValueSourceLayer { Default, Override, Constant }` and `AddValueSource(IValueSource, ValueSourceLayer)` /
+  `AddValueSource(IValueSourceAsync, ValueSourceLayer)`; the existing overloads keep `Override`.
+  - `Default`: after the defaults files, before the user file; inherited (not saved); respects `IgnoreDefaults`.
+  - `Constant`: after the constants files and wins over them; marks the key constant like a constants file
+    (respecting `IgnoreConstants`), never saved. Replacing a constants-file value raises `OnValueSourceIgnored`
+    with the value that lost.
+  - Inside a layer: registration order, later wins (sync sources before async ones). Late sections get all layers.
+- `ValueChanged` of every registered source is now handled: debounced (`ValueSourceChangeDebounce`, default 500 ms),
+  then the named section (or all sections for a wildcard event) is reloaded through the normal reload path
+  (`IAfterLoad`, `PropertyChanged`, `Reloaded`, `OnReloaded`), waiting for a running load/save. Unsaved values the
+  application set are kept.
+- `IIniSection.GetValueOrigin(key)` returns a `ValueOrigin` (`Kind`, `FilePath`, `Source`, `SourceName`, `Layer`);
+  `INamedValueSource` gives a source a name.
+
+### Added: Dapplo.Ini.WindowsPolicies (new package)
+- `AddWindowsPolicies(vendor, product, options)`: reads `SOFTWARE\Policies\<Vendor>\<Product>\<Section>\<Key>`
+  (mandatory, `Constant` layer) and `...\Recommended\...` (recommended, `Default` layer) of HKCU and HKLM (HKLM wins),
+  64-bit view by default. `WindowsPolicySource` per hive and kind; values mapped by the property type (DWORD → bool /
+  integers, SZ / EXPAND_SZ unexpanded → string, enum by name, lists from a sub key 1..n or MULTI_SZ, dictionaries from
+  a sub key). Invalid values are reported via `OnValueConversionFailed` and skipped.
+- Change notification with `RegNotifyChangeKeyValue` on the policy root and its parent, debounced, reloads the
+  configuration; stopped when the `IniConfig` is disposed.
+- `AdmxGenerator`: ADMX + ADML (per language, with a localize callback) for gpedit / GPMC / Intune, categories per
+  section and a recommended tree; attributes `[NotAdministrable]`, `[Secret]`, `[PolicyDisplayName]`,
+  `[PolicyCategory]`, `[PolicyExpandable]`. dotnet tool `dapplo-ini-admx` (package Dapplo.Ini.WindowsPolicies.Tool).
+- `PolicyRegFile`: `.reg` export of section values, mandatory or recommended.
+- Core: `ISectionValueSource` (a source that gets the section, e.g. for the property type) and
+  `InvalidSourceValueException` (reported and skipped, the load continues). A value source can supply a dictionary
+  stored as sub keys through its property key (inline `key=value,...`).
+
 ### Fixed
 - Constants are never written to the user file. A value the user file holds for a constant key stays in the file
   untouched, so it comes back when the administrator removes the constant.

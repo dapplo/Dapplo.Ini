@@ -171,8 +171,8 @@ public abstract partial class IniSectionBase
 
     // ── Internal API for IniConfig ────────────────────────────────────────────
 
-    /// <summary>The origin of the current value of <paramref name="key"/>.</summary>
-    internal ValueOrigin GetOrigin(string key)
+    /// <inheritdoc/>
+    public ValueOrigin GetValueOrigin(string key)
     {
         lock (_sync)
             return _keyStates.TryGetValue(key, out var state) ? state.Origin : ValueOrigin.CompiledDefault;
@@ -211,6 +211,41 @@ public abstract partial class IniSectionBase
         {
             _currentKey = null;
         }
+    }
+
+    /// <summary>The values the application set since the load (user values that are not in the user file yet).</summary>
+    internal List<KeyValuePair<string, string?>> GetApplicationValues()
+    {
+        lock (_sync)
+            return _keyStates.Where(kvp => kvp.Value.IsUser && ReferenceEquals(kvp.Value.Origin, ValueOrigin.Application))
+                .Select(kvp => new KeyValuePair<string, string?>(kvp.Key, kvp.Value.UserRaw))
+                .ToList();
+    }
+
+    /// <summary>
+    /// Puts back values the application set before a reload of the layers (see <see cref="GetApplicationValues"/>).
+    /// A key that a constant or a value source above the user file now supplies keeps that value; the application's
+    /// value is kept below it as the user value. Marks the section dirty.
+    /// </summary>
+    internal void RestoreApplicationValues(List<KeyValuePair<string, string?>> values)
+    {
+        foreach (var kvp in values)
+        {
+            bool hidden;
+            lock (_sync)
+            {
+                var state = GetOrAddState(kvp.Key);
+                hidden = _constantKeys.Contains(kvp.Key) || state.Origin.IsAboveUser;
+                if (hidden)
+                {
+                    state.IsUser = true;
+                    state.UserRaw = kvp.Value;
+                }
+            }
+            if (!hidden)
+                ApplyLayerValue(kvp.Key, kvp.Value, ValueOrigin.Application);
+        }
+        MarkAsDirty();
     }
 
     /// <summary>Forgets everything recorded about the values. Called before the layers are applied again.</summary>
@@ -279,7 +314,7 @@ public abstract partial class IniSectionBase
         lock (_sync)
         {
             _keyStates.TryGetValue(key, out var state);
-            if (_constantKeys.Contains(key))
+            if (_constantKeys.Contains(key) || (propertyKey != null && _constantKeys.Contains(propertyKey)))
             {
                 // A constant is never written; the user's own value below it stays, so it comes back when the
                 // administrator removes the constant.
@@ -312,6 +347,23 @@ public abstract partial class IniSectionBase
                 return SaveKind.Value;
             return SaveKind.Inherited;
         }
+    }
+
+    /// <summary>
+    /// The user values hidden below a constant or a value source that are not among <paramref name="writtenKeys"/>:
+    /// e.g. entries of a dictionary that a value source replaced as a whole. They are written too, so they come
+    /// back when the source stops supplying the key.
+    /// </summary>
+    internal List<KeyValuePair<string, string?>> GetHiddenUserValues(ICollection<string> writtenKeys)
+    {
+        lock (_sync)
+            return _keyStates
+                .Where(kvp => kvp.Value.IsUser && !writtenKeys.Contains(kvp.Key)
+                              && (kvp.Value.Origin.IsAboveUser || _constantKeys.Contains(kvp.Key)
+                                  || (GetPropertyKey(kvp.Key) is { } p && _constantKeys.Contains(p))))
+                .Where(kvp => GetDeclaredPropertyKey(kvp.Key) != null)
+                .Select(kvp => new KeyValuePair<string, string?>(kvp.Key, kvp.Value.UserRaw))
+                .ToList();
     }
 
     /// <summary>

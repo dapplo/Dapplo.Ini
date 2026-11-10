@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net48;net10.0;net10.0-windows</TargetFrameworks>
+    <!-- Lets the net10.0-windows target build (not run) on Linux / macOS build agents too. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Dapplo.Ini.WindowsPolicies</RootNamespace>
+    <AssemblyName>Dapplo.Ini.WindowsPolicies</AssemblyName>
+    <Description>Configure any Dapplo.Ini application through Windows policies (Group Policy, Intune): registry policy value sources with change notification, .reg export and an ADMX/ADML administrative template generator.</Description>
+    <!-- net10.0 (without -windows) lets the ADMX/.reg generation run on any OS, e.g. in a Linux build;
+         there the policy sources find no policies (no registry) and the watcher does nothing. -->
+    <NoWarn Condition="'$(TargetFramework)' == 'net10.0'">$(NoWarn);CA1416</NoWarn>
+    <PackageTags>ini;configuration;group-policy;gpo;intune;admx;registry</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Dapplo.Ini.WindowsPolicies.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dapplo.Ini\Dapplo.Ini.csproj" />
+  </ItemGroup>
+
+</Project>
