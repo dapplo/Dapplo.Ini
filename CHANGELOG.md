@@ -34,6 +34,21 @@ in a new application version or a removed constant never reached a user who had 
 - `IniEntry.IsCommentedOut` (written as `; Key = value`), `IniFile.FilePath` (set by `IniFileParser.ParseFile`).
 - `IniMetadata.UserValuesOnly`.
 
+### Added: value source layers
+- `ValueSourceLayer { Default, Override, Constant }` and `AddValueSource(IValueSource, ValueSourceLayer)` /
+  `AddValueSource(IValueSourceAsync, ValueSourceLayer)`; the existing overloads keep `Override`.
+  - `Default`: after the defaults files, before the user file; inherited (not saved); respects `IgnoreDefaults`.
+  - `Constant`: after the constants files and wins over them; marks the key constant like a constants file
+    (respecting `IgnoreConstants`), never saved. Replacing a constants-file value raises `OnValueSourceIgnored`
+    with the value that lost.
+  - Inside a layer: registration order, later wins (sync sources before async ones). Late sections get all layers.
+- `ValueChanged` of every registered source is now handled: debounced (`ValueSourceChangeDebounce`, default 500 ms),
+  then the named section (or all sections for a wildcard event) is reloaded through the normal reload path
+  (`IAfterLoad`, `PropertyChanged`, `Reloaded`, `OnReloaded`), waiting for a running load/save. Unsaved values the
+  application set are kept.
+- `IIniSection.GetValueOrigin(key)` returns a `ValueOrigin` (`Kind`, `FilePath`, `Source`, `SourceName`, `Layer`);
+  `INamedValueSource` gives a source a name.
+
 ### Fixed
 - Constants are never written to the user file. A value the user file holds for a constant key stays in the file
   untouched, so it comes back when the administrator removes the constant.

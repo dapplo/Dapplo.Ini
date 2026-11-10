@@ -20,8 +20,8 @@ public sealed class IniConfigBuilder
     private readonly List<string> _searchPaths = new();
     private readonly List<string> _defaultFilePaths = new();
     private readonly List<string> _constantFilePaths = new();
-    private readonly List<IValueSource> _valueSources = new();
-    private readonly List<IValueSourceAsync> _valueSourcesAsync = new();
+    private readonly List<IniConfig.ValueSourceRegistration> _valueSources = new();
+    private TimeSpan? _valueSourceDebounce;
 
     // Maps interface type → section instance
     private readonly Dictionary<Type, IIniSection> _sections = new();
@@ -239,30 +239,68 @@ public sealed class IniConfigBuilder
     // ── external value sources ────────────────────────────────────────────────
 
     /// <summary>
-    /// Registers an external <see cref="IValueSource"/> (e.g. Windows Registry, environment
-    /// variables, a web-service endpoint) that can supply or override individual values.
-    /// Sources are applied after defaults, the user file and constant files, in the order they
-    /// are registered.
+    /// Registers an external <see cref="IValueSource"/> (e.g. environment variables, a configuration service) in the
+    /// <see cref="ValueSourceLayer.Override"/> layer: its values override the user file, but not constants.
+    /// Same as <see cref="AddValueSource(IValueSource, ValueSourceLayer)"/> with <see cref="ValueSourceLayer.Override"/>.
     /// </summary>
-    public IniConfigBuilder AddValueSource(IValueSource source)
+    public IniConfigBuilder AddValueSource(IValueSource source) => AddValueSource(source, ValueSourceLayer.Override);
+
+    /// <summary>
+    /// Registers an external <see cref="IValueSource"/> in the given <paramref name="layer"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The layers of a load, lowest first (a later one wins): compiled defaults, defaults files,
+    /// <see cref="ValueSourceLayer.Default"/> sources, user file, constants files, <see cref="ValueSourceLayer.Constant"/>
+    /// sources, <see cref="ValueSourceLayer.Override"/> sources (skipped for constant keys). Inside a layer the sources are
+    /// applied in registration order (synchronous sources before asynchronous ones); a later source wins. Late registered
+    /// sections (<see cref="AllowLateSectionRegistration"/>) get all layers too.
+    /// </para>
+    /// <para>
+    /// Values of value sources are never written to the user file. After the load the configuration subscribes to
+    /// <see cref="IValueSource.ValueChanged"/>: changes are debounced (<see cref="ValueSourceChangeDebounce"/>) and the named
+    /// section, or every section for a wildcard event, is reloaded.
+    /// </para>
+    /// </remarks>
+    /// <param name="source">The source.</param>
+    /// <param name="layer">Where the values are applied, see <see cref="ValueSourceLayer"/>.</param>
+    public IniConfigBuilder AddValueSource(IValueSource source, ValueSourceLayer layer)
     {
         if (source is null) throw new ArgumentNullException(nameof(source));
-        _valueSources.Add(source);
+        _valueSources.Add(new IniConfig.ValueSourceRegistration(source, layer));
         return this;
     }
 
     /// <summary>
     /// Registers an external <see cref="IValueSourceAsync"/> for configuration sources that
-    /// perform asynchronous I/O (e.g. REST APIs, remote configuration services).
-    /// Async sources are applied after all synchronous sources, in the order they are registered.
-    /// Async sources are only consulted during <see cref="BuildAsync"/> and
-    /// <see cref="IniConfig.ReloadAsync"/>; the synchronous <see cref="Build"/> and
-    /// <see cref="IniConfig.Reload"/> methods skip them.
+    /// perform asynchronous I/O (e.g. REST APIs, remote configuration services), in the
+    /// <see cref="ValueSourceLayer.Override"/> layer.
+    /// Async sources are only consulted during <see cref="BuildAsync"/>, <see cref="IniConfig.LoadAsync"/>,
+    /// <see cref="IniConfig.ReloadAsync"/> and <see cref="IniConfig.AddSectionAsync{T}"/>; the synchronous
+    /// <see cref="Build"/> and <see cref="IniConfig.Reload"/> methods skip them.
     /// </summary>
-    public IniConfigBuilder AddValueSource(IValueSourceAsync source)
+    public IniConfigBuilder AddValueSource(IValueSourceAsync source) => AddValueSource(source, ValueSourceLayer.Override);
+
+    /// <summary>
+    /// Registers an external <see cref="IValueSourceAsync"/> in the given <paramref name="layer"/>.
+    /// See <see cref="AddValueSource(IValueSource, ValueSourceLayer)"/> for the layers and
+    /// <see cref="AddValueSource(IValueSourceAsync)"/> for when async sources are consulted.
+    /// </summary>
+    public IniConfigBuilder AddValueSource(IValueSourceAsync source, ValueSourceLayer layer)
     {
         if (source is null) throw new ArgumentNullException(nameof(source));
-        _valueSourcesAsync.Add(source);
+        _valueSources.Add(new IniConfig.ValueSourceRegistration(source, layer));
+        return this;
+    }
+
+    /// <summary>
+    /// How long to wait after a <see cref="IValueSource.ValueChanged"/> event before the changed sections are reloaded;
+    /// further events in that time restart the wait, so a burst of changes causes one reload. Defaults to 500 ms.
+    /// </summary>
+    public IniConfigBuilder ValueSourceChangeDebounce(TimeSpan delay)
+    {
+        if (delay < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(delay));
+        _valueSourceDebounce = delay;
         return this;
     }
 
@@ -977,8 +1015,9 @@ public sealed class IniConfigBuilder
         config.SearchPaths.AddRange(_searchPaths);
         config.DefaultFilePaths.AddRange(_defaultFilePaths);
         config.ConstantFilePaths.AddRange(_constantFilePaths);
-        config.ValueSources.AddRange(_valueSources);
-        config.ValueSourcesAsync.AddRange(_valueSourcesAsync);
+        config.ValueSourceRegistrations.AddRange(_valueSources);
+        if (_valueSourceDebounce.HasValue)
+            config.ValueSourceDebounce = _valueSourceDebounce.Value;
         config.Listeners.AddRange(_listeners);
         config.AppDataDirectory = _appDataDirectory;
         // After the listeners are attached: an unusable directory is reported via OnError.

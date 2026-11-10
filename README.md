@@ -77,9 +77,15 @@ Every load applies these layers in order; a later layer wins:
 
 1. Compiled defaults (`[DefaultValue]` / `[IniValue(DefaultValue = …)]`)
 2. Defaults files (`AddDefaultsFile`)
-3. The user file
-4. Constants files (`AddConstantsFile`) — protected: `IsConstant(key)` is `true`, setters throw
-5. External value sources (`AddValueSource`) — skipped for constant keys
+3. Value sources in the `Default` layer (`AddValueSource(source, ValueSourceLayer.Default)`) — defaults the user can change
+4. The user file
+5. Constants files (`AddConstantsFile`) — protected: `IsConstant(key)` is `true`, setters throw
+6. Value sources in the `Constant` layer — win over the constants files and are protected the same way
+7. Value sources in the `Override` layer (`AddValueSource(source)`) — skipped for constant keys
+
+Inside a layer, sources apply in registration order (later wins). `section.GetValueOrigin(key)` tells where a
+value came from (kind, file path or source, layer). A `ValueChanged` event of a source reloads the named section
+(debounced, `ValueSourceChangeDebounce`). See the wiki page [External Value Sources](../../wiki/External-Value-Sources).
 
 On save only the **user values** are written: values read from the user file or set by the application.
 Values of the other layers are inherited: they are written as commented-out lines (`; Key = value`),
