@@ -57,6 +57,8 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
+      # NuGet trusted publishing: the job's OIDC token is exchanged for a short-lived API key
+      id-token: write
 
     environment:
       name: NuGet
@@ -68,15 +70,26 @@ jobs:
         name: build-artifacts
         path: artifacts
 
-    - name: Setup NuGet
-      uses: NuGet/setup-nuget@v2
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
       with:
-        nuget-version: '7.x'
+        dotnet-version: '10.0.x'
+
+    # Trusted publishing (https://learn.microsoft.com/nuget/nuget-org/trusted-publishing): needs a trusted publishing
+    # policy on nuget.org, owned by the nuget.org user below, for this repository, workflow file (build.yml) and
+    # environment (NuGet).
+    - name: NuGet login (OIDC)
+      id: nuget-login
+      uses: NuGet/login@v1
+      with:
+        user: Lakritzator
 
     - name: Push to NuGet
       shell: pwsh
+      env:
+        NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
       run: |
-        $packages = Get-ChildItem -Path artifacts -Filter "*nupkg" | Where-Object { $_.Name -notlike "*.symbols.nupkg" }
+        $packages = Get-ChildItem -Path artifacts -Filter "*.nupkg" | Where-Object { $_.Name -notlike "*.symbols.nupkg" }
         if ($packages.Count -eq 0) {
           Write-Host "No packages found to publish"
           exit 0
@@ -85,16 +98,11 @@ jobs:
         $failed = 0
         foreach ($package in $packages) {
           Write-Host "Pushing $($package.Name)..."
-          $result = & nuget push $package.FullName -Source https://api.nuget.org/v3/index.json -ApiKey ${{ secrets.NUGET_API_KEY }} -SkipDuplicate 2>&1
+          # --skip-duplicate: a version that is already on nuget.org is not an error
+          dotnet nuget push $package.FullName --source https://api.nuget.org/v3/index.json --api-key $env:NUGET_API_KEY --skip-duplicate
           if ($LASTEXITCODE -ne 0) {
-            if ($result -match "already exists") {
-              Write-Host "Package already exists (skipped): $($package.Name)"
-            } else {
-              Write-Error "Failed to push $($package.Name): $result"
-              $failed++
-            }
-          } else {
-            Write-Host "Successfully pushed: $($package.Name)"
+            Write-Error "Failed to push $($package.Name)"
+            $failed++
           }
         }
 
