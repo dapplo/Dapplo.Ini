@@ -64,11 +64,12 @@ when loading fails, then re-throw.
 | `AddSection(section)` | Non-generic overload; infers the interface type at runtime. Prefer the generic overload (AOT/trim safe). |
 | `Load()` | Reads all files and applies value sources once for every registered section. Returns `this`. Throws `InvalidOperationException` when called from a hook or listener of a running operation. |
 | `LoadAsync(ct)` | Async variant of `Load()`; also applies `IValueSourceAsync` sources and calls `IAfterLoadAsync` hooks. |
-| `Save()` | Writes all section values to disk (atomically), honoring `IBeforeSave`/`IAfterSave` hooks. Waits for a running load, reload or save. See [[Saving]]. |
+| `Save()` | Writes the user values of all sections to disk (atomically, see [[User-Values]]), honoring `IBeforeSave`/`IAfterSave` hooks. Waits for a running load, reload or save. See [[Saving]]. |
 | `SaveAsync(ct)` | Async variant of `Save()`; prefers `IBeforeSaveAsync`/`IAfterSaveAsync` hooks, falls back to sync hooks |
 | `Reload()` | Re-reads all layers in place; section references remain valid. Throws `InvalidOperationException` when called from a hook or listener of a running operation. |
 | `ReloadAsync(ct)` | Async variant of `Reload()`; also applies `IValueSourceAsync` sources and calls `IAfterLoadAsync` hooks |
 | `HasPendingChanges()` | Returns `true` when at least one registered section has unsaved changes |
+| `ConvertUnchangedUserValuesToInherited()` | Turns user values that equal their defaults-file / compiled value into inherited values (not written on save); returns the number of keys. For migrating files written with all values, see [[User-Values]]. |
 | `RequestPostponedReload()` | Triggers a reload that was earlier postponed by a `FileChangedCallback` |
 | `InitialLoadTask` | Completes when the first `Load()` / `LoadAsync()` succeeds (`Build()`, `BuildAsync()` or `Create()` + load); faults when that load fails; pending until then |
 | `IsLoaded` | `true` once the first `Load()` / `LoadAsync()` has completed successfully |

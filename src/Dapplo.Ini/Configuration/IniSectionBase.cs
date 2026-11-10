@@ -14,7 +14,7 @@ namespace Dapplo.Ini.Configuration;
 /// Base class for all source-generated INI section classes.
 /// Provides the raw key/value dictionary and converter-aware get/set helpers.
 /// </summary>
-public abstract class IniSectionBase : IIniSection
+public abstract partial class IniSectionBase : IIniSection
 {
     // Raw backing store (key → string as it appears in the file)
     private readonly Dictionary<string, string?> _rawValues =
@@ -89,6 +89,7 @@ public abstract class IniSectionBase : IIniSection
         return default;
 }
     /// <inheritdoc/>
+    /// <remarks>The value becomes a user value (see <see cref="IsUserValue"/>): it is written to the user file on save.</remarks>
     public void SetRawValue(string key, string? value)
     {
         ThrowIfConstant(key);
@@ -97,7 +98,10 @@ public abstract class IniSectionBase : IIniSection
         try
         {
             lock (_sync)
+            {
                 _rawValues[key] = value;
+                MarkUserValueLocked(key, value);
+            }
             MarkAsDirty();
             OnRawValueSet(key, value);
         }
@@ -120,6 +124,7 @@ public abstract class IniSectionBase : IIniSection
         {
             ThrowIfConstant(key);
             _rawValues[key] = value;
+            MarkUserValueLocked(key, value);
         }
         MarkAsDirty();
     }

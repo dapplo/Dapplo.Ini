@@ -11,7 +11,8 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
 
 - ✅ Define configuration sections as **annotated interfaces** — no boilerplate
 - ✅ Concrete classes are **auto-generated** by the included Roslyn source generator
-- ✅ **Layered** loading: defaults file → user file → admin constants → external value sources
+- ✅ **Layered** loading: defaults file → user file → admin constants → external value sources (see below)
+- ✅ The user file keeps **only user values**; inherited values are written as commented-out lines, so a changed default reaches every user
 - ✅ **Flexible file location** — ordered search paths, AppData as write fallback, and `SetOverrideDirectory` to pin the file to a `--config-dir` style directory without letting users bypass admin constants
 - ✅ **In-place reload** with singleton guarantee (safe for DI containers)
 - ✅ **File locking** to prevent external modification while the app is running
@@ -67,6 +68,25 @@ var settings = IniConfigRegistry.GetSection<IAppSettings>();
 settings.AppName = "MyApp v2";
 config.Save();
 ```
+
+---
+
+## Layered loading
+
+Every load applies these layers in order; a later layer wins:
+
+1. Compiled defaults (`[DefaultValue]` / `[IniValue(DefaultValue = …)]`)
+2. Defaults files (`AddDefaultsFile`)
+3. The user file
+4. Constants files (`AddConstantsFile`) — protected: `IsConstant(key)` is `true`, setters throw
+5. External value sources (`AddValueSource`) — skipped for constant keys
+
+On save only the **user values** are written: values read from the user file or set by the application.
+Values of the other layers are inherited: they are written as commented-out lines (`; Key = value`),
+constants not at all. A changed defaults file or a new compiled default therefore reaches every user who
+didn't choose a value. `IsUserValue(key)`, `ResetKey(key)`, `WriteInheritedValuesAsComments(false)`,
+`SaveAllValues()` and the migration of files written by Dapplo.Ini 1.x are described on the wiki page
+[User Values](../../wiki/User-Values).
 
 ---
 

@@ -369,7 +369,7 @@ public sealed class LateSectionRegistrationTests : IDisposable
         config.Save();
 
         var expected = original.Replace("LoadPlugins = True", "LoadPlugins = False")
-            .Replace("LoadPlugins = False\n", "LoadPlugins = False\nExcludePlugins = \n");
+            .Replace("LoadPlugins = False\n", "LoadPlugins = False\n; ExcludePlugins = \n");
         var actual = File.ReadAllText(path).Replace("\r\n", "\n");
         Assert.Equal(expected, actual);
     }

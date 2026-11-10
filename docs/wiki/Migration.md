@@ -256,6 +256,7 @@ public interface IAppSettings : IIniSection, IAfterLoad<IAppSettings>
 | `CommitHash` | `CommitHash` | Source-control commit hash (the portion after `+`); `null` when absent. |
 | `ApplicationName` | `CreatedBy` | Entry assembly name or the `applicationName` argument. |
 | `SavedOn` | `SavedOn` | Save time as written, ISO 8601 with UTC offset (e.g. `2026-09-30T11:18:00+02:00`). |
+| `UserValuesOnly` | `UserValuesOnly` | `True` when the file holds only user values (written by Dapplo.Ini 2+ without `SaveAllValues()`). See [[User-Values#migrating-existing-files]]. |
 
 ### Order guarantee
 

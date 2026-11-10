@@ -21,6 +21,12 @@ public sealed class IniFile
     public string AssignmentSeparator { get; set; } = " = ";
 
     /// <summary>
+    /// The path of the file this content was read from (<see cref="IniFileParser.ParseFile"/>), or <c>null</c>
+    /// when it was parsed from a string or built in memory.
+    /// </summary>
+    public string? FilePath { get; set; }
+
+    /// <summary>
     /// Raw lines after the last entry (trailing blank lines and comments), or <c>null</c> when they were
     /// not recorded. See <see cref="IniParserOptions.PreserveTrivia"/>.
     /// </summary>
@@ -91,6 +97,7 @@ public sealed class IniFile
         var clone = new IniFile((StringComparer)_sections.Comparer, _keyComparer)
         {
             AssignmentSeparator = AssignmentSeparator,
+            FilePath = FilePath,
             TrailingTrivia = TrailingTrivia?.ToArray()
         };
         foreach (var section in _sectionsOrdered)
@@ -105,6 +112,7 @@ public sealed class IniFile
                 sectionClone.SetEntry(new IniEntry(entry.Key, entry.Value, entry.Comments.ToArray())
                 {
                     WriterOptionsOverride = entry.WriterOptionsOverride,
+                    IsCommentedOut = entry.IsCommentedOut,
                     LeadingTrivia = entry.LeadingTrivia?.ToArray()
                 });
             }

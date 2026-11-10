@@ -65,6 +65,11 @@ public sealed class IniConfigBuilder
     private bool _allowLateSectionRegistration;
     private bool _preserveUnknownSections;
 
+    // What a save writes: only user values (default), or every value
+    private bool _saveAllValues;
+    private Func<IniMetadata?, bool>? _convertUnchangedValuesWhen;
+    private bool _convertUnchangedValuesUsesMetadata;
+
     // Parser options (null = use IniParserOptions.Default)
     private Parsing.IniParserOptions? _parserOptions;
     // Writer options (null = use IniWriterOptions.Default)
@@ -602,6 +607,81 @@ public sealed class IniConfigBuilder
         return this;
     }
 
+    /// <summary>
+    /// Controls whether keys with an inherited value (compiled default, defaults file, value source) are written
+    /// to the user file as commented-out lines (<c>; Key = value</c>, with their description), so the file shows
+    /// every setting and can be edited by hand. Enabled by default.
+    /// </summary>
+    /// <remarks>
+    /// A commented-out line is never read back as a value. With <see cref="PreserveFormatting"/> a user who removes
+    /// the <c>; </c> in front of such a line gets a real (user) value.
+    /// </remarks>
+    /// <param name="enabled"><c>false</c> to leave inherited keys out of the user file completely.</param>
+    public IniConfigBuilder WriteInheritedValuesAsComments(bool enabled = true)
+    {
+        MutateWriterOptions(o => o.WriteInheritedValuesAsComments = enabled);
+        return this;
+    }
+
+    /// <summary>
+    /// Writes every value on save, as Dapplo.Ini 1.x did, instead of only the user values.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// By default a save writes only <em>user values</em>: values read from the user file, or set by the
+    /// application after the load (see <see cref="Interfaces.IIniSection.IsUserValue"/>). Values that come from the
+    /// compiled defaults, the defaults files or value sources are not written, so a later change there (a new
+    /// default in a new application version, an edited defaults file) reaches every user who didn't choose a value
+    /// of their own.
+    /// </para>
+    /// <para>
+    /// Use this option only when an application relies on the user file holding every setting. Values of
+    /// constants are never written, also with this option: a user value below a constant is kept in the file.
+    /// </para>
+    /// </remarks>
+    public IniConfigBuilder SaveAllValues()
+    {
+        _saveAllValues = true;
+        return this;
+    }
+
+    /// <summary>
+    /// Migrates a user file that was written with all values (by Dapplo.Ini 1.x, or with <see cref="SaveAllValues"/>):
+    /// on a load where <paramref name="when"/> returns <c>true</c>, every user value that equals the value it would
+    /// inherit (defaults file, else compiled default) is turned into an inherited value, see
+    /// <see cref="IniConfig.ConvertUnchangedUserValuesToInherited"/>. This runs after the files and value sources were
+    /// applied and before the <see cref="Interfaces.IAfterLoad"/> hooks, so values that migrations set stay user values.
+    /// </summary>
+    /// <remarks>
+    /// Such a file holds every key, so the library can't tell which values the user chose. Converting is a one-time
+    /// decision of the application: a user who chose the default on purpose loses that choice (the key follows the
+    /// default from then on). The converted sections are marked dirty, so the next save cleans up the file.
+    /// </remarks>
+    /// <param name="when">
+    /// Decides per load, from the metadata of the file that was read (<c>null</c> when it had none), whether to convert.
+    /// Called only when the user file exists.
+    /// </param>
+    public IniConfigBuilder ConvertUnchangedValuesToInherited(Func<IniMetadata?, bool> when)
+    {
+        _convertUnchangedValuesWhen = when ?? throw new ArgumentNullException(nameof(when));
+        _convertUnchangedValuesUsesMetadata = false;
+        return this;
+    }
+
+    /// <summary>
+    /// Migrates a user file that was written with all values, once: on the first load of a file whose
+    /// <c>[__metadata__]</c> section does not say that it holds only user values
+    /// (<see cref="IniMetadata.UserValuesOnly"/>), unchanged user values are turned into inherited values.
+    /// Requires <see cref="EnableMetadata"/>, which records this in the file on the next save.
+    /// See <see cref="ConvertUnchangedValuesToInherited(Func{IniMetadata?, bool})"/>.
+    /// </summary>
+    public IniConfigBuilder ConvertUnchangedValuesToInherited()
+    {
+        ConvertUnchangedValuesToInherited(metadata => metadata?.UserValuesOnly != true);
+        _convertUnchangedValuesUsesMetadata = true;
+        return this;
+    }
+
     // ── parser options ────────────────────────────────────────────────────────
 
     /// <summary>
@@ -865,6 +945,10 @@ public sealed class IniConfigBuilder
     /// </summary>
     private IniConfig CreateCore()
     {
+        if (_convertUnchangedValuesWhen != null && _metadataConfig == null && _convertUnchangedValuesUsesMetadata)
+            throw new InvalidOperationException(
+                $"{nameof(ConvertUnchangedValuesToInherited)}() needs {nameof(EnableMetadata)}() to record that the file was converted; " +
+                "without it every load would convert again. Pass a condition of your own to the other overload instead.");
         if (_lockFile && _monitorFile)
             throw new InvalidOperationException(
                 $"{nameof(LockFile)} and {nameof(MonitorFile)} are mutually exclusive: " +
@@ -885,6 +969,8 @@ public sealed class IniConfigBuilder
         config.GlobalEmptyWhenNull = _globalEmptyWhenNull;
         config.AllowLateRegistration = _allowLateSectionRegistration;
         config.PreserveUnknownSections = _preserveUnknownSections;
+        config.SaveAllValuesOnSave = _saveAllValues;
+        config.ConvertUnchangedValuesWhen = _convertUnchangedValuesWhen;
         config.WriterOptions = (_writerOptions ?? Parsing.IniWriterOptions.Default).Clone();
         config.ParserOptions = _parserOptions ?? Parsing.IniParserOptions.Default;
 

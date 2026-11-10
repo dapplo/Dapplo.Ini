@@ -36,6 +36,14 @@ public sealed class IniMetadata
     /// separator (e.g. <c>"abc1234def5678"</c> from <c>"1.2.0+abc1234def5678"</c>).
     /// </summary>
     public string? CommitHash { get; internal set; }
+
+    /// <summary>
+    /// <c>true</c> when the file says (<c>UserValuesOnly = True</c>) that it holds only user values: it was written by
+    /// Dapplo.Ini 2 or later without <see cref="Configuration.IniConfigBuilder.SaveAllValues"/>. A file without this
+    /// flag holds every value, so it can't be told which values the user chose; see
+    /// <see cref="Configuration.IniConfigBuilder.ConvertUnchangedValuesToInherited()"/>.
+    /// </summary>
+    public bool UserValuesOnly { get; internal set; }
 }
 
 /// <summary>

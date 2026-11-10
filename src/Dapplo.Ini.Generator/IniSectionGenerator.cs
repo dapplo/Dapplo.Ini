@@ -937,12 +937,13 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                     {
                         sb.AppendLine($"                {txFieldName} = __value;");
                         sb.AppendLine($"                if (_isInTransaction) {txFieldName}Touched = true;");
-                        sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = __value; {fieldName}HasRawEntries = true; if (__value != null) foreach (var __kvp in __value) SetRawValueFromProperty($\"{keyNameForSet}.{{EncodeSubKey(__kvp.Key)}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value)); }}");
+                        sb.AppendLine($"                if (!_isInTransaction) {{ {fieldName} = __value; {fieldName}HasRawEntries = true; MarkPropertyAsUserValue(\"{keyNameForSet}\"); if (__value != null) foreach (var __kvp in __value) SetRawValueFromProperty($\"{keyNameForSet}.{{EncodeSubKey(__kvp.Key)}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value)); }}");
                     }
                     else
                     {
                         sb.AppendLine($"                {fieldName} = __value;");
                         sb.AppendLine($"                {fieldName}HasRawEntries = true;");
+                        sb.AppendLine($"                MarkPropertyAsUserValue(\"{keyNameForSet}\");");
                         sb.AppendLine($"                if (__value != null) foreach (var __kvp in __value) SetRawValueFromProperty($\"{keyNameForSet}.{{EncodeSubKey(__kvp.Key)}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value));");
                     }
                 }
@@ -994,37 +995,11 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         {
             // [IgnoreDataMember] properties are not managed by the INI system; leave them untouched.
             if (p.IsIgnored) continue;
-
-            string fieldName = $"_{Camel(p.Name)}";
-            if (TracksRawEntries(p))
-            {
-                // Reset the "file-has-overridden-defaults" flag so the next sub-key load
-                // starts fresh (clears the defaults before applying the file entries).
-                sb.AppendLine($"            {fieldName}HasRawEntries = false;");
-            }
-            if (p.DefaultValue != null)
-            {
-                // Sub-key dictionaries parse their default the same way (inline format for the
-                // default string is fine — only the INI file storage uses sub-key notation).
-                sb.AppendLine($"            {fieldName} = {BuildConvertFromRawCall(p, $"\"{EscapeString(p.DefaultValue)}\"")};");
-            }
-            else if (p.EmptyWhenNull)
-            {
-                // EmptyWhenNull with no DefaultValue: produce an empty instance (e.g. string.Empty,
-                // empty List<T>, empty T[], empty Dictionary<K,V>) rather than null/default.
-                sb.AppendLine($"            {fieldName} = {BuildConvertFromRawCall(p, "\"\"")};");
-            }
-            else if (!p.IsValueType)
-            {
-                // Reference-type property without compile-time EmptyWhenNull: honour the runtime
-                // GlobalEmptyWhenNull flag set by IniConfig (from IniConfigBuilder.EmptyWhenNull()).
-                sb.AppendLine($"            {fieldName} = {BuildConvertFromRawCall(p, "GlobalEmptyWhenNull ? \"\" : null")};");
-            }
-            else
-            {
-                sb.AppendLine($"            {fieldName} = default;");
-            }
+            foreach (var statement in BuildResetStatements(p))
+                sb.AppendLine($"            {statement}");
         }
+        // No key holds a user value anymore (does nothing while IniConfig resets the section for a load)
+        sb.AppendLine("            OnResetToDefaults();");
         sb.AppendLine("        }");
         sb.AppendLine();
 
@@ -1145,6 +1120,57 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         sb.AppendLine("            yield break; // keeps the method an iterator when the section has no properties");
         sb.AppendLine("        }");
         sb.AppendLine();
+
+        // ── GetMutableRawValues ───────────────────────────────────────────
+        // The properties that can change without their setter (collections): compared with their value after the
+        // load, so an in-place change (List.Add + MarkAsDirty) is written as a user value.
+        sb.AppendLine("        protected override IEnumerable<KeyValuePair<string, string?>> GetMutableRawValues()");
+        sb.AppendLine("        {");
+        foreach (var p in m.Properties)
+        {
+            if (p.IsIgnored || p.IsReadOnly || p.IsRuntimeOnly) continue;
+            if (p.IsValueType || p.TypeFullName.TrimEnd('?') == "string") continue;
+            string fieldName = $"_{Camel(p.Name)}";
+            string keyName = p.KeyName ?? p.Name;
+            if (p.IsSubKeyDictionary)
+            {
+                sb.AppendLine($"            if ({fieldName} != null)");
+                sb.AppendLine($"                foreach (var __kvp in {fieldName})");
+                sb.AppendLine($"                    yield return new KeyValuePair<string, string?>($\"{EscapeString(keyName)}.{{EncodeSubKey(__kvp.Key)}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value));");
+            }
+            else
+            {
+                sb.AppendLine($"            yield return new KeyValuePair<string, string?>(\"{EscapeString(keyName)}\", {BuildConvertToRawCall(p, fieldName)});");
+            }
+        }
+        sb.AppendLine("            yield break;");
+        sb.AppendLine("        }");
+        sb.AppendLine();
+
+        // ── ResetPropertyToDefault / GetPropertyKey ──────────────────────
+        {
+            var managed = m.Properties.Where(p => !p.IsIgnored).ToList();
+            var resetCases = managed.Select(p => (keyIndex[p], BuildResetStatements(p).Concat(new[] { "return true;" }).ToArray())).ToList();
+            sb.AppendLine("        protected override bool ResetPropertyToDefault(string key)");
+            sb.AppendLine("        {");
+            EmitSwitch(sb, "__KeyIndex(key)", resetCases);
+            sb.AppendLine("            return false;");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+
+            // The property key itself for every property (also sub-key dictionaries), then Property.subkey entries.
+            var exactCases = managed.Select(p => (keyIndex[p], new[] { $"return \"{EscapeString(p.KeyName ?? p.Name)}\";" })).ToList();
+            var subKeyCases = managed.Where(p => p.IsSubKeyDictionary)
+                .Select(p => (keyIndex[p], new[] { $"return \"{EscapeString(p.KeyName ?? p.Name)}\";" })).ToList();
+            sb.AppendLine("        protected override string? GetPropertyKey(string rawKey)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            var key = rawKey;");
+            EmitSwitch(sb, "__KeyIndex(key)", exactCases);
+            EmitSwitch(sb, "__SubKeyIndex(key)", subKeyCases);
+            sb.AppendLine("            return null;");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+        }
 
         // ── GetKeys ──────────────────────────────────────────────────────────
         sb.AppendLine("        public override IEnumerable<string> GetKeys()");
@@ -1343,6 +1369,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                     if (p.IsSubKeyDictionary)
                     {
                         sb.AppendLine($"                {field}HasRawEntries = true;");
+                        sb.AppendLine($"                MarkPropertyAsUserValue(\"{key}\");");
                         sb.AppendLine($"                if ({field} != null) foreach (var __kvp in {field}) SetRawValueFromProperty($\"{key}.{{EncodeSubKey(__kvp.Key)}}\", ConvertToRaw<{p.DictionaryValueTypeFullName}>(__kvp.Value));");
                     }
                     else
@@ -1593,6 +1620,42 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
     /// which causes CS0414 / CS0169 in the generated code.
     /// </summary>
     private static bool TracksRawEntries(PropertyModel p) => p.IsSubKeyDictionary && !p.IsIgnored && !p.IsRuntimeOnly;
+
+    /// <summary>The statements that give the backing field of <paramref name="p"/> its compiled default.</summary>
+    private static List<string> BuildResetStatements(PropertyModel p)
+    {
+        var statements = new List<string>();
+        string fieldName = $"_{Camel(p.Name)}";
+        if (TracksRawEntries(p))
+        {
+            // Reset the "file-has-overridden-defaults" flag so the next sub-key load
+            // starts fresh (clears the defaults before applying the file entries).
+            statements.Add($"{fieldName}HasRawEntries = false;");
+        }
+        if (p.DefaultValue != null)
+        {
+            // Sub-key dictionaries parse their default the same way (inline format for the
+            // default string is fine — only the INI file storage uses sub-key notation).
+            statements.Add($"{fieldName} = {BuildConvertFromRawCall(p, $"\"{EscapeString(p.DefaultValue)}\"")};");
+        }
+        else if (p.EmptyWhenNull)
+        {
+            // EmptyWhenNull with no DefaultValue: produce an empty instance (e.g. string.Empty,
+            // empty List<T>, empty T[], empty Dictionary<K,V>) rather than null/default.
+            statements.Add($"{fieldName} = {BuildConvertFromRawCall(p, "\"\"")};");
+        }
+        else if (!p.IsValueType)
+        {
+            // Reference-type property without compile-time EmptyWhenNull: honour the runtime
+            // GlobalEmptyWhenNull flag set by IniConfig (from IniConfigBuilder.EmptyWhenNull()).
+            statements.Add($"{fieldName} = {BuildConvertFromRawCall(p, "GlobalEmptyWhenNull ? \"\" : null")};");
+        }
+        else
+        {
+            statements.Add($"{fieldName} = default;");
+        }
+        return statements;
+    }
 
     /// <summary>
     /// Emits a dispatch on the property key without allocating: <c>switch (__KeyIndex(key))</c> for exact keys, then
