@@ -28,6 +28,20 @@ in a new application version or a removed constant never reached a user who had 
   into inherited values.
 - Rebuild projects that use the generator: generated sections implement new members of `IniSectionBase`.
 
+### Added: drafts for edit dialogs
+- `section.CreateDraft()` (extension on `IIniSection`, namespace `Dapplo.Ini.Interfaces`): a detached copy of a
+  generated section for a settings dialog. Values are copied by generated code (collections deep, no reflection);
+  metadata, value origins, constants and policy locks are the same; the draft raises its own `PropertyChanging` /
+  `PropertyChanged` / `INotifyDataErrorInfo`, and is never registered, saved, auto-saved, reloaded or passed to hooks.
+- `draft.ApplyDraft()` / `draft.ApplyTo(section)` and `IniConfig.Apply(params IIniSection[])` / `ApplyAsync`: write the
+  keys that were assigned on the draft and differ from their base value through the normal setters (the user's edit
+  wins over a live change, untouched keys are never written), inside `Begin`/`Commit` for `ITransactional` sections;
+  `IniConfig.Apply` checks all locks first and saves once.
+- `draft.RefreshDraft()`, `GetDraftChanges()`, `GetDraftAssignedKeys()`, `GetDraftBaseValue(key)`, `GetDraftSource()`,
+  `IsDraft()`. See the wiki page *Drafts (edit dialogs)*.
+- `ITransactional.Commit()` of generated sections raises all `PropertyChanging` events, then sets all values, then raises
+  all `PropertyChanged` events, so a handler never sees a mix of old and new values.
+
 ### Added
 - `IIniSection.IsUserValue(key)` and `IIniSection.ResetKey(key)` (back to the defaults-file / compiled value, raises
   `PropertyChanged`, marks dirty). `ResetToDefaults()` clears all user values and marks the section dirty.

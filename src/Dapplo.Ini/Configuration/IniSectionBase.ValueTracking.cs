@@ -89,6 +89,7 @@ public abstract partial class IniSectionBase
             _keyStates.Clear();
             _userProperties.Clear();
         }
+        NoteDraftAllAssigned();
         CaptureMutableValues();
         MarkAsDirty();
     }
@@ -101,6 +102,7 @@ public abstract partial class IniSectionBase
     {
         lock (_sync)
             _userProperties.Add(key);
+        NoteDraftAssignment(key);
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -164,6 +166,7 @@ public abstract partial class IniSectionBase
         }
         RestoreLayers(propertyKey);
         CaptureMutableValues();
+        NoteDraftAssignment(propertyKey);
         MarkAsDirty();
         if (before != null)
             RaisePropertyChangedForChanges(before);

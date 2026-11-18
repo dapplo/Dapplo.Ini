@@ -395,6 +395,86 @@ public sealed class IniConfig : IDisposable
         }
     }
 
+    // ── Drafts ────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Applies several drafts (see <see cref="IniSectionDraftExtensions.CreateDraft{T}"/>) to the sections of this
+    /// configuration they were created from, then saves once. Each draft writes only the keys that were assigned on it
+    /// and differ from their base value (see <see cref="IniSectionDraftExtensions.ApplyTo"/>). All drafts are checked
+    /// first: when one of them would write a protected key, nothing is written. Auto-save is paused while the drafts are
+    /// applied. Nothing is saved when no draft had changes, or when the configuration has no file path.
+    /// </summary>
+    /// <param name="drafts">The drafts, e.g. one for every section a settings dialog shows.</param>
+    /// <returns>For every live section that changed, the keys that were written.</returns>
+    /// <exception cref="ArgumentException">An item is not a draft, or its source is not a section of this configuration.</exception>
+    /// <exception cref="AccessViolationException">A key to write is protected (nothing was written).</exception>
+    public IReadOnlyDictionary<IIniSection, IReadOnlyList<string>> Apply(params IIniSection[] drafts)
+    {
+        // Paused until after the save: the applied changes are saved right here, not again by the timer
+        PauseAutoSave();
+        try
+        {
+            var applied = ApplyDrafts(drafts);
+            if (applied.Count > 0 && !string.IsNullOrEmpty(LoadedFromPath))
+                Save();
+            return applied;
+        }
+        finally
+        {
+            ResumeAutoSave();
+        }
+    }
+
+    /// <summary>
+    /// Asynchronously applies several drafts and saves once; see <see cref="Apply(IIniSection[])"/>. The drafts are
+    /// applied on the calling thread, before the first <c>await</c>.
+    /// </summary>
+    /// <param name="drafts">The drafts.</param>
+    /// <param name="cancellationToken">Token to cancel the save.</param>
+    /// <returns>For every live section that changed, the keys that were written.</returns>
+    public async Task<IReadOnlyDictionary<IIniSection, IReadOnlyList<string>>> ApplyAsync(IReadOnlyList<IIniSection> drafts, CancellationToken cancellationToken = default)
+    {
+        if (drafts is null) throw new ArgumentNullException(nameof(drafts));
+        PauseAutoSave();
+        try
+        {
+            var applied = ApplyDrafts(drafts);
+            if (applied.Count > 0 && !string.IsNullOrEmpty(LoadedFromPath))
+                await SaveAsync(cancellationToken).ConfigureAwait(false);
+            return applied;
+        }
+        finally
+        {
+            ResumeAutoSave();
+        }
+    }
+
+    private Dictionary<IIniSection, IReadOnlyList<string>> ApplyDrafts(IReadOnlyList<IIniSection> drafts)
+    {
+        if (drafts is null) throw new ArgumentNullException(nameof(drafts));
+        var owned = Sections.Values;
+        var checkedDrafts = new List<(IniSectionBase Draft, IIniSection Source)>(drafts.Count);
+        foreach (var draft in drafts)
+        {
+            if (draft is not IniSectionBase { DraftSource: { } source } draftBase)
+                throw new ArgumentException($"'{draft?.SectionName}' is not a draft. Create drafts with CreateDraft().", nameof(drafts));
+            if (!owned.Any(s => ReferenceEquals(s, source)))
+                throw new ArgumentException($"The draft of '{draft.SectionName}' was not created from a section of this configuration ({FileName}).", nameof(drafts));
+            draftBase.ThrowIfDraftTargetLocked(source);
+            checkedDrafts.Add((draftBase, source));
+        }
+
+        var applied = new Dictionary<IIniSection, IReadOnlyList<string>>();
+        foreach (var (draft, source) in checkedDrafts)
+        {
+            var keys = draft.ApplyDraftTo(source);
+            if (keys.Count == 0)
+                continue;
+            applied[source] = applied.TryGetValue(source, out var earlier) ? earlier.Concat(keys).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() : keys;
+        }
+        return applied;
+    }
+
     /// <summary>
     /// Asynchronously saves all sections back to <see cref="LoadedFromPath"/>.
     /// </summary>
@@ -1031,6 +1111,7 @@ public sealed class IniConfig : IDisposable
 
     private void AddSectionCore(Type keyType, IIniSection section)
     {
+        IniSectionBase.ThrowIfDraft(section, nameof(section));
         if (HoldsGate)
         {
             // Called from a hook or listener of a running operation (e.g. a host section's IAfterLoad that
@@ -1070,6 +1151,7 @@ public sealed class IniConfig : IDisposable
 
     private async Task AddSectionUnderGateAsync(Type keyType, IIniSection section, CancellationToken cancellationToken)
     {
+        IniSectionBase.ThrowIfDraft(section, nameof(section));
         if (!IsLoaded)
         {
             RegisterBeforeLoad(keyType, section);
