@@ -104,6 +104,7 @@ public abstract partial class IniSectionBase : IIniSection
             }
             MarkAsDirty();
             OnRawValueSet(key, value);
+            NoteDraftRawAssignment(key);
         }
         finally
         {
@@ -126,6 +127,7 @@ public abstract partial class IniSectionBase : IIniSection
             _rawValues[key] = value;
             MarkUserValueLocked(key, value);
         }
+        NoteDraftRawAssignment(key);
         MarkAsDirty();
     }
 

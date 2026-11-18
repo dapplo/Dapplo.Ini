@@ -12,6 +12,7 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
 - ✅ **File-change monitoring** with optional consumer hook
 - ✅ **INotifyDataErrorInfo** validation for WPF / Avalonia / WinForms binding
 - ✅ **Transactional** updates with rollback support
+- ✅ **Drafts for edit dialogs** — `CreateDraft()` gives a settings dialog a detached copy of a section (same locks, own events and validation, never saved); `IniConfig.Apply(drafts)` writes only the keys the user changed and saves once ([[Drafts-(edit-dialogs)]])
 - ✅ **INotifyPropertyChanged** / **INotifyPropertyChanging** baked in
 - ✅ **Lifecycle hooks** implementable directly in the section interface via static virtuals (C# 11+)
 - ✅ Extensible **value converter** system (custom converters for encryption etc.)
@@ -94,6 +95,7 @@ config.Save();
 | [[Async-Support]] | `BuildAsync`, `ReloadAsync`, `SaveAsync`, `IValueSourceAsync`, `InitialLoadTask`, and async lifecycle hooks |
 | [[Singleton-and-DI]] | Singleton guarantee, ASP.NET Core / Microsoft DI integration, `InitialLoadTask` |
 | [[Transactional-Updates]] | `ITransactional`, `Begin()`, `Commit()`, `Rollback()` |
+| [[Drafts-(edit-dialogs)]] | `CreateDraft()`, `ApplyDraft()`, `IniConfig.Apply(...)`, `RefreshDraft()` — edit detached copies in a settings dialog, apply on OK, drop on Cancel |
 | [[Property-Change-Notifications]] | `INotifyPropertyChanged` / `INotifyPropertyChanging` |
 | [[Value-Converters]] | Built-in converters, custom converters, encrypting sensitive values |
 | [[Registry-API]] | Complete `IniConfigRegistry`, `LanguageConfigRegistry`, `IniConfig`, and `IniConfigBuilder` API reference |

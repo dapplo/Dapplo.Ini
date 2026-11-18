@@ -158,6 +158,9 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
         // True for [Range(typeof(T), "min", "max")]: RangeMinRaw/RangeMaxRaw are strings parsed at runtime.
         public bool RangeIsStringForm { get; set; }
         // Convenience: true when any DataAnnotations validation attributes are present
+        /// <summary>How a draft copies the value: Value, Array, List, Set, Dictionary, Converter or Reference.</summary>
+        public string DraftCopy { get; set; } = "Value";
+
         public bool HasValidationAttributes => IsRequired || RangeMinRaw != null || MaxLength.HasValue || RegexPattern != null;
     }
 
@@ -524,6 +527,8 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             if (!prop.IsIgnored && !prop.IsRuntimeOnly && !HasBuiltInConverter(member.Type))
                 diagnostics.Add(DiagnosticInfo.Create(Diagnostics.NoBuiltInConverter, member, member.Name, interfaceName, member.Type.ToDisplayString()));
 
+            prop.DraftCopy = ClassifyDraftCopy(member.Type, managedByIni: !prop.IsIgnored && !prop.IsRuntimeOnly);
+
             properties.Add(prop);
         }
 
@@ -577,6 +582,70 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
     }
 
     private static bool HasInterfacePrefix(string interfaceName) => GeneratorText.HasInterfacePrefix(interfaceName);
+
+    /// <summary>
+    /// Decides how a draft copies a value of <paramref name="type"/> so the draft and the live section never share a
+    /// mutable instance: <c>Value</c> (value types, strings: assigned), <c>Array</c>, <c>List</c>, <c>Set</c>,
+    /// <c>Dictionary</c> (a new collection with the same elements, for elements that are values themselves),
+    /// <c>Converter</c> (serialized and parsed again with the value converter, for other types stored in the INI file)
+    /// or <c>Reference</c> (shared: a type not stored in the INI file that can't be copied without reflection).
+    /// </summary>
+    private static string ClassifyDraftCopy(ITypeSymbol type, bool managedByIni)
+    {
+        if (IsValueLike(type))
+            return "Value";
+        string fallback = managedByIni ? "Converter" : "Reference";
+        if (type is IArrayTypeSymbol array)
+            return array.Rank == 1 && (IsValueLike(array.ElementType) || !managedByIni) ? "Array" : fallback;
+        if (type is INamedTypeSymbol named && named.IsGenericType)
+        {
+            var definition = named.OriginalDefinition.ToDisplayString();
+            var arguments = named.TypeArguments;
+            bool valueElements = arguments.All(IsValueLike);
+            string kind = definition switch
+            {
+                "System.Collections.Generic.List<T>" or "System.Collections.Generic.IList<T>" or "System.Collections.Generic.ICollection<T>"
+                    or "System.Collections.Generic.IEnumerable<T>" or "System.Collections.Generic.IReadOnlyList<T>"
+                    or "System.Collections.Generic.IReadOnlyCollection<T>" => "List",
+                "System.Collections.Generic.HashSet<T>" or "System.Collections.Generic.ISet<T>"
+                    or "System.Collections.Generic.IReadOnlySet<T>" => "Set",
+                "System.Collections.Generic.Dictionary<TKey, TValue>" or "System.Collections.Generic.IDictionary<TKey, TValue>"
+                    or "System.Collections.Generic.IReadOnlyDictionary<TKey, TValue>" => "Dictionary",
+                _ => ""
+            };
+            if (kind.Length > 0 && (valueElements || !managedByIni || kind == "Dictionary"))
+                return kind;
+        }
+        return fallback;
+    }
+
+    /// <summary>Value types and strings: copied by assignment, compared with <c>EqualityComparer&lt;T&gt;.Default</c>.</summary>
+    private static bool IsValueLike(ITypeSymbol type) => type.IsValueType || type.SpecialType == SpecialType.System_String;
+
+    /// <summary>The expression that copies <paramref name="value"/> (a backing field) for a draft, see <see cref="ClassifyDraftCopy"/>.</summary>
+    private static string BuildDraftCopyExpression(PropertyModel p, string value)
+        => p.DraftCopy switch
+        {
+            "Array" => $"DraftCopyArray({value})",
+            "List" => $"DraftCopyList({value})",
+            "Set" => $"DraftCopySet({value})",
+            "Dictionary" => $"DraftCopyDictionary({value})",
+            "Converter" => $"DraftCopyViaConverter({value}, {DraftDelimiterArgument(p)})",
+            _ => value
+        };
+
+    /// <summary>The expression that compares two backing field values for a draft.</summary>
+    private static string BuildDraftEqualsExpression(PropertyModel p, string a, string b)
+        => p.DraftCopy switch
+        {
+            "Value" => $"EqualityComparer<{p.TypeFullName}>.Default.Equals({a}, {b})",
+            "Dictionary" => $"DraftDictionaryEquals({a}, {b})",
+            "Converter" => $"DraftEqualsViaConverter({a}, {b}, {DraftDelimiterArgument(p)})",
+            _ => $"DraftValuesEqual({a}, {b})"
+        };
+
+    private static string DraftDelimiterArgument(PropertyModel p)
+        => p.IsListLike ? $"'{EscapeCharLiteral(p.ListDelimiter)}'" : "null";
 
     /// <summary>
     /// <c>true</c> when the runtime ValueConverterRegistry has a converter for <paramref name="type"/> without
@@ -925,6 +994,7 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             {
                 // [IgnoreDataMember] / RuntimeOnly — only update the backing field; no INI interaction.
                 sb.AppendLine($"                {fieldName} = __value;");
+                sb.AppendLine($"                NoteDraftAssignment(\"{EscapeString(p.KeyName ?? p.Name)}\");");
             }
             else
             {
@@ -1102,6 +1172,66 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                 sb.AppendLine($"            if (!Equals(before[{i}], _{Camel(notifyProps[i].Name)})) PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof({notifyProps[i].Name})));");
             sb.AppendLine("        }");
             sb.AppendLine();
+        }
+
+        // ── Drafts ────────────────────────────────────────────────────────
+        // A draft is a new instance with copies of all backing fields (collections copied, no reflection); applying it
+        // assigns the changed values through the normal setters of the live section.
+        {
+            var draftProps = m.Properties;
+            string cls = m.GeneratedClassName;
+            sb.AppendLine($"        private static readonly string[] __draftKeys = new string[] {{ {string.Join(", ", draftProps.Select(p => $"\"{EscapeString(p.KeyName ?? p.Name)}\""))} }};");
+            sb.AppendLine($"        private static readonly bool[] __draftMutable = new bool[] {{ {string.Join(", ", draftProps.Select(p => p.DraftCopy == "Value" ? "false" : "true"))} }};");
+            sb.AppendLine($"        protected override Dapplo.Ini.Configuration.IniSectionBase? CreateDraftInstance() => new {cls}();");
+            sb.AppendLine("        protected override string[] GetDraftKeys() => __draftKeys;");
+            sb.AppendLine("        protected override bool IsDraftValueMutable(int index) => __draftMutable[index];");
+            sb.AppendLine();
+            sb.AppendLine("        protected override void CopyDraftValue(int index, Dapplo.Ini.Configuration.IniSectionBase target, bool useSetter)");
+            sb.AppendLine("        {");
+            if (draftProps.Count > 0)
+            {
+                sb.AppendLine($"            var __t = ({cls})target;");
+                sb.AppendLine("            switch (index)");
+                sb.AppendLine("            {");
+                for (var i = 0; i < draftProps.Count; i++)
+                {
+                    var p = draftProps[i];
+                    string fieldName = $"_{Camel(p.Name)}";
+                    string copy = BuildDraftCopyExpression(p, fieldName);
+                    string rawEntries = TracksRawEntries(p) ? $" __t.{fieldName}HasRawEntries = {fieldName}HasRawEntries;" : "";
+                    sb.AppendLine($"                case {i}:");
+                    sb.AppendLine($"                    if (useSetter) __t.{p.Name} = {copy};");
+                    sb.AppendLine($"                    else {{ __t.{fieldName} = {copy};{rawEntries} }}");
+                    sb.AppendLine("                    return;");
+                }
+                sb.AppendLine("            }");
+            }
+            sb.AppendLine("        }");
+            sb.AppendLine();
+            sb.AppendLine("        protected override bool DraftValueEquals(int index, Dapplo.Ini.Configuration.IniSectionBase other)");
+            sb.AppendLine("        {");
+            if (draftProps.Count > 0)
+            {
+                sb.AppendLine($"            var __o = ({cls})other;");
+                sb.AppendLine("            switch (index)");
+                sb.AppendLine("            {");
+                for (var i = 0; i < draftProps.Count; i++)
+                {
+                    var p = draftProps[i];
+                    string fieldName = $"_{Camel(p.Name)}";
+                    sb.AppendLine($"                case {i}:");
+                    sb.AppendLine($"                    return {BuildDraftEqualsExpression(p, fieldName, "__o." + fieldName)};");
+                }
+                sb.AppendLine("            }");
+            }
+            sb.AppendLine("            return true;");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+            if (needsValidation)
+            {
+                sb.AppendLine("        protected override void OnDraftValuesCopied() => RunAllValidations();");
+                sb.AppendLine();
+            }
         }
 
         // ── GetAllRawValues ───────────────────────────────────────────────
@@ -1358,18 +1488,31 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
             sb.AppendLine("            _isInTransaction = false;");
             // Apply every changed pending value the same way a setter outside a transaction would:
             // events, raw value (so the change is dirty and gets saved) and the backing field.
-            foreach (var p in txProps)
+            // Only properties assigned during the transaction are committed: a reload that happened in the
+            // meantime must not be overwritten with the values captured by Begin().
+            // Three phases, so that an event handler never sees a mix of old and new values: all PropertyChanging
+            // events, then all values, then all PropertyChanged events.
+            for (var i = 0; i < txProps.Count; i++)
             {
+                var p = txProps[i];
                 string field = $"_{Camel(p.Name)}";
                 string tx = $"{field}Tx";
-                bool changing = m.ImplementsINotifyPropertyChanging && !p.SuppressPropertyChanging;
-                bool changed  = m.ImplementsINotifyPropertyChanged  && !p.SuppressPropertyChanged;
-                // Only properties assigned during the transaction are committed: a reload that happened in the
-                // meantime must not be overwritten with the values captured by Begin().
-                sb.AppendLine($"            if ({tx}Touched && !EqualityComparer<{p.TypeFullName}>.Default.Equals({field}, {tx}))");
+                sb.AppendLine($"            var __commit{i} = {tx}Touched && !EqualityComparer<{p.TypeFullName}>.Default.Equals({field}, {tx});");
+                sb.AppendLine($"            {tx}Touched = false;");
+            }
+            for (var i = 0; i < txProps.Count; i++)
+            {
+                var p = txProps[i];
+                if (m.ImplementsINotifyPropertyChanging && !p.SuppressPropertyChanging)
+                    sb.AppendLine($"            if (__commit{i}) PropertyChanging?.Invoke(this, new PropertyChangingEventArgs(nameof({p.Name})));");
+            }
+            for (var i = 0; i < txProps.Count; i++)
+            {
+                var p = txProps[i];
+                string field = $"_{Camel(p.Name)}";
+                string tx = $"{field}Tx";
+                sb.AppendLine($"            if (__commit{i})");
                 sb.AppendLine("            {");
-                if (changing)
-                    sb.AppendLine($"                PropertyChanging?.Invoke(this, new PropertyChangingEventArgs(nameof({p.Name})));");
                 sb.AppendLine($"                {field} = {tx};");
                 if (!p.IsIgnored && !p.IsRuntimeOnly)
                 {
@@ -1385,10 +1528,13 @@ public sealed class IniSectionGenerator : IIncrementalGenerator
                         sb.AppendLine($"                SetRawValueFromProperty(\"{key}\", {BuildConvertToRawCall(p, field)});");
                     }
                 }
-                if (changed)
-                    sb.AppendLine($"                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof({p.Name})));");
                 sb.AppendLine("            }");
-                sb.AppendLine($"            {tx}Touched = false;");
+            }
+            for (var i = 0; i < txProps.Count; i++)
+            {
+                var p = txProps[i];
+                if (m.ImplementsINotifyPropertyChanged && !p.SuppressPropertyChanged)
+                    sb.AppendLine($"            if (__commit{i}) PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof({p.Name})));");
             }
             sb.AppendLine("        }");
             sb.AppendLine();

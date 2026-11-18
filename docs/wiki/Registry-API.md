@@ -69,6 +69,8 @@ when loading fails, then re-throw.
 | `Reload()` | Re-reads all layers in place; section references remain valid. Throws `InvalidOperationException` when called from a hook or listener of a running operation. |
 | `ReloadAsync(ct)` | Async variant of `Reload()`; also applies `IValueSourceAsync` sources and calls `IAfterLoadAsync` hooks |
 | `HasPendingChanges()` | Returns `true` when at least one registered section has unsaved changes |
+| `Apply(params IIniSection[] drafts)` | Applies drafts (see [[Drafts-(edit-dialogs)]]) to their live sections — only keys changed on the draft — and saves once |
+| `ApplyAsync(drafts, ct)` | Async variant of `Apply(...)` |
 | `ConvertUnchangedUserValuesToInherited()` | Turns user values that equal their defaults-file / compiled value into inherited values (not written on save); returns the number of keys. For migrating files written with all values, see [[User-Values]]. |
 | `RequestPostponedReload()` | Triggers a reload that was earlier postponed by a `FileChangedCallback` |
 | `InitialLoadTask` | Completes when the first `Load()` / `LoadAsync()` succeeds (`Build()`, `BuildAsync()` or `Create()` + load); faults when that load fails; pending until then |
@@ -181,6 +183,7 @@ automatically, so `ForBasename()` and `ForFile()` produce registry entries in th
 - [[Loading-Configuration]] — builder method examples
 - [[Reloading]] — `Reload()` / `ReloadAsync()` and `HasPendingChanges()`
 - [[Saving]] — `Save()` / `SaveAsync()` and save hooks
+- [[Drafts-(edit-dialogs)]] — `CreateDraft()`, `Apply(...)` for settings dialogs
 - [[Singleton-and-DI]] — `GetSection<T>()` and the singleton guarantee
 - [[Async-Support]] — full async API guide
 - [[Internationalization]] — `LanguageConfigRegistry`, language packs, and i18n builder API

@@ -861,6 +861,7 @@ public sealed class IniConfigBuilder
     public IniConfigBuilder RegisterSection<T>(T section) where T : IIniSection
     {
         if (section is null) throw new ArgumentNullException(nameof(section));
+        IniSectionBase.ThrowIfDraft(section, nameof(section));
         // When T is a concrete class rather than an interface, register under the most derived
         // IIniSection-derived interface so that GetSection<IMySection>() works as expected.
         _sections[SectionStore.ResolveKeyType(typeof(T), section.GetType())] = section;
@@ -880,6 +881,7 @@ public sealed class IniConfigBuilder
     public IniConfigBuilder RegisterSection(IIniSection section)
     {
         if (section is null) throw new ArgumentNullException(nameof(section));
+        IniSectionBase.ThrowIfDraft(section, nameof(section));
 
         // Infer the most derived IIniSection-derived interface
         _sections[SectionStore.ResolveKeyType(section.GetType(), section.GetType())] = section;

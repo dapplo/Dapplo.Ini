@@ -19,6 +19,7 @@ A powerful, source-generator–backed INI file configuration framework for .NET.
 - ✅ **File-change monitoring** with an optional consumer hook to control reload behaviour
 - ✅ **INotifyDataErrorInfo** validation for WPF / Avalonia / WinForms data binding
 - ✅ **Transactional** updates with `Begin()` / `Commit()` / `Rollback()` support
+- ✅ **Drafts for edit dialogs** — `CreateDraft()` / `IniConfig.Apply(drafts)`: a settings dialog edits detached copies, OK applies only the changed keys and saves once, Cancel drops them
 - ✅ **INotifyPropertyChanged** / **INotifyPropertyChanging** baked in
 - ✅ **Lifecycle hooks** implementable directly in the section interface via static virtuals (C# 11+)
 - ✅ Extensible **value converter** system — add custom converters (e.g. for encryption)

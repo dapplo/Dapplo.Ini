@@ -3,6 +3,9 @@
 Implement `ITransactional` on your section interface to enable atomic, rollback-capable
 updates.  Mark individual properties with `[IniValue(Transactional = true)]` to opt them in.
 
+> **Editing settings in a dialog?** During a transaction the getters return the old values, so a dialog bound to the
+> section can't see its own edits. Use a draft instead: see [[Drafts-(edit-dialogs)]].
+
 ---
 
 ## Defining a transactional section
